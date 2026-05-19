@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from transcription_svc.api.dependencies import get_caller
@@ -173,16 +174,30 @@ async def submit_job(
         if existing:
             return _to_response(existing)
 
-    job = await submit_and_queue_batch_job(
-        session=session,
-        audio_url=body.audio_url,
-        caller_id=caller.id,
-        locale=body.locale,
-        enable_diarization=body.enable_diarization,
-        callback_url=body.callback_url,
-        idempotency_key=body.idempotency_key,
-        metadata=body.metadata,
-    )
+    try:
+        job = await submit_and_queue_batch_job(
+            session=session,
+            audio_url=body.audio_url,
+            caller_id=caller.id,
+            locale=body.locale,
+            enable_diarization=body.enable_diarization,
+            callback_url=body.callback_url,
+            idempotency_key=body.idempotency_key,
+            metadata=body.metadata,
+        )
+    except IntegrityError:
+        # Two concurrent requests with the same idempotency_key both passed the
+        # check-then-act above; the second insert hit the unique constraint.
+        # Roll back the failed transaction and return whatever the winner created.
+        session.rollback()
+        if body.idempotency_key:
+            existing = get_job_by_idempotency_key(session, body.idempotency_key, caller.id)
+            if existing:
+                return _to_response(existing)
+        raise HTTPException(
+            status_code=409, detail="Concurrent submission conflict; retry"
+        ) from None
+
     return _to_response(job)
 
 

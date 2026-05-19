@@ -6,10 +6,15 @@ from uuid import UUID
 from fastapi import Depends, Header, HTTPException
 from sqlmodel import Session
 
-from transcription_svc.auth.validators import encrypt_webhook_secret, is_local_env, verify_api_key
+from transcription_svc.auth.validators import (
+    compute_key_lookup_hash,
+    encrypt_webhook_secret,
+    is_local_env,
+    verify_api_key,
+)
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.engine import get_session
-from transcription_svc.database.interface import get_all_active_callers
+from transcription_svc.database.interface import get_all_active_callers, get_caller_by_lookup_hash
 from transcription_svc.database.models import Caller
 
 
@@ -37,9 +42,18 @@ async def get_caller(
             return _local_dev_caller()
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    callers = get_all_active_callers(session)
-    for caller in callers:
-        if verify_api_key(token, caller.hashed_key):
+    # Fast path: O(1) indexed lookup by SHA-256 of the token, then one bcrypt verify.
+    # Fallback to linear scan for legacy Caller rows that pre-date key_lookup_hash.
+    lookup_hash = compute_key_lookup_hash(token)
+    candidate = get_caller_by_lookup_hash(session, lookup_hash)
+    if candidate is not None:
+        if verify_api_key(token, candidate.hashed_key):
+            return candidate
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    # Legacy fallback: rows created before key_lookup_hash was added.
+    for caller in get_all_active_callers(session):
+        if caller.key_lookup_hash is None and verify_api_key(token, caller.hashed_key):
             return caller
 
     raise HTTPException(status_code=401, detail="Invalid API key")

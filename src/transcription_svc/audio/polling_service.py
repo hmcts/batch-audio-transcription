@@ -32,6 +32,7 @@ from transcription_svc.audio.speakers import process_speakers
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.engine import get_engine
 from transcription_svc.database.interface import (
+    claim_webhook_dispatch,
     fetch_pending_batch_jobs,
     mark_job_error,
     mark_needs_cleanup,
@@ -73,12 +74,8 @@ class BatchPollingService:
         with Session(get_engine()) as session:
             caller = get_caller_by_id(session, caller_id)
             if not caller:
-                return "unknown"
-            try:
-                return decrypt_webhook_secret(caller.webhook_secret)
-            except Exception:
-                logger.warning("Failed to decrypt webhook_secret for caller %s", caller_id)
-                return "unknown"
+                raise ValueError(f"Caller {caller_id} not found; cannot resolve webhook secret")
+            return decrypt_webhook_secret(caller.webhook_secret)  # raises InvalidToken on bad key
 
     async def run_polling_loop(self) -> None:
         logger.info(
@@ -114,7 +111,17 @@ class BatchPollingService:
             for row in rows:
                 if not row.batch_job_url:
                     continue
-                webhook_secret = self._resolve_webhook_secret(row.caller_id)
+                try:
+                    webhook_secret = self._resolve_webhook_secret(row.caller_id)
+                except Exception as exc:
+                    logger.error(
+                        "Cannot resolve webhook secret for caller %s (job %s skipped): %s",
+                        row.caller_id,
+                        row.id,
+                        exc,
+                    )
+                    sentry_sdk.capture_exception(exc)
+                    continue
                 result.append(
                     _PendingJob(
                         id=row.id,
@@ -218,8 +225,17 @@ class BatchPollingService:
         with Session(get_engine()) as session:
             mark_needs_cleanup(session, job_id, reason)
 
+    def _claim_webhook_dispatch(self, job_id: UUID) -> bool:
+        with Session(get_engine()) as session:
+            return claim_webhook_dispatch(session, job_id)
+
     async def _dispatch_success(self, job: _PendingJob, entries) -> None:
         if not job.callback_url:
+            return
+        if not await asyncio.to_thread(self._claim_webhook_dispatch, job.id):
+            logger.info(
+                "Webhook already dispatched for job %s by another replica; skipping", job.id
+            )
             return
         payload = {
             "job_id": str(job.id),
@@ -230,10 +246,21 @@ class BatchPollingService:
             "error_message": None,
             "metadata": job.metadata_,
         }
-        await dispatch(job.callback_url, job.webhook_secret, payload)
+        delivered = await dispatch(job.callback_url, job.webhook_secret, payload)
+        if not delivered:
+            logger.error(
+                "Webhook delivery permanently failed for job %s after all retries; "
+                "caller will not receive the success result",
+                job.id,
+            )
 
     async def _dispatch_failure(self, job: _PendingJob, error_msg: str) -> None:
         if not job.callback_url:
+            return
+        if not await asyncio.to_thread(self._claim_webhook_dispatch, job.id):
+            logger.info(
+                "Webhook already dispatched for job %s by another replica; skipping", job.id
+            )
             return
         payload = {
             "job_id": str(job.id),
@@ -242,4 +269,10 @@ class BatchPollingService:
             "error_message": error_msg,
             "metadata": job.metadata_,
         }
-        await dispatch(job.callback_url, job.webhook_secret, payload)
+        delivered = await dispatch(job.callback_url, job.webhook_secret, payload)
+        if not delivered:
+            logger.error(
+                "Webhook delivery permanently failed for job %s after all retries; "
+                "caller will not receive the failure notification",
+                job.id,
+            )

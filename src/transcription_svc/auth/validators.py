@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+
 from cryptography.fernet import Fernet
 from passlib.context import CryptContext
 
 from transcription_svc.config.settings import get_settings
 
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def compute_key_lookup_hash(plain_key: str) -> str:
+    """SHA-256 of the raw key for indexed DB lookup before bcrypt verification."""
+    return hashlib.sha256(plain_key.encode()).hexdigest()
 
 
 def verify_api_key(plain_key: str, hashed_key: str) -> bool:

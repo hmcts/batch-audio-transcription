@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
+from sqlalchemy import update as sa_update
 from sqlmodel import Session, col, select
 
 from transcription_svc.database.models import (
@@ -106,8 +107,36 @@ def mark_needs_cleanup(session: Session, job_id: UUID, reason: str) -> None:
         session.commit()
 
 
+def claim_webhook_dispatch(session: Session, job_id: UUID) -> bool:
+    """Atomically mark a job's webhook as dispatched. Returns True only for the first caller.
+
+    Uses a conditional UPDATE (WHERE webhook_dispatched_at IS NULL) so only one
+    replica wins the race even if multiple pick up the same job simultaneously.
+    """
+    stmt = (
+        sa_update(TranscriptionJob)
+        .where(
+            TranscriptionJob.id == job_id,
+            TranscriptionJob.webhook_dispatched_at.is_(None),
+        )
+        .values(webhook_dispatched_at=datetime.now(UTC))
+        .returning(TranscriptionJob.id)
+    )
+    result = session.execute(stmt)
+    session.commit()
+    return result.first() is not None
+
+
 def get_caller_by_id(session: Session, caller_id: UUID) -> Caller | None:
     return session.get(Caller, caller_id)
+
+
+def get_caller_by_lookup_hash(session: Session, lookup_hash: str) -> Caller | None:
+    stmt = select(Caller).where(
+        Caller.key_lookup_hash == lookup_hash,
+        Caller.is_active == True,  # noqa: E712
+    )
+    return session.exec(stmt).first()
 
 
 def get_all_active_callers(session: Session) -> list[Caller]:

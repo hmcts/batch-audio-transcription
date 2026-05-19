@@ -42,6 +42,9 @@ class Caller(BaseTable, table=True):
 
     name: str = Field(index=True)
     hashed_key: str
+    # SHA-256 of the raw API key, used as a fast indexed lookup before bcrypt verify.
+    # Populated on key creation; NULL for legacy rows (fallback to linear scan).
+    key_lookup_hash: str | None = Field(default=None, index=True)
     webhook_secret: str
     is_active: bool = Field(default=True)
     azure_app_id: str | None = Field(default=None)
@@ -80,3 +83,7 @@ class TranscriptionJob(BaseTable, table=True):
     # Cleanup
     needs_cleanup: bool = Field(default=False)
     cleanup_failure_reason: str | None = Field(default=None)
+
+    # Webhook delivery guard — set atomically by the replica that wins the dispatch race.
+    # NULL means no webhook has been dispatched yet for this job.
+    webhook_dispatched_at: datetime | None = Field(default=None)
