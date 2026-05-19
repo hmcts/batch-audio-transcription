@@ -1,0 +1,44 @@
+name: SBOM
+
+on:
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: '48 6 * * 4'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    name: SBOM (Python/pip)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install runtime dependencies
+        run: pip install -e "."
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          pip install cyclonedx-bom
+          cyclonedx-py environment \
+            --output-format JSON \
+            --output-file sbom.cdx.json
+
+      - name: Log SBOM hash
+        run: sha256sum sbom.cdx.json
+
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom
+          path: sbom.cdx.json
