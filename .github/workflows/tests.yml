@@ -50,11 +50,25 @@ jobs:
         run: |
           python -c "from transcription_svc.api.app import create_app; app = create_app(); print(f'app loaded with {len(app.routes)} routes')"
 
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      migrations: ${{ steps.filter.outputs.migrations }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            migrations:
+              - 'migrations/**'
+
   alembic-check:
     name: Alembic migration check
+    needs: changes
+    if: needs.changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
-    if: |
-      contains(github.event.pull_request.changed_files, 'migrations/')
     services:
       postgres:
         image: postgres:16
