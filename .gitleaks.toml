@@ -1,0 +1,16 @@
+title = "gitleaks config for batch-audio-transcription"
+
+[extend]
+# Keep all default gitleaks detection rules active.
+useDefault = true
+
+[allowlist]
+description = "Allow all-zeros Fernet key used as a local-development placeholder"
+# WEBHOOK_SECRET_ENCRYPTION_KEY defaults to a fixed all-zeros Fernet key.
+# This is intentional: the setting is documented as a dev-only placeholder
+# that MUST be overridden with a real key from Key Vault in every deployed
+# environment.  The value encodes 32 null bytes and has no cryptographic
+# strength; it is not a real secret.
+regexes = [
+  '''AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=''',
+]
