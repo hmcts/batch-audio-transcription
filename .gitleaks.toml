@@ -23,4 +23,8 @@ description = "Allow development-only placeholder values that carry no cryptogra
 regexes = [
   '''AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=''',
   '''local-webhook-secret''',
+  # local-dev-key-change-me appears in a curl example in README.md (commit 3d312f4).
+  # The README example was later updated to use <your-local-api-key> as a placeholder,
+  # but the historical commit remains in the scan range.
+  '''local-dev-key-change-me''',
 ]

@@ -9,7 +9,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # Core
     ENVIRONMENT: str = "local"
-    DATABASE_CONNECTION_STRING: str = "postgresql://dev:devpass@localhost:5432/transcription_svc"
+    DATABASE_CONNECTION_STRING: str = (
+        "postgresql://dev:devpass@localhost:5432/transcription_svc"  # pragma: allowlist secret
+    )
 
     # Azure Speech
     AZURE_SPEECH_KEY: str = ""

@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: transcription_svc
       POSTGRES_USER: dev
-      POSTGRES_PASSWORD: devpass
+      POSTGRES_PASSWORD: devpass  # pragma: allowlist secret
     ports:
       - "5433:5432"
     volumes:

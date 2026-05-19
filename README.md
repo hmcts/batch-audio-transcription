@@ -27,7 +27,7 @@ The API is available at `http://localhost:8001/docs`.
 
 ```bash
 curl -X POST http://localhost:8001/api/v1/jobs \
-  -H "Authorization: Bearer local-dev-key-change-me" \
+  -H "Authorization: Bearer <your-local-api-key>" \
   -H "Content-Type: application/json" \
   -d '{
     "audio_url": "https://your-storage.blob.core.windows.net/container/audio.wav?sig=...",

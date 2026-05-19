@@ -1,9 +1,14 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
 default_language_version:
-  python: python3.12
+  python: python3.13
 
 repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.3
+    hooks:
+      - id: gitleaks
+
   - repo: https://github.com/ministryofjustice/devsecops-hooks
     rev: v1.4.1
     hooks:
@@ -50,6 +55,7 @@ repos:
           (?x)^(
             uv\.lock|
             \.env\.example|
+            \.gitleaks\.toml|
             \.github/workflows/.*|
             migrations/versions/.*\.py|
             tests/.*
@@ -75,7 +81,7 @@ repos:
 
       - id: no-hardcoded-secrets
         name: No hardcoded secret patterns
-        entry: '(?i)(password|secret|api_key|apikey)\s*=\s*["\'][^"'']{8,}["\']'
+        entry: "(?i)(password|secret|api_key|apikey)\\s*=\\s*[\"'][^\"']{8,}[\"']"
         language: pygrep
         files: \.(py|env|cfg|ini)$
         exclude: ^tests/|\.env\.example$
