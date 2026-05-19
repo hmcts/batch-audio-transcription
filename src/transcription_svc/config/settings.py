@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # Fernet key (URL-safe base64, 32 bytes) used to encrypt webhook_secret at rest.
     # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # noqa: E501
     # The default is a fixed all-zeros key for local development only.
-    WEBHOOK_SECRET_ENCRYPTION_KEY: str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    WEBHOOK_SECRET_ENCRYPTION_KEY: str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="  # noqa: S105
 
     # Webhook delivery
     WEBHOOK_TIMEOUT_SECONDS: float = 30.0

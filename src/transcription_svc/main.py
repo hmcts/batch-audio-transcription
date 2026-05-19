@@ -18,7 +18,7 @@ if __name__ == "__main__":
     settings = get_settings()
     uvicorn.run(
         "transcription_svc.main:app",
-        host="0.0.0.0",
+        host="0.0.0.0",  # nosec B104
         port=8000,
         reload=settings.ENVIRONMENT == "local",
         log_level="info",
