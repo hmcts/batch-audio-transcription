@@ -1,0 +1,81 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+default_language_version:
+  python: python3.12
+
+repos:
+  - repo: https://github.com/ministryofjustice/devsecops-hooks
+    rev: v1.4.1
+    hooks:
+      - id: baseline
+        name: Ministry of Justice
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        name: Check for files larger than 5 MB
+        args: ["--maxkb=5120"]
+      - id: check-ast
+        name: Check Python AST
+      - id: check-case-conflict
+        name: Check for case conflicts
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+      - id: check-json
+        name: Check JSON syntax
+      - id: check-yaml
+        name: Check YAML syntax
+        args: ["--unsafe"]
+      - id: check-toml
+        name: Check TOML syntax
+      - id: end-of-file-fixer
+        name: Fix end of files
+        exclude: ^__pycache__/
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+        exclude: ^__pycache__/
+      - id: mixed-line-ending
+        name: Fix mixed line endings
+        args: ["--fix=lf"]
+      - id: detect-private-key
+        name: Detect private keys
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        name: Detect secrets
+        exclude: |
+          (?x)^(
+            uv\.lock|
+            \.env\.example|
+            \.github/workflows/.*|
+            migrations/versions/.*\.py|
+            tests/.*
+          )$
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.0
+    hooks:
+      - id: ruff
+        name: Ruff linter (Python)
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+        name: Ruff formatter (Python)
+
+  - repo: local
+    hooks:
+      - id: detect-ip
+        name: Detect IP addresses
+        entry: '^(?!0\.0\.0\.0$)(?!127\.0\.0\.1$)(?!192\.168\.)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+        language: pygrep
+        exclude: '\.lock'
+        files: .
+
+      - id: no-hardcoded-secrets
+        name: No hardcoded secret patterns
+        entry: '(?i)(password|secret|api_key|apikey)\s*=\s*["\'][^"'']{8,}["\']'
+        language: pygrep
+        files: \.(py|env|cfg|ini)$
+        exclude: ^tests/|\.env\.example$

@@ -1,0 +1,71 @@
+name: Deploy Production
+
+# Manual prod promotion. Operator picks a release version that has
+# already been built and pushed to ACR by a successful stg deploy.
+# This workflow does NOT rebuild — it only validates the image exists
+# and pushes a `deploy-prod-<version>-<run_id>` tag. ADO triggers on
+# that tag and deploys.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version to promote to prod (e.g. 0.2.0 or v0.2.0). Image must already be in ACR from a stg deploy.'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  ACR_NAME: hmctsprod.azurecr.io
+  IMAGE_NAME: justiceaiunit/batch-audio-transcription
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Normalise version (strip leading v)
+        id: ver
+        run: |
+          VERSION="${{ inputs.version }}"
+          VERSION="${VERSION#v}"
+          if [[ -z "${VERSION}" ]]; then
+            echo "Empty version" >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Promoting version: ${VERSION}"
+
+      - name: ACR login
+        run: |
+          echo "${{ secrets.HMCTSPROD_REGISTRY_PASSWORD }}" \
+            | docker login "${ACR_NAME}" \
+                -u "${{ secrets.HMCTSPROD_REGISTRY_USERNAME }}" \
+                --password-stdin
+
+      - name: Verify image exists in ACR
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          REF="${ACR_NAME}/${IMAGE_NAME}:${VERSION}"
+          echo "Checking ${REF}"
+          if ! docker manifest inspect "${REF}" >/dev/null 2>&1; then
+            echo "Image ${REF} not found in ACR. Did stg deploy run for this version?" >&2
+            exit 1
+          fi
+
+      - name: Push deploy-prod-<version>-<run_id> tag
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          TAG="deploy-prod-${VERSION}-${RUN_ID}"
+          echo "Pushing deploy tag: ${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Deploy ${VERSION} to prod (run ${RUN_ID})"
+          git push origin "${TAG}"

@@ -1,0 +1,71 @@
+name: Code analysis
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  bandit:
+    name: Bandit (Python security)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install bandit
+        run: pip install bandit
+
+      - name: Generate JSON report (evidence)
+        continue-on-error: true
+        run: |
+          bandit \
+            --configfile pyproject.toml \
+            --recursive \
+            --severity-level medium \
+            --confidence-level medium \
+            --format json \
+            --output bandit-report.json \
+            src/
+
+      - name: Upload bandit report
+        if: always() && hashFiles('bandit-report.json') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: bandit-report
+          path: bandit-report.json
+
+      - name: Fail build on findings
+        run: |
+          bandit \
+            --configfile pyproject.toml \
+            --recursive \
+            --severity-level medium \
+            --confidence-level medium \
+            src/
+
+  ruff:
+    name: Ruff (linting)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Ruff check
+        run: ruff check src/ tests/
+
+      - name: Ruff format check
+        run: ruff format --check src/ tests/

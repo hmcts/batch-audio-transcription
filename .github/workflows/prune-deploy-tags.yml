@@ -1,0 +1,114 @@
+name: Prune deploy tags
+
+# Weekly housekeeping for `deploy-<env>-<version>-<run_id>` git tags
+# pushed by deploy-dev / deploy-stg / deploy-prod. Deleting a deploy
+# tag is a no-op for both CI systems: no GH Actions workflow listens
+# to `delete:`, and `azure-infra-pipeline.yml`'s `trigger.tags` only
+# fires on tag push (creation), never deletion. Release tags (`v*`)
+# are excluded by the allow-list regex.
+
+on:
+  schedule:
+    - cron: '17 3 * * 1' # Monday 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Log planned deletions without performing them'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prune-deploy-tags
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Prune deploy-* tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          ALLOW='^deploy-(dev|stg|prod)-'
+          NOW=$(date -u +%s)
+          THIRTY_DAYS=$((30 * 24 * 3600))
+          FLOOR=15
+          DEV_HARD_CAP=50
+
+          summary() { printf '%s\n' "$*" >>"$GITHUB_STEP_SUMMARY"; }
+
+          summary "# Prune deploy tags"
+          summary ""
+          summary "- Run: \`${GITHUB_RUN_ID}\`"
+          summary "- Dry run: \`${DRY_RUN}\`"
+          summary "- Floor (always keep newest): \`${FLOOR}\`"
+          summary "- Dev hard cap: \`${DEV_HARD_CAP}\`"
+          summary "- Age threshold: \`30 days\`"
+          summary ""
+          summary "| Prefix | Total | Action | Deleted | Kept |"
+          summary "|---|---:|---|---:|---:|"
+
+          prune_prefix() {
+            local prefix="$1"
+            local hard_cap="${2:-}"
+
+            mapfile -t rows < <(
+              git for-each-ref \
+                --format='%(refname:strip=2)%09%(creatordate:unix)' \
+                --sort='-creatordate' \
+                "refs/tags/${prefix}*"
+            )
+
+            local total=${#rows[@]}
+            local action="no-op"
+            local -a to_delete=()
+
+            if (( total > 0 )) && [[ -n "$hard_cap" ]] && (( total > hard_cap )); then
+              action="hard-cap (>${hard_cap} → keep ${FLOOR})"
+              for ((i=FLOOR; i<total; i++)); do to_delete+=("${rows[$i]}"); done
+            elif (( total > FLOOR )); then
+              action="age (>30d, floor ${FLOOR})"
+              for ((i=FLOOR; i<total; i++)); do
+                ts="${rows[$i]##*$'\t'}"
+                if (( NOW - ts > THIRTY_DAYS )); then
+                  to_delete+=("${rows[$i]}")
+                fi
+              done
+            fi
+
+            echo "::group::${prefix} (total=${total}, action=${action})"
+            local deleted=0
+            for row in "${to_delete[@]}"; do
+              local name="${row%%$'\t'*}"
+              if [[ ! "$name" =~ $ALLOW ]]; then
+                echo "REFUSE: ${name} does not match allow-list"
+                continue
+              fi
+              if [[ "$DRY_RUN" == "true" ]]; then
+                echo "[dry-run] would delete ${name}"
+              else
+                gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${name}"
+                echo "deleted ${name}"
+              fi
+              deleted=$((deleted + 1))
+            done
+            echo "::endgroup::"
+
+            local kept=$((total - deleted))
+            summary "| \`${prefix}\` | ${total} | ${action} | ${deleted} | ${kept} |"
+          }
+
+          prune_prefix "deploy-dev-"  "${DEV_HARD_CAP}"
+          prune_prefix "deploy-stg-"
+          prune_prefix "deploy-prod-"
