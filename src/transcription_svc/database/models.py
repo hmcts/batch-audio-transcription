@@ -50,7 +50,9 @@ class Caller(BaseTable, table=True):
 class TranscriptionJob(BaseTable, table=True):
     __tablename__ = "transcription_job"
     __table_args__ = (
-        UniqueConstraint("caller_id", "idempotency_key", name="uq_transcription_job_caller_idempotency"),
+        UniqueConstraint(
+            "caller_id", "idempotency_key", name="uq_transcription_job_caller_idempotency"
+        ),
     )
 
     caller_id: UUID = Field(foreign_key="caller.id", index=True)

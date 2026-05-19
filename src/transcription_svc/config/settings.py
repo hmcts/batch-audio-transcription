@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # Auth
     LOCAL_API_KEY: str = "local-dev-key-change-me"
     # Fernet key (URL-safe base64, 32 bytes) used to encrypt webhook_secret at rest.
-    # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # noqa: E501
     # The default is a fixed all-zeros key for local development only.
     WEBHOOK_SECRET_ENCRYPTION_KEY: str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 

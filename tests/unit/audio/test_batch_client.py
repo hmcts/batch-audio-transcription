@@ -1,7 +1,6 @@
 """Unit tests for the Azure Batch Transcription REST client."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
 
 import httpx
 import pytest

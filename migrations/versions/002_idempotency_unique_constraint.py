@@ -14,7 +14,6 @@ Revises: 001
 Create Date: 2026-05-19
 """
 
-import sqlalchemy as sa
 from alembic import op
 
 revision = "002"
@@ -25,7 +24,9 @@ depends_on = None
 
 def upgrade() -> None:
     # Drop the old non-unique index created by index=True on the column.
-    op.drop_index("ix_transcription_job_idempotency_key", table_name="transcription_job", if_exists=True)
+    op.drop_index(
+        "ix_transcription_job_idempotency_key", table_name="transcription_job", if_exists=True
+    )
 
     # Create the composite unique constraint (also creates an implicit unique index).
     op.create_unique_constraint(
@@ -36,5 +37,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_transcription_job_caller_idempotency", "transcription_job", type_="unique")
-    op.create_index("ix_transcription_job_idempotency_key", "transcription_job", ["idempotency_key"])
+    op.drop_constraint(
+        "uq_transcription_job_caller_idempotency", "transcription_job", type_="unique"
+    )
+    op.create_index(
+        "ix_transcription_job_idempotency_key", "transcription_job", ["idempotency_key"]
+    )

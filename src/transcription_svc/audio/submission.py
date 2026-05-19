@@ -8,7 +8,6 @@ from uuid import UUID
 from sqlmodel import Session
 
 from transcription_svc.audio.batch_client import BatchSubmissionError, submit_batch_job
-from transcription_svc.config.settings import get_settings
 from transcription_svc.database.interface import save_job
 from transcription_svc.database.models import BatchJobStatus, JobStatus, TranscriptionJob
 

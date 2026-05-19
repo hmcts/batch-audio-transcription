@@ -19,7 +19,7 @@ from transcription_svc.audio.submission import submit_and_queue_batch_job
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.engine import get_session
 from transcription_svc.database.interface import get_job_by_id, get_job_by_idempotency_key
-from transcription_svc.database.models import Caller, DialogueEntry, JobStatus, TranscriptionJob
+from transcription_svc.database.models import Caller, JobStatus, TranscriptionJob
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
@@ -87,7 +87,9 @@ class SubmitJobRequest(BaseModel):
     @classmethod
     def validate_metadata_size(cls, v: dict) -> dict:
         if len(json.dumps(v)) > _METADATA_MAX_BYTES:
-            raise ValueError(f"metadata must not exceed {_METADATA_MAX_BYTES} bytes when serialised")
+            raise ValueError(
+                f"metadata must not exceed {_METADATA_MAX_BYTES} bytes when serialised"
+            )
         return v
 
     @field_validator("callback_url")

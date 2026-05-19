@@ -64,7 +64,9 @@ class AsyncAzureBlobManager:
         except Exception as e:
             logger.warning(f"Error closing credential: {e}")
 
-    async def create_blob_from_bytes(self, content: bytes, blob_name: str, container_name: str | None = None) -> bool:
+    async def create_blob_from_bytes(
+        self, content: bytes, blob_name: str, container_name: str | None = None
+    ) -> bool:
         """Create a blob from bytes content (async).
 
         Parameters
@@ -86,7 +88,9 @@ class AsyncAzureBlobManager:
         blob_safe = _sanitize_for_log(blob_name)
 
         try:
-            async with AsyncBlobServiceClient(account_url=self.account_url, credential=self.credential) as blob_service:
+            async with AsyncBlobServiceClient(
+                account_url=self.account_url, credential=self.credential
+            ) as blob_service:
                 blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
                 await blob_client.upload_blob(content, overwrite=True)
 
@@ -95,12 +99,16 @@ class AsyncAzureBlobManager:
             logger.warning(f"Blob already exists: {container_safe}/{blob_safe}")
             return False
         except Exception as e:
-            logger.error(f"Failed to create blob {container_safe}/{blob_safe}: {_sanitize_for_log(e)}")
+            logger.error(
+                f"Failed to create blob {container_safe}/{blob_safe}: {_sanitize_for_log(e)}"
+            )
             return False
         else:
             return True
 
-    async def create_blob_from_file(self, file_path: Path, blob_name: str, container_name: str | None = None) -> bool:
+    async def create_blob_from_file(
+        self, file_path: Path, blob_name: str, container_name: str | None = None
+    ) -> bool:
         """Create a blob from a local file (async).
 
         Parameters
@@ -123,14 +131,18 @@ class AsyncAzureBlobManager:
         file_path_safe = _sanitize_for_log(file_path)
 
         try:
-            async with AsyncBlobServiceClient(account_url=self.account_url, credential=self.credential) as blob_service:
+            async with AsyncBlobServiceClient(
+                account_url=self.account_url, credential=self.credential
+            ) as blob_service:
                 blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
 
                 # Infer content type from file extension so Azure serves
                 # the correct Content-Type header on download.  Falls back
                 # to application/octet-stream for unknown extensions.
                 content_type, _ = mimetypes.guess_type(str(file_path))
-                content_settings = ContentSettings(content_type=content_type) if content_type else None
+                content_settings = (
+                    ContentSettings(content_type=content_type) if content_type else None
+                )
 
                 # Upload the file
                 with file_path.open("rb") as data:
@@ -148,7 +160,9 @@ class AsyncAzureBlobManager:
             logger.warning(f"Blob already exists: {container_safe}/{blob_safe}")
             return False
         except Exception as e:
-            logger.error(f"Failed to create blob {container_safe}/{blob_safe}: {_sanitize_for_log(e)}")
+            logger.error(
+                f"Failed to create blob {container_safe}/{blob_safe}: {_sanitize_for_log(e)}"
+            )
             return False
         else:
             return True
@@ -176,7 +190,9 @@ class AsyncAzureBlobManager:
         try:
             container = container_name or self.container_name
 
-            async with AsyncBlobServiceClient(account_url=self.account_url, credential=self.credential) as blob_service:
+            async with AsyncBlobServiceClient(
+                account_url=self.account_url, credential=self.credential
+            ) as blob_service:
                 blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
                 await blob_client.delete_blob(delete_snapshots=delete_snapshots)
 
@@ -208,7 +224,9 @@ class AsyncAzureBlobManager:
         try:
             container = container_name or self.container_name
 
-            async with AsyncBlobServiceClient(account_url=self.account_url, credential=self.credential) as blob_service:
+            async with AsyncBlobServiceClient(
+                account_url=self.account_url, credential=self.credential
+            ) as blob_service:
                 blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
                 return await blob_client.exists()
 
@@ -243,7 +261,9 @@ class AsyncAzureBlobManager:
             container = container_name or self.container_name
             blobs = []
 
-            async with AsyncBlobServiceClient(account_url=self.account_url, credential=self.credential) as blob_service:
+            async with AsyncBlobServiceClient(
+                account_url=self.account_url, credential=self.credential
+            ) as blob_service:
                 container_client = blob_service.get_container_client(container)
 
                 # List blobs with the given prefix
@@ -260,10 +280,14 @@ class AsyncAzureBlobManager:
                         blob_info["metadata"] = blob.metadata or {}
                     blobs.append(blob_info)
 
-            logger.info(f"Listed {len(blobs)} blobs with prefix '{prefix}' in container '{container}'")
+            logger.info(
+                f"Listed {len(blobs)} blobs with prefix '{prefix}' in container '{container}'"
+            )
 
         except Exception as e:
-            logger.error(f"Failed to list blobs with prefix '{prefix}' in container '{container}': {e}")
+            logger.error(
+                f"Failed to list blobs with prefix '{prefix}' in container '{container}': {e}"
+            )
             return []
         else:
             return blobs
@@ -286,7 +310,9 @@ class AsyncAzureBlobManager:
         try:
             container = container_name or self.container_name
 
-            async with AsyncBlobServiceClient(account_url=self.account_url, credential=self.credential) as blob_service:
+            async with AsyncBlobServiceClient(
+                account_url=self.account_url, credential=self.credential
+            ) as blob_service:
                 blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
                 properties = await blob_client.get_blob_properties()
                 return properties.metadata or {}
@@ -298,7 +324,9 @@ class AsyncAzureBlobManager:
             logger.error(f"Failed to get metadata for blob {container}/{blob_name}: {e}")
             return {}
 
-    async def set_blob_metadata(self, blob_name: str, metadata: dict, container_name: str | None = None) -> bool:
+    async def set_blob_metadata(
+        self, blob_name: str, metadata: dict, container_name: str | None = None
+    ) -> bool:
         """Set metadata on a specific blob (async).
 
         Parameters
@@ -319,7 +347,9 @@ class AsyncAzureBlobManager:
         try:
             container = container_name or self.container_name
 
-            async with AsyncBlobServiceClient(account_url=self.account_url, credential=self.credential) as blob_service:
+            async with AsyncBlobServiceClient(
+                account_url=self.account_url, credential=self.credential
+            ) as blob_service:
                 blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
                 await blob_client.set_blob_metadata(metadata=metadata)
 
@@ -334,7 +364,9 @@ class AsyncAzureBlobManager:
         else:
             return True
 
-    async def download_blob_to_file(self, blob_name: str, file_path: Path, container_name: str | None = None) -> bool:
+    async def download_blob_to_file(
+        self, blob_name: str, file_path: Path, container_name: str | None = None
+    ) -> bool:
         """Download a blob to a local file (async).
 
         Parameters
@@ -359,7 +391,9 @@ class AsyncAzureBlobManager:
         try:
             container = container_name or self.container_name
 
-            async with AsyncBlobServiceClient(account_url=self.account_url, credential=self.credential) as blob_service:
+            async with AsyncBlobServiceClient(
+                account_url=self.account_url, credential=self.credential
+            ) as blob_service:
                 blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
 
                 # Check if blob exists first

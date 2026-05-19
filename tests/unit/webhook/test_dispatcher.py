@@ -59,8 +59,9 @@ class TestDispatch:
 
     @pytest.mark.asyncio
     async def test_returns_false_after_all_retries_fail(self):
-        from transcription_svc.webhook.dispatcher import dispatch
         import httpx
+
+        from transcription_svc.webhook.dispatcher import dispatch
 
         with patch("httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
@@ -77,7 +78,7 @@ class TestDispatch:
 
     @pytest.mark.asyncio
     async def test_includes_signature_header(self):
-        from transcription_svc.webhook.dispatcher import dispatch, _sign
+        from transcription_svc.webhook.dispatcher import _sign, dispatch
 
         mock_response = MagicMock()
         mock_response.status_code = 200

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hmac
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException
 from sqlmodel import Session

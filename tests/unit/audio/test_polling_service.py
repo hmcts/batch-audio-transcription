@@ -125,7 +125,10 @@ class TestHandleSucceeded:
                 new_callable=AsyncMock,
                 return_value=mock_entries,
             ),
-            patch("transcription_svc.audio.polling_service.process_speakers", return_value=mock_entries),
+            patch(
+                "transcription_svc.audio.polling_service.process_speakers",
+                return_value=mock_entries,
+            ),
             patch.object(service, "_save_results"),
             patch.object(service, "_dispatch_success", new_callable=AsyncMock),
             patch(

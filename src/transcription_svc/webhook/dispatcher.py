@@ -53,7 +53,9 @@ async def dispatch(
                 response = await client.post(callback_url, content=body, headers=headers)
                 if response.status_code < 500:
                     logger.info(
-                        "Webhook delivered to %s (status=%d)", _safe_url(callback_url), response.status_code
+                        "Webhook delivered to %s (status=%d)",
+                        _safe_url(callback_url),
+                        response.status_code,
                     )
                     return response.status_code < 300
                 logger.warning(
@@ -75,7 +77,9 @@ async def dispatch(
         if attempt < max_retries - 1:
             await asyncio.sleep(2**attempt)
 
-    logger.error("Webhook delivery failed after %d attempts: %s", max_retries, _safe_url(callback_url))
+    logger.error(
+        "Webhook delivery failed after %d attempts: %s", max_retries, _safe_url(callback_url)
+    )
     return False
 
 

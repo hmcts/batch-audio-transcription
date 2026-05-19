@@ -6,7 +6,6 @@ Create Date: 2026-01-01 00:00:00.000000
 """
 
 import sqlalchemy as sa
-import sqlmodel
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
@@ -34,7 +33,9 @@ def upgrade() -> None:
         sa.Column("id", UUID(as_uuid=True), primary_key=True),
         sa.Column("created_datetime", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_datetime", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("caller_id", UUID(as_uuid=True), sa.ForeignKey("caller.id"), nullable=False, index=True),
+        sa.Column(
+            "caller_id", UUID(as_uuid=True), sa.ForeignKey("caller.id"), nullable=False, index=True
+        ),
         sa.Column("status", sa.String, nullable=False, default="pending"),
         sa.Column("audio_url", sa.String, nullable=False),
         sa.Column("locale", sa.String, nullable=False, default="en-GB"),

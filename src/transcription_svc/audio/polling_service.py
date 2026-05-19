@@ -38,7 +38,7 @@ from transcription_svc.database.interface import (
     save_job_results,
     update_job_batch_status,
 )
-from transcription_svc.database.models import BatchJobStatus, TranscriptionJob
+from transcription_svc.database.models import BatchJobStatus
 from transcription_svc.webhook.dispatcher import dispatch
 
 logger = logging.getLogger(__name__)
@@ -153,7 +153,9 @@ class BatchPollingService:
 
     async def _handle_succeeded(self, job: _PendingJob) -> None:
         try:
-            dialogue_entries = await get_batch_results(job.batch_job_url, transcription_job_id=job.id)
+            dialogue_entries = await get_batch_results(
+                job.batch_job_url, transcription_job_id=job.id
+            )
         except BatchResultError as exc:
             logger.error("Failed to retrieve batch results for job %s: %s", job.id, exc)
             await asyncio.to_thread(self._record_error, job.id, str(exc))

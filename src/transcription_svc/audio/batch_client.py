@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from uuid import UUID
 
 import httpx
@@ -128,9 +127,6 @@ async def get_batch_results(
         result_response = await client.get(content_url)
         result_response.raise_for_status()
         result_data = result_response.json()
-
-    settings = get_settings()
-    low_confidence_threshold: float | None = settings.LOW_CONFIDENCE_THRESHOLD
 
     dialogue_entries: list[DialogueEntry] = []
 

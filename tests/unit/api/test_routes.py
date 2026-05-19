@@ -1,7 +1,7 @@
 """Unit tests for API routes."""
 
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -82,7 +82,9 @@ class TestSubmitJob:
 
     def test_returns_existing_job_on_idempotency_hit(self, client, as_caller, mocker):
         existing = _make_job(status=JobStatus.SUCCEEDED)
-        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=existing)
+        mocker.patch(
+            "transcription_svc.api.routes.get_job_by_idempotency_key", return_value=existing
+        )
 
         response = client.post(
             "/api/v1/jobs",

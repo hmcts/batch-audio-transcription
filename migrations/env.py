@@ -1,9 +1,13 @@
 from logging.config import fileConfig
-from sqlalchemy import engine_from_config, pool
+
 from alembic import context
+from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
-from transcription_svc.database.models import Caller, TranscriptionJob  # noqa: F401 — ensure models are registered
+from transcription_svc.database.models import (  # noqa: F401 — ensure models are registered
+    Caller,
+    TranscriptionJob,
+)
 
 config = context.config
 if config.config_file_name is not None:
