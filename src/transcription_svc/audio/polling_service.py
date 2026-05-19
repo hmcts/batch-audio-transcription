@@ -67,10 +67,17 @@ class BatchPollingService:
         self._resolve_webhook_secret = webhook_secret_resolver or self._default_secret_resolver
 
     def _default_secret_resolver(self, caller_id: UUID) -> str:
+        from transcription_svc.auth.validators import decrypt_webhook_secret
         from transcription_svc.database.interface import get_caller_by_id
         with Session(get_engine()) as session:
             caller = get_caller_by_id(session, caller_id)
-            return caller.webhook_secret if caller else "unknown"
+            if not caller:
+                return "unknown"
+            try:
+                return decrypt_webhook_secret(caller.webhook_secret)
+            except Exception:
+                logger.warning("Failed to decrypt webhook_secret for caller %s", caller_id)
+                return "unknown"
 
     async def run_polling_loop(self) -> None:
         logger.info(

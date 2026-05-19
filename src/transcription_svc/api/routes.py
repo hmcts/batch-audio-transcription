@@ -36,24 +36,24 @@ def _caller_key(request: Request) -> str:
 limiter = Limiter(key_func=_caller_key)
 
 
-def _reject_private_url(url: str) -> None:
+def _reject_private_url(url: str, field: str = "url") -> None:
     """Raise ValueError if url resolves to a private/internal address.
 
-    Prevents SSRF via callback_url: an attacker with valid credentials
-    cannot point the webhook dispatcher at the Azure metadata service
-    (169.254.169.254), internal Postgres, or other VNet-internal hosts.
+    Prevents SSRF: an attacker with valid credentials cannot point the
+    service at the Azure metadata service (169.254.169.254), internal
+    Postgres, or other VNet-internal hosts.
     Allowed in local environment to support docker-compose development.
     """
     if get_settings().ENVIRONMENT == "local":
         return
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
-        raise ValueError("callback_url must use http or https")
+        raise ValueError(f"{field} must use http or https")
     host = parsed.hostname or ""
     try:
         ip = ipaddress.ip_address(socket.gethostbyname(host))
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-            raise ValueError(f"callback_url resolves to a private/internal address: {ip}")
+            raise ValueError(f"{field} resolves to a private/internal address: {ip}")
     except socket.gaierror:
         pass  # DNS failure is allowed — will fail at delivery time
 
@@ -69,6 +69,12 @@ class SubmitJobRequest(BaseModel):
     callback_url: str | None = None
     idempotency_key: str | None = None
     metadata: dict = {}
+
+    @field_validator("audio_url")
+    @classmethod
+    def validate_audio_url(cls, v: str) -> str:
+        _reject_private_url(v, "audio_url")
+        return v
 
     @field_validator("locale")
     @classmethod
@@ -88,7 +94,7 @@ class SubmitJobRequest(BaseModel):
     @classmethod
     def validate_callback_url(cls, v: str | None) -> str | None:
         if v is not None:
-            _reject_private_url(v)
+            _reject_private_url(v, "callback_url")
         return v
 
     @field_validator("idempotency_key")

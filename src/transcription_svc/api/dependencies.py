@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 from fastapi import Depends, Header, HTTPException
 from sqlmodel import Session
 
-from transcription_svc.auth.validators import is_local_env, verify_api_key
+from transcription_svc.auth.validators import encrypt_webhook_secret, is_local_env, verify_api_key
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.engine import get_session
 from transcription_svc.database.interface import get_all_active_callers
@@ -18,7 +18,7 @@ def _local_dev_caller() -> Caller:
         id=UUID("00000000-0000-0000-0000-000000000001"),
         name="local-dev",
         hashed_key="",
-        webhook_secret="local-webhook-secret",
+        webhook_secret=encrypt_webhook_secret("local-webhook-secret"),
         is_active=True,
     )
 

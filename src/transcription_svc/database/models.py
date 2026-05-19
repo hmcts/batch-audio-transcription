@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column
+from sqlalchemy import Column, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -49,6 +49,9 @@ class Caller(BaseTable, table=True):
 
 class TranscriptionJob(BaseTable, table=True):
     __tablename__ = "transcription_job"
+    __table_args__ = (
+        UniqueConstraint("caller_id", "idempotency_key", name="uq_transcription_job_caller_idempotency"),
+    )
 
     caller_id: UUID = Field(foreign_key="caller.id", index=True)
     status: JobStatus = Field(default=JobStatus.PENDING)
@@ -58,7 +61,7 @@ class TranscriptionJob(BaseTable, table=True):
     locale: str = Field(default="en-GB")
     enable_diarization: bool = Field(default=True)
     callback_url: str | None = Field(default=None)
-    idempotency_key: str | None = Field(default=None, index=True)
+    idempotency_key: str | None = Field(default=None)
     metadata_: dict = Field(default_factory=dict, sa_column=Column("metadata", JSONB))
 
     # Results
