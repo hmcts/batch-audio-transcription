@@ -53,9 +53,7 @@ def fetch_pending_batch_jobs(session: Session) -> list[TranscriptionJob]:
     return list(session.exec(stmt).all())
 
 
-def update_job_batch_status(
-    session: Session, job_id: UUID, batch_status: BatchJobStatus
-) -> None:
+def update_job_batch_status(session: Session, job_id: UUID, batch_status: BatchJobStatus) -> None:
     job = session.get(TranscriptionJob, job_id)
     if job:
         job.batch_job_status = batch_status
@@ -72,14 +70,10 @@ def save_job_results(
 ) -> None:
     job = session.get(TranscriptionJob, job_id)
     if job:
-        job.dialogue_entries = [
-            e.model_dump() if hasattr(e, "model_dump") else e for e in entries
-        ]
+        job.dialogue_entries = [e.model_dump() if hasattr(e, "model_dump") else e for e in entries]
         job.batch_job_status = batch_status
         job.status = (
-            JobStatus.SUCCEEDED
-            if batch_status == BatchJobStatus.SUCCEEDED
-            else JobStatus.FAILED
+            JobStatus.SUCCEEDED if batch_status == BatchJobStatus.SUCCEEDED else JobStatus.FAILED
         )
         job.updated_datetime = datetime.now(UTC)
         session.add(job)

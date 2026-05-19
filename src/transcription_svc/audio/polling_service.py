@@ -69,6 +69,7 @@ class BatchPollingService:
     def _default_secret_resolver(self, caller_id: UUID) -> str:
         from transcription_svc.auth.validators import decrypt_webhook_secret
         from transcription_svc.database.interface import get_caller_by_id
+
         with Session(get_engine()) as session:
             caller = get_caller_by_id(session, caller_id)
             if not caller:
@@ -135,9 +136,7 @@ class BatchPollingService:
 
             if azure_status == BatchJobStatus.RUNNING:
                 if job.batch_job_status == BatchJobStatus.NOT_STARTED:
-                    await asyncio.to_thread(
-                        self._update_status, job.id, BatchJobStatus.RUNNING
-                    )
+                    await asyncio.to_thread(self._update_status, job.id, BatchJobStatus.RUNNING)
             elif azure_status == BatchJobStatus.SUCCEEDED:
                 await self._handle_succeeded(job)
             elif azure_status == BatchJobStatus.FAILED:

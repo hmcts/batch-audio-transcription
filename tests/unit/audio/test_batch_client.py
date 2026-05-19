@@ -23,7 +23,9 @@ class TestSubmitBatchJob:
 
         mock_response = _make_response(
             status_code=201,
-            headers={"Location": "https://eastus.cognitiveservices.azure.com/speechtotext/transcriptions/abc-123"},
+            headers={
+                "Location": "https://eastus.cognitiveservices.azure.com/speechtotext/transcriptions/abc-123"
+            },
         )
         with patch("httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
@@ -33,7 +35,10 @@ class TestSubmitBatchJob:
 
             result = await submit_batch_job("https://sas-url", "test-job")
 
-        assert result == "https://eastus.cognitiveservices.azure.com/speechtotext/transcriptions/abc-123"
+        assert (
+            result
+            == "https://eastus.cognitiveservices.azure.com/speechtotext/transcriptions/abc-123"
+        )
 
     @pytest.mark.asyncio
     async def test_raises_on_non_201(self):
@@ -55,7 +60,9 @@ class TestSubmitBatchJob:
 
         mock_response = _make_response(
             status_code=201,
-            headers={"Location": "https://eastus.cognitiveservices.azure.com/speechtotext/transcriptions/xyz"},
+            headers={
+                "Location": "https://eastus.cognitiveservices.azure.com/speechtotext/transcriptions/xyz"
+            },
         )
         captured_payload = {}
 
@@ -80,7 +87,9 @@ class TestSubmitBatchJob:
 
         mock_response = _make_response(
             status_code=201,
-            headers={"Location": "https://eastus.cognitiveservices.azure.com/speechtotext/transcriptions/xyz"},
+            headers={
+                "Location": "https://eastus.cognitiveservices.azure.com/speechtotext/transcriptions/xyz"
+            },
         )
         captured_payload = {}
 
@@ -104,7 +113,9 @@ class TestSubmitBatchJob:
 
         mock_response = _make_response(
             status_code=201,
-            headers={"Location": "https://eastus.cognitiveservices.azure.com/speechtotext/transcriptions/xyz"},
+            headers={
+                "Location": "https://eastus.cognitiveservices.azure.com/speechtotext/transcriptions/xyz"
+            },
         )
         captured_payload = {}
 
@@ -186,8 +197,12 @@ class TestGetBatchResults:
         result_data = {
             "recognizedPhrases": [
                 {"offsetInTicks": 0, "durationInTicks": 0, "speaker": 0, "nBest": []},
-                {"offsetInTicks": 10_000_000, "durationInTicks": 5_000_000, "speaker": 1,
-                 "nBest": [{"display": "Hello", "words": []}]},
+                {
+                    "offsetInTicks": 10_000_000,
+                    "durationInTicks": 5_000_000,
+                    "speaker": 1,
+                    "nBest": [{"display": "Hello", "words": []}],
+                },
             ]
         }
 

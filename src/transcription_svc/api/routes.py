@@ -27,11 +27,13 @@ router = APIRouter(prefix="/api/v1")
 _LOCALE_RE = re.compile(r"^[a-z]{2}-[A-Z]{2}$")
 _METADATA_MAX_BYTES = 4096
 
+
 # Rate limiter — keyed on the bearer token so limits are per-caller, not per-IP.
 # Falls back to remote address for unauthenticated requests.
 def _caller_key(request: Request) -> str:
     auth = request.headers.get("Authorization", "")
     return auth[7:] if auth.startswith("Bearer ") else get_remote_address(request)
+
 
 limiter = Limiter(key_func=_caller_key)
 
@@ -61,6 +63,7 @@ def _reject_private_url(url: str, field: str = "url") -> None:
 # ---------------------------------------------------------------------------
 # Request / Response models
 # ---------------------------------------------------------------------------
+
 
 class SubmitJobRequest(BaseModel):
     audio_url: str
@@ -150,6 +153,7 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.get("/health")
 async def health() -> dict:

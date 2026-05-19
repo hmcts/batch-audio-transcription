@@ -14,6 +14,7 @@ os.environ.setdefault("LOCAL_API_KEY", "test-api-key")
 @pytest.fixture(autouse=True)
 def reset_settings_cache():
     from transcription_svc.config.settings import get_settings
+
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

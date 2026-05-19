@@ -18,6 +18,7 @@ target_metadata = SQLModel.metadata
 
 def get_url():
     import os
+
     return os.getenv("DATABASE_CONNECTION_STRING", config.get_main_option("sqlalchemy.url"))
 
 

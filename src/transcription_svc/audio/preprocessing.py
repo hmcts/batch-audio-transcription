@@ -12,14 +12,16 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_FILTER_CHAIN = ",".join([
-    "pan=mono|c0=0.5*c0+0.5*c1",
-    "highpass=f=100",
-    "lowpass=f=8000",
-    "volume=3.0",
-    "acompressor=threshold=0.1:ratio=4:attack=5:release=50",
-    "loudnorm=I=-16:TP=-1.5:LRA=11",
-])
+_FILTER_CHAIN = ",".join(
+    [
+        "pan=mono|c0=0.5*c0+0.5*c1",
+        "highpass=f=100",
+        "lowpass=f=8000",
+        "volume=3.0",
+        "acompressor=threshold=0.1:ratio=4:attack=5:release=50",
+        "loudnorm=I=-16:TP=-1.5:LRA=11",
+    ]
+)
 
 _SAMPLE_RATE = 16000
 
@@ -31,10 +33,14 @@ async def preprocess_audio(input_path: Path, output_path: Path) -> None:
     """
     cmd = [
         "ffmpeg",
-        "-i", str(input_path),
-        "-af", _FILTER_CHAIN,
-        "-ar", str(_SAMPLE_RATE),
-        "-ac", "1",
+        "-i",
+        str(input_path),
+        "-af",
+        _FILTER_CHAIN,
+        "-ar",
+        str(_SAMPLE_RATE),
+        "-ac",
+        "1",
         "-y",
         str(output_path),
     ]
@@ -58,7 +64,8 @@ async def is_ffmpeg_available() -> bool:
     """Return True if ffmpeg is installed and callable."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-version",
+            "ffmpeg",
+            "-version",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

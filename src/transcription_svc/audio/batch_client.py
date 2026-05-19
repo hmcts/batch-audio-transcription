@@ -114,9 +114,7 @@ async def get_batch_results(
             item for item in files_data.get("values", []) if item.get("kind") == "Transcription"
         ]
         if not transcription_files:
-            raise BatchResultError(
-                f"No transcription file in batch results for job: {job_url}"
-            )
+            raise BatchResultError(f"No transcription file in batch results for job: {job_url}")
 
         content_url = transcription_files[0].get("links", {}).get("contentUrl")
         if not content_url:
@@ -161,6 +159,7 @@ async def delete_batch_job(job_url: str) -> None:
 
     if response.status_code not in (200, 204):
         import logging
+
         logging.getLogger(__name__).warning(
             "Unexpected HTTP %d when deleting batch job %s", response.status_code, job_url
         )

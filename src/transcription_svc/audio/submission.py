@@ -61,13 +61,12 @@ async def submit_and_queue_batch_job(
         job.status = JobStatus.SUBMITTED
         job = save_job(session, job)
 
-        logger.info(
-            "Batch job submitted: job_id=%s azure_job_id=%s", job.id, batch_job_id
-        )
+        logger.info("Batch job submitted: job_id=%s azure_job_id=%s", job.id, batch_job_id)
 
     except BatchSubmissionError as exc:
         logger.error("Batch submission failed for job %s: %s", job.id, exc)
         import sentry_sdk
+
         sentry_sdk.capture_exception(exc)
         job.status = JobStatus.FAILED
         # Store only the high-level message — full Azure error detail (which
@@ -78,6 +77,7 @@ async def submit_and_queue_batch_job(
     except Exception as exc:
         logger.error("Unexpected error submitting job %s: %s", job.id, exc)
         import sentry_sdk
+
         sentry_sdk.capture_exception(exc)
         job.status = JobStatus.FAILED
         job.error_message = "Job submission failed due to an internal error"

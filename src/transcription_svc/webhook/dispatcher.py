@@ -21,6 +21,7 @@ def _safe_url(url: str) -> str:
     parsed = urlparse(url)
     return f"{parsed.scheme}://{parsed.netloc}"
 
+
 _DEFAULT_RETRIES = 3
 _DEFAULT_TIMEOUT = 30.0
 
