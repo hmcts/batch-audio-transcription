@@ -61,4 +61,4 @@ See [.env.example](.env.example) for all configuration options.
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for the vulnerability disclosure policy.
+To report a vulnerability, email the HMCTS security team at security@hmcts.net. Do not open a public GitHub issue for security concerns.

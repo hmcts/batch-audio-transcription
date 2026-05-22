@@ -36,7 +36,9 @@ async def dispatch(
 ) -> bool:
     """POST a signed webhook payload to callback_url.
 
-    Returns True if the delivery was acknowledged (2xx/4xx response).
+    Returns True if the delivery was confirmed (2xx response).
+    4xx responses stop retrying but return False — the receiver rejected
+    the payload and retrying won't help.
     Retries up to max_retries times on network errors or 5xx responses
     with exponential backoff (1s, 2s, 4s).
     """

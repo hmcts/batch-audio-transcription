@@ -30,8 +30,9 @@ services:
     environment:
       - DATABASE_CONNECTION_STRING=postgresql://dev:devpass@postgres:5432/transcription_svc
       - ENVIRONMENT=local
+      - AZURE_CONFIG_DIR=/home/appuser/.azure
     volumes:
-      - ~/.azure:/root/.azure
+      - ~/.azure:/home/appuser/.azure
     depends_on:
       postgres:
         condition: service_healthy

@@ -213,6 +213,12 @@ class BatchPollingService:
 
         await self._dispatch_failure(job, error_msg)
 
+        try:
+            await delete_batch_job(job.batch_job_url)
+        except Exception as exc:
+            logger.warning("Could not delete batch job %s: %s", job.batch_job_url, exc)
+            await asyncio.to_thread(self._record_cleanup_failure, job.id, str(exc))
+
     def _save_results(self, job_id, entries, batch_status) -> None:
         with Session(get_engine()) as session:
             save_job_results(session, job_id, entries, batch_status)

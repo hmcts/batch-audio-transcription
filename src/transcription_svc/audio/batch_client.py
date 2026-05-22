@@ -157,9 +157,4 @@ async def delete_batch_job(job_url: str) -> None:
     if response.status_code == 404:
         return
 
-    if response.status_code not in (200, 204):
-        import logging
-
-        logging.getLogger(__name__).warning(
-            "Unexpected HTTP %d when deleting batch job %s", response.status_code, job_url
-        )
+    response.raise_for_status()

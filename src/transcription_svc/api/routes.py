@@ -90,7 +90,7 @@ class SubmitJobRequest(BaseModel):
     @field_validator("metadata")
     @classmethod
     def validate_metadata_size(cls, v: dict) -> dict:
-        if len(json.dumps(v)) > _METADATA_MAX_BYTES:
+        if len(json.dumps(v, ensure_ascii=False).encode("utf-8")) > _METADATA_MAX_BYTES:
             raise ValueError(
                 f"metadata must not exceed {_METADATA_MAX_BYTES} bytes when serialised"
             )
