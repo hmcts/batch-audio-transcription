@@ -11,11 +11,10 @@ RUN addgroup --system --gid 1001 appuser \
 WORKDIR /app
 
 COPY pyproject.toml .
+COPY src/ src/
 # Install production dependencies only — dev extras (pytest, coverage, ruff)
 # are not needed at runtime and increase attack surface.
-RUN pip install --no-cache-dir -e "."
-
-COPY src/ src/
+RUN pip install --no-cache-dir "."
 COPY migrations/ migrations/
 COPY alembic.ini .
 COPY entrypoint.sh .
