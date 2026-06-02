@@ -47,7 +47,7 @@ def _reject_private_url(url: str, field: str = "url") -> None:
     Postgres, or other VNet-internal hosts.
     Allowed in local environment to support docker-compose development.
     """
-    if get_settings().ENVIRONMENT == "local":
+    if get_settings().ENVIRONMENT in ("local", "test"):
         return
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
