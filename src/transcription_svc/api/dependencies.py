@@ -39,7 +39,10 @@ async def get_caller(
 
     if is_local_env():
         if hmac.compare_digest(token, get_settings().LOCAL_API_KEY):
-            return _local_dev_caller()
+            # Upsert so the row exists as a FK target for TranscriptionJob.
+            caller = session.merge(_local_dev_caller())
+            session.commit()
+            return caller
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     # Fast path: O(1) indexed lookup by SHA-256 of the token, then one bcrypt verify.
