@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # Azure Storage
     AZURE_STORAGE_ACCOUNT_NAME: str = ""
     AZURE_STORAGE_CONTAINER_NAME: str = ""
+    # Set in local dev to avoid mounting ~/.azure into Docker.
+    # Leave unset in deployed envs — DefaultAzureCredential uses Managed Identity.
+    AZURE_STORAGE_CONNECTION_STRING: str | None = None
 
     # Polling
     BATCH_POLL_INTERVAL_SECONDS: int = 30

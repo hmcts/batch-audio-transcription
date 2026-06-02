@@ -36,16 +36,20 @@ class AsyncAzureBlobManager:
     """
 
     def __init__(self):
-        """Initialize the async blob manager with DefaultAzureCredential."""
         settings = get_settings()
         self.account_name = settings.AZURE_STORAGE_ACCOUNT_NAME
         self.container_name = settings.AZURE_STORAGE_CONTAINER_NAME
         self.account_url = f"https://{self.account_name}.blob.core.windows.net"
+        self._connection_string = settings.AZURE_STORAGE_CONNECTION_STRING
+        # Only create DefaultAzureCredential when no connection string is configured.
+        # In deployed envs Managed Identity is used; locally a connection string avoids
+        # mounting ~/.azure into the container.
+        self.credential = None if self._connection_string else DefaultAzureCredential()
 
-        # Use DefaultAzureCredential which will automatically use:
-        # - Managed Identity in Azure environments (uses AZURE_CLIENT_ID env var)
-        # - Azure CLI credentials in local development
-        self.credential = DefaultAzureCredential()
+    def _blob_service_client(self) -> AsyncBlobServiceClient:
+        if self._connection_string:
+            return AsyncBlobServiceClient.from_connection_string(self._connection_string)
+        return AsyncBlobServiceClient(account_url=self.account_url, credential=self.credential)
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -88,9 +92,7 @@ class AsyncAzureBlobManager:
         blob_safe = _sanitize_for_log(blob_name)
 
         try:
-            async with AsyncBlobServiceClient(
-                account_url=self.account_url, credential=self.credential
-            ) as blob_service:
+            async with self._blob_service_client() as blob_service:
                 blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
                 await blob_client.upload_blob(content, overwrite=True)
 
@@ -131,9 +133,7 @@ class AsyncAzureBlobManager:
         file_path_safe = _sanitize_for_log(file_path)
 
         try:
-            async with AsyncBlobServiceClient(
-                account_url=self.account_url, credential=self.credential
-            ) as blob_service:
+            async with self._blob_service_client() as blob_service:
                 blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
 
                 # Infer content type from file extension so Azure serves
@@ -190,9 +190,7 @@ class AsyncAzureBlobManager:
         try:
             container = container_name or self.container_name
 
-            async with AsyncBlobServiceClient(
-                account_url=self.account_url, credential=self.credential
-            ) as blob_service:
+            async with self._blob_service_client() as blob_service:
                 blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
                 await blob_client.delete_blob(delete_snapshots=delete_snapshots)
 
@@ -224,9 +222,7 @@ class AsyncAzureBlobManager:
         try:
             container = container_name or self.container_name
 
-            async with AsyncBlobServiceClient(
-                account_url=self.account_url, credential=self.credential
-            ) as blob_service:
+            async with self._blob_service_client() as blob_service:
                 blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
                 return await blob_client.exists()
 
@@ -261,9 +257,7 @@ class AsyncAzureBlobManager:
             container = container_name or self.container_name
             blobs = []
 
-            async with AsyncBlobServiceClient(
-                account_url=self.account_url, credential=self.credential
-            ) as blob_service:
+            async with self._blob_service_client() as blob_service:
                 container_client = blob_service.get_container_client(container)
 
                 # List blobs with the given prefix
@@ -310,9 +304,7 @@ class AsyncAzureBlobManager:
         try:
             container = container_name or self.container_name
 
-            async with AsyncBlobServiceClient(
-                account_url=self.account_url, credential=self.credential
-            ) as blob_service:
+            async with self._blob_service_client() as blob_service:
                 blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
                 properties = await blob_client.get_blob_properties()
                 return properties.metadata or {}
@@ -347,9 +339,7 @@ class AsyncAzureBlobManager:
         try:
             container = container_name or self.container_name
 
-            async with AsyncBlobServiceClient(
-                account_url=self.account_url, credential=self.credential
-            ) as blob_service:
+            async with self._blob_service_client() as blob_service:
                 blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
                 await blob_client.set_blob_metadata(metadata=metadata)
 
@@ -391,9 +381,7 @@ class AsyncAzureBlobManager:
         try:
             container = container_name or self.container_name
 
-            async with AsyncBlobServiceClient(
-                account_url=self.account_url, credential=self.credential
-            ) as blob_service:
+            async with self._blob_service_client() as blob_service:
                 blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
 
                 # Check if blob exists first
