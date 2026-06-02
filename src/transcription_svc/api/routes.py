@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.exc import IntegrityError
@@ -72,7 +72,7 @@ class SubmitJobRequest(BaseModel):
     enable_diarization: bool = True
     callback_url: str | None = None
     idempotency_key: str | None = None
-    metadata: dict = {}
+    metadata: dict = Field(default_factory=dict)
 
     @field_validator("audio_url")
     @classmethod
@@ -125,7 +125,7 @@ class JobResponse(BaseModel):
     updated_at: str | None = None
     dialogue_entries: list[DialogueEntryResponse] | None = None
     error_message: str | None = None
-    metadata: dict = {}
+    metadata: dict = Field(default_factory=dict)
 
 
 def _to_response(job: TranscriptionJob) -> JobResponse:
