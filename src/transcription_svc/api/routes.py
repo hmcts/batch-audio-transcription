@@ -54,11 +54,14 @@ def _reject_private_url(url: str, field: str = "url") -> None:
         raise ValueError(f"{field} must use http or https")
     host = parsed.hostname or ""
     try:
-        ip = ipaddress.ip_address(socket.gethostbyname(host))
+        # getaddrinfo returns all A/AAAA records; reject if any resolves to a restricted range.
+        results = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        raise ValueError(f"{field} hostname could not be resolved: {host}") from exc
+    for _family, _type, _proto, _canonname, sockaddr in results:
+        ip = ipaddress.ip_address(sockaddr[0])
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
             raise ValueError(f"{field} resolves to a private/internal address: {ip}")
-    except socket.gaierror:
-        pass  # DNS failure is allowed — will fail at delivery time
 
 
 # ---------------------------------------------------------------------------
