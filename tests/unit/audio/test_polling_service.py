@@ -50,7 +50,9 @@ class TestProcessJob:
         ):
             await service._process_job(job)
 
-        mock_update.assert_called_once_with(_JOB_ID, "Running")
+        from transcription_svc.database.models import BatchJobStatus
+
+        mock_update.assert_called_once_with(_JOB_ID, BatchJobStatus.RUNNING)
 
     @pytest.mark.asyncio
     async def test_dispatches_to_handle_succeeded(self, service):
