@@ -5,6 +5,8 @@ on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
 
+permissions: {}
+
 jobs:
   pr-title-check:
     runs-on: ubuntu-latest
@@ -13,9 +15,9 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          PATTERN='^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\(.+\))?: .+ \[[A-Z]+-[0-9]+\]$'
+          PATTERN='^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\([^)]+\))?: .+ \[[A-Z]+-[0-9]+\]$'
 
-          if echo "$PR_TITLE" | grep -qP "$PATTERN"; then
+          if printf '%s' "$PR_TITLE" | grep -qE "$PATTERN"; then
             echo "PR title is valid: $PR_TITLE"
             exit 0
           else
