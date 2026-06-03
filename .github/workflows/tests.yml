@@ -1,0 +1,113 @@
+name: Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: Unit tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run unit tests with coverage
+        env:
+          ENVIRONMENT: test
+        run: |
+          coverage run -m pytest tests/unit
+          coverage report --format=text | tee coverage.txt
+          echo "## Test Coverage" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat coverage.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      # Surfaces startup-time failures (broken Settings, missing
+      # transitive imports) that unit tests skip past because they
+      # patch settings before importing.
+      - name: Import smoke (verify FastAPI app loads)
+        env:
+          ENVIRONMENT: test
+          DATABASE_CONNECTION_STRING: postgresql://test:test@localhost:5432/test_db
+          AZURE_SPEECH_KEY: dummy
+          AZURE_SPEECH_ENDPOINT: https://dummy.cognitiveservices.azure.com
+          AZURE_STORAGE_ACCOUNT_NAME: dummy
+          AZURE_STORAGE_CONTAINER_NAME: dummy
+          LOCAL_API_KEY: dummy-key-for-test
+        run: |
+          python -c "from transcription_svc.api.app import create_app; app = create_app(); print(f'app loaded with {len(app.routes)} routes')"
+
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      migrations: ${{ steps.filter.outputs.migrations }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            migrations:
+              - 'migrations/**'
+
+  alembic-check:
+    name: Alembic migration check
+    needs: changes
+    if: needs.changes.outputs.migrations == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: appuser
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: transcription_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U appuser -d transcription_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run Alembic migrations
+        env:
+          DATABASE_CONNECTION_STRING: postgresql://appuser:postgres@localhost:5432/transcription_db
+        run: alembic upgrade head
+
+      - name: Verify no pending migrations
+        env:
+          DATABASE_CONNECTION_STRING: postgresql://appuser:postgres@localhost:5432/transcription_db
+        run: |
+          pending=$(alembic current 2>&1)
+          echo "$pending"
+          if echo "$pending" | grep -q "(head)"; then
+            echo "✓ Migrations are up to date"
+          else
+            echo "✗ Migrations did not reach head"
+            exit 1
+          fi

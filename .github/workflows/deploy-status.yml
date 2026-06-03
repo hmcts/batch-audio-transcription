@@ -1,0 +1,64 @@
+name: Deploy Status
+
+# Read-only: prints the most recent deploy tags per env to the run's
+# job summary. Triggered manually — no app-state side effects, no
+# Azure auth, just `git for-each-ref`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: How many tags to show per env
+        required: false
+        default: "10"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Print deploy history per env
+        shell: bash
+        env:
+          COUNT: ${{ inputs.count }}
+        run: |
+          set -euo pipefail
+          {
+            echo "# Deploy status"
+            echo
+            echo "_Generated $(date -u '+%Y-%m-%d %H:%M:%S UTC')._"
+            echo
+            for env in dev stg prod; do
+              echo "## ${env}"
+              echo
+              if [[ -n "$(git tag --list "deploy-${env}-*")" ]]; then
+                echo "| Tag | When | Message |"
+                echo "|---|---|---|"
+                git for-each-ref \
+                  --sort=-creatordate \
+                  --count="${COUNT}" \
+                  --format='| `%(refname:short)` | %(creatordate:short) | %(subject) |' \
+                  "refs/tags/deploy-${env}-*"
+              else
+                echo "_No \`deploy-${env}-*\` tags found._"
+              fi
+              echo
+            done
+            echo "## Live runtime"
+            echo
+            echo "Deploy tags are an audit trail of what was *triggered*. The image actually serving traffic is whatever \`linuxFxVersion\` is set to on the App Service — read it from a shell with az CLI logged into the env:"
+            echo
+            echo '```bash'
+            echo 'az webapp config show \'
+            echo '  -g batch-audio-transcription-<env>-rg \'
+            echo '  -n batch-audio-transcription-<env> \'
+            echo '  --query linuxFxVersion -o tsv'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

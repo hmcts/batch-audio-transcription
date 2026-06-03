@@ -1,0 +1,30 @@
+title = "gitleaks config for batch-audio-transcription"
+
+[extend]
+# Keep all default gitleaks detection rules active.
+useDefault = true
+
+[allowlist]
+description = "Allow development-only placeholder values that carry no cryptographic strength"
+# Two entries are allowlisted:
+#
+# 1. WEBHOOK_SECRET_ENCRYPTION_KEY default (settings.py):
+#    An all-zeros Fernet key used only in local development.
+#    Shannon entropy ≈ 0.16 bits — well below the 3.5 trigger threshold.
+#    MUST be overridden with a real key from Key Vault in all deployed environments.
+#
+# 2. webhook_secret="local-webhook-secret" (initial commit of dependencies.py):
+#    A human-readable dev placeholder introduced before Fernet encryption was
+#    added (commit 3d312f4).  A later commit (58cf299) replaced it with
+#    encrypt_webhook_secret("local-webhook-secret").  The string is still
+#    present in git history and its entropy (~3.55) exceeds gitleaks' 3.5
+#    threshold, so gitleaks flags it without this allowlist entry.
+#    It is not a real secret: it is never used in any deployed environment.
+regexes = [
+  '''AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=''',
+  '''local-webhook-secret''',
+  # local-dev-key-change-me appears in a curl example in README.md (commit 3d312f4).
+  # The README example was later updated to use <your-local-api-key> as a placeholder,
+  # but the historical commit remains in the scan range.
+  '''local-dev-key-change-me''',
+]

@@ -1,0 +1,57 @@
+name: Deploy Staging
+
+# Triggered when a GitHub release is published. Builds a fresh image
+# using the release version, pushes to ACR, then pushes a
+# `deploy-stg-<version>-<run_id>` tag that ADO triggers on.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  checks: read
+  actions: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/ci-build-image.yml
+    secrets: inherit
+
+  tag:
+    needs: build
+    if: needs.build.outputs.image_pushed == 'true'
+    runs-on: ubuntu-latest
+    environment: stg
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Push deploy-stg-<version>-<run_id> tag
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [[ -z "${VERSION}" ]]; then
+            echo "No version output from build job" >&2
+            exit 1
+          fi
+          TAG="deploy-stg-${VERSION}-${RUN_ID}"
+          echo "Pushing deploy tag: ${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Deploy ${VERSION} to stg (run ${RUN_ID})"
+          git push origin "${TAG}"
+
+      - name: Download CHANGELOG artefact
+        uses: actions/download-artifact@v8
+        with:
+          name: changelog
+
+      - name: Attach CHANGELOG.md to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload "${RELEASE_TAG}" CHANGELOG.md --clobber

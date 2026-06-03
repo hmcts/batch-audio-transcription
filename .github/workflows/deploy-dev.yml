@@ -1,0 +1,50 @@
+name: Deploy Dev
+
+# Continuous delivery to the dev environment. Pull requests to main
+# validate the Dockerfile (push: false). Pushes to main build and push
+# to ACR, then push a `deploy-dev-<version>-<run_id>` git tag. The tag
+# triggers `azure-infra-pipeline.yml` in ADO, which runs PrecheckDev
+# then DeployDev (terraform apply + App Service restart).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: read
+  actions: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/ci-build-image.yml
+    secrets: inherit
+
+  tag:
+    needs: build
+    if: needs.build.outputs.image_pushed == 'true'
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Push deploy-dev-<version>-<run_id> tag
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [[ -z "${VERSION}" ]]; then
+            echo "No version output from build job" >&2
+            exit 1
+          fi
+          TAG="deploy-dev-${VERSION}-${RUN_ID}"
+          echo "Pushing deploy tag: ${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Deploy ${VERSION} to dev (run ${RUN_ID})"
+          git push origin "${TAG}"
