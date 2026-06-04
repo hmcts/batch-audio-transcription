@@ -2,9 +2,9 @@ name: Deploy Dev
 
 # Continuous delivery to the dev environment. Pull requests to main
 # validate the Dockerfile (push: false). Pushes to main build and push
-# to ACR, then push a `deploy-dev-<version>-<run_id>` git tag. The tag
-# triggers `azure-infra-pipeline.yml` in ADO, which runs PrecheckDev
-# then DeployDev (terraform apply + App Service restart).
+# to ACR, then push a `deploy-dev-<version>-<run_id>` git tag to both
+# this repo (for image versioning history) and the infra repo (to fire
+# the ADO pipeline via its direct tag trigger).
 
 on:
   pull_request:
@@ -44,6 +44,20 @@ jobs:
           fi
           TAG="deploy-dev-${VERSION}-${RUN_ID}"
           echo "Pushing deploy tag: ${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Deploy ${VERSION} to dev (run ${RUN_ID})"
+          git push origin "${TAG}"
+
+      - name: Mirror deploy tag to infra repo (triggers ADO pipeline)
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          RUN_ID: ${{ github.run_id }}
+          GH_TOKEN: ${{ secrets.INFRA_DEPLOY_PAT }}
+        run: |
+          TAG="deploy-dev-${VERSION}-${RUN_ID}"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/hmcts/batch-audio-transcription-infra.git" /tmp/infra
+          cd /tmp/infra
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "${TAG}" -m "Deploy ${VERSION} to dev (run ${RUN_ID})"
