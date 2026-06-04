@@ -102,8 +102,8 @@ jobs:
         uses: hmcts/cnp-githubactions-library/container-build-push@main
         with:
           registry: ${{ env.ACR_NAME }}
-          registry-username: ${{ secrets.HMCTSPROD_REGISTRY_USERNAME }}
-          registry-password: ${{ secrets.HMCTSPROD_REGISTRY_PASSWORD }}
+          registry-username: ${{ secrets.REGISTRY_USERNAME }}
+          registry-password: ${{ secrets.REGISTRY_PASSWORD }}
           image-name: ${{ env.IMAGE_NAME }}
           image-tags: |
             ${{ needs.version.outputs.version }}

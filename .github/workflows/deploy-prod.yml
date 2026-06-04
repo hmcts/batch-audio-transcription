@@ -42,9 +42,9 @@ jobs:
 
       - name: ACR login
         run: |
-          echo "${{ secrets.HMCTSPROD_REGISTRY_PASSWORD }}" \
+          echo "${{ secrets.REGISTRY_PASSWORD }}" \
             | docker login "${ACR_NAME}" \
-                -u "${{ secrets.HMCTSPROD_REGISTRY_USERNAME }}" \
+                -u "${{ secrets.REGISTRY_USERNAME }}" \
                 --password-stdin
 
       - name: Verify image exists in ACR
