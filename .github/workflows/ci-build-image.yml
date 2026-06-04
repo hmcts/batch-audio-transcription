@@ -101,7 +101,7 @@ jobs:
         # then replace @main with @<40-char-sha>
         uses: hmcts/cnp-githubactions-library/container-build-push@main
         with:
-          registry: ${{ env.ACR_NAME }}
+          registry: ${{ secrets.REGISTRY_LOGIN_SERVER }}
           registry-username: ${{ secrets.REGISTRY_USERNAME }}
           registry-password: ${{ secrets.REGISTRY_PASSWORD }}
           image-name: ${{ env.IMAGE_NAME }}
