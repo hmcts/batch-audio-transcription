@@ -1,0 +1,51 @@
+name: Deploy Production
+
+# Triggered manually to promote a previously staged version to production.
+# The image is already in ACR from the staging deployment — this workflow
+# just pushes a `deploy-prod-<version>-<run_id>` tag that ADO triggers on,
+# running PrecheckProd then DeployProd (terraform apply + App Service restart).
+#
+# Usage:
+#   1. Deploy to staging first (GitHub release → deploy-stg workflow).
+#   2. Verify staging.
+#   3. Run this workflow with the same version that was deployed to staging.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >
+          Image tag to deploy (e.g. 1.2.3). Must match a version already
+          pushed to ACR by a prior staging deployment.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  checks: read
+  actions: read
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Push deploy-prod-<version>-<run_id> tag
+        env:
+          VERSION: ${{ inputs.version }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [[ -z "${VERSION}" ]]; then
+            echo "No version provided" >&2
+            exit 1
+          fi
+          TAG="deploy-prod-${VERSION}-${RUN_ID}"
+          echo "Pushing deploy tag: ${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Deploy ${VERSION} to prod (run ${RUN_ID})"
+          git push origin "${TAG}"
