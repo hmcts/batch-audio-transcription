@@ -56,8 +56,22 @@ jobs:
           ADO_PAT: ${{ secrets.HMCTS_CP_ADO_PAT }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          curl -fsSL -u ":${ADO_PAT}" \
+          response=$(curl -fsSL -u ":${ADO_PAT}" \
             -H "Content-Type: application/json" \
             -d "{\"definition\":{\"id\":1223},\"templateParameters\":{\"appRefOverride\":\"refs/tags/${TAG}\"}}" \
-            "https://dev.azure.com/hmcts/IAC%20Transcription/_apis/build/builds?api-version=7.1" \
-            | python3 -c "import json,sys; b=json.load(sys.stdin); print('Queued ADO build:', b['id'], b['buildNumber'])"
+            "https://dev.azure.com/hmcts/IAC%20Transcription/_apis/build/builds?api-version=7.1") || {
+            echo "ERROR: curl request to ADO failed" >&2; exit 1
+          }
+          echo "${response}" | python3 -c "
+import json, sys
+raw = sys.stdin.read()
+try:
+    b = json.loads(raw)
+    print(f\"Queued ADO build: {b['id']} {b['buildNumber']}\")
+except json.JSONDecodeError as e:
+    print(f'ERROR: ADO returned non-JSON response: {raw[:500]}', file=sys.stderr)
+    sys.exit(1)
+except KeyError as e:
+    print(f'ERROR: unexpected ADO response (missing {e}): {raw[:500]}', file=sys.stderr)
+    sys.exit(1)
+"
