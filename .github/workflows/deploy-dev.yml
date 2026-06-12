@@ -61,8 +61,8 @@ jobs:
             -d "{\"definition\":{\"id\":1223},\"templateParameters\":{\"appRefOverride\":\"refs/tags/${TAG}\"}}" \
             "https://dev.azure.com/hmcts/IAC%20Transcription/_apis/build/builds?api-version=7.1") \
             || { echo "ERROR: curl request to ADO failed" >&2; exit 1; }
-          build_id=$(echo "${response}" | jq -r '.id // empty')
-          build_num=$(echo "${response}" | jq -r '.buildNumber // empty')
+          build_id=$(echo "${response}" | jq -r '.id // empty' 2>/dev/null || true)
+          build_num=$(echo "${response}" | jq -r '.buildNumber // empty' 2>/dev/null || true)
           if [[ -z "${build_id}" ]]; then
             echo "ERROR: unexpected ADO response: ${response:0:500}" >&2
             exit 1
