@@ -34,6 +34,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Push deploy-dev-<version>-<run_id> tag
+        id: tag
         env:
           VERSION: ${{ needs.build.outputs.version }}
           RUN_ID: ${{ github.run_id }}
@@ -48,3 +49,15 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "${TAG}" -m "Deploy ${VERSION} to dev (run ${RUN_ID})"
           git push origin "${TAG}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger infra pipeline in ADO
+        env:
+          ADO_PAT: ${{ secrets.HMCTS_CP_ADO_PAT }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          curl -fsSL -u ":${ADO_PAT}" \
+            -H "Content-Type: application/json" \
+            -d "{\"definition\":{\"id\":1223},\"templateParameters\":{\"appRefOverride\":\"refs/tags/${TAG}\"}}" \
+            "https://dev.azure.com/hmcts/IAC%20Transcription/_apis/build/builds?api-version=7.1" \
+            | python3 -c "import json,sys; b=json.load(sys.stdin); print('Queued ADO build:', b['id'], b['buildNumber'])"
