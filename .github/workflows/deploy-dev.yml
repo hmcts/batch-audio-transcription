@@ -59,19 +59,12 @@ jobs:
           response=$(curl -fsSL -u ":${ADO_PAT}" \
             -H "Content-Type: application/json" \
             -d "{\"definition\":{\"id\":1223},\"templateParameters\":{\"appRefOverride\":\"refs/tags/${TAG}\"}}" \
-            "https://dev.azure.com/hmcts/IAC%20Transcription/_apis/build/builds?api-version=7.1") || {
-            echo "ERROR: curl request to ADO failed" >&2; exit 1
-          }
-          echo "${response}" | python3 -c "
-import json, sys
-raw = sys.stdin.read()
-try:
-    b = json.loads(raw)
-    print(f\"Queued ADO build: {b['id']} {b['buildNumber']}\")
-except json.JSONDecodeError as e:
-    print(f'ERROR: ADO returned non-JSON response: {raw[:500]}', file=sys.stderr)
-    sys.exit(1)
-except KeyError as e:
-    print(f'ERROR: unexpected ADO response (missing {e}): {raw[:500]}', file=sys.stderr)
-    sys.exit(1)
-"
+            "https://dev.azure.com/hmcts/IAC%20Transcription/_apis/build/builds?api-version=7.1") \
+            || { echo "ERROR: curl request to ADO failed" >&2; exit 1; }
+          build_id=$(echo "${response}" | jq -r '.id // empty' 2>/dev/null || true)
+          build_num=$(echo "${response}" | jq -r '.buildNumber // empty' 2>/dev/null || true)
+          if [[ -z "${build_id}" ]]; then
+            echo "ERROR: unexpected ADO response: ${response:0:500}" >&2
+            exit 1
+          fi
+          echo "Queued ADO build: ${build_id} ${build_num}"
