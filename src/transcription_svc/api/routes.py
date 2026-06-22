@@ -76,6 +76,7 @@ class SubmitJobRequest(BaseModel):
     callback_url: str | None = None
     idempotency_key: str | None = None
     metadata: dict = Field(default_factory=dict)
+    audio_duration_seconds: float | None = None
 
     @field_validator("audio_url")
     @classmethod
