@@ -1,0 +1,41 @@
+# Queues the infra pipeline (batch-audio-transcription-infra, ID 1223)
+# when a deploy-* tag is pushed to this repo.
+#
+# ADO pipeline name: batch-audio-transcription-infra-trigger
+# Register at: IAC Transcription project -> New pipeline -> GitHub ->
+#   hmcts/batch-audio-transcription -> Existing Azure Pipelines YAML file ->
+#   azure-infra-pipeline.yml
+#
+# PERMISSIONS REQUIRED (one-time setup by a project admin)
+# ---------------------------------------------------------
+# 1. OAuth token -- in this pipeline's Settings, enable
+#    "Allow scripts to access the OAuth token".
+#
+# 2. Queue builds -- grant Queue builds to
+#    "IAC Transcription Build Service (hmcts)" on pipeline 1223:
+#      Pipeline 1223 -> ... -> Manage security
+#        -> "IAC Transcription Build Service (hmcts)" -> Queue builds: Allow
+
+trigger:
+  tags:
+    include:
+      - 'deploy-*'
+  branches:
+    exclude:
+      - '*'
+
+pr: none
+
+pool: hmcts-cftptl-agent-pool
+
+steps:
+  - checkout: self
+    fetchDepth: 1
+
+  - task: Bash@3
+    displayName: Queue infra pipeline (1223)
+    inputs:
+      targetType: filePath
+      filePath: scripts/queue-infra-pipeline.sh
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
