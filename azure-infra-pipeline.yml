@@ -1,0 +1,72 @@
+# Queues the infra pipeline (batch-audio-transcription-infra, ID 1223)
+# when a deploy-* tag is pushed to this repo.
+#
+# ADO pipeline name: batch-audio-transcription-infra-trigger
+# Register at: IAC Transcription project -> New pipeline -> GitHub ->
+#   hmcts/batch-audio-transcription -> Existing Azure Pipelines YAML file ->
+#   azure-infra-pipeline.yml
+#
+# PERMISSIONS REQUIRED (one-time setup by a project admin)
+# ---------------------------------------------------------
+# 1. OAuth token -- in this pipeline's Settings, enable
+#    "Allow scripts to access the OAuth token".
+#
+# 2. Queue builds -- grant Queue builds to
+#    "IAC Transcription Build Service (hmcts)" on pipeline 1223:
+#      Pipeline 1223 -> ... -> Manage security
+#        -> "IAC Transcription Build Service (hmcts)" -> Queue builds: Allow
+
+trigger:
+  tags:
+    include:
+      - 'deploy-*'
+  branches:
+    exclude:
+      - '*'
+
+pr: none
+
+pool: hmcts-cftptl-agent-pool
+
+steps:
+  - checkout: none
+
+  - script: |
+      set -euo pipefail
+
+      REF="$(Build.SourceBranch)"
+      echo "Triggered by: $REF"
+
+      if [[ -z "$SYSTEM_ACCESSTOKEN" ]]; then
+        echo "##vso[task.logissue type=error]SYSTEM_ACCESSTOKEN is empty."
+        echo "##vso[task.logissue type=error]Enable 'Allow scripts to access the OAuth token' in this pipeline's Settings."
+        exit 1
+      fi
+
+      PAYLOAD=$(jq -nc --arg ref "$REF" '{"templateParameters":{"appRefOverride":$ref}}')
+      RESPONSE=$(curl -sS -w "\n%{http_code}" \
+        -X POST \
+        -H "Authorization: Bearer $SYSTEM_ACCESSTOKEN" \
+        -H "Content-Type: application/json" \
+        -d "$PAYLOAD" \
+        "$(System.CollectionUri)$(System.TeamProjectId)/_apis/pipelines/1223/runs?api-version=7.1")
+
+      HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+      BODY=$(echo "$RESPONSE" | head -n -1)
+      echo "HTTP $HTTP_CODE"
+
+      if [[ "$HTTP_CODE" -lt 200 || "$HTTP_CODE" -ge 300 ]]; then
+        if echo "$BODY" | grep -q "Queue builds"; then
+          echo "##vso[task.logissue type=error]PERMISSION DENIED: grant Queue builds to 'IAC Transcription Build Service (hmcts)' on pipeline 1223."
+          echo "##vso[task.logissue type=error]Fix: Pipeline 1223 -> ... -> Manage security -> IAC Transcription Build Service (hmcts) -> Queue builds: Allow"
+        else
+          echo "##vso[task.logissue type=error]Failed to queue infra pipeline (HTTP $HTTP_CODE): $BODY"
+        fi
+        exit 1
+      fi
+
+      RUN_ID=$(echo "$BODY" | jq -r '.id // empty')
+      echo "Queued run $RUN_ID: $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$RUN_ID"
+    displayName: Queue infra pipeline (1223)
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
