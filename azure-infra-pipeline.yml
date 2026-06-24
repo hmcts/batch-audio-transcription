@@ -29,44 +29,13 @@ pr: none
 pool: hmcts-cftptl-agent-pool
 
 steps:
-  - checkout: none
+  - checkout: self
+    fetchDepth: 1
 
-  - script: |
-      set -euo pipefail
-
-      REF="$(Build.SourceBranch)"
-      echo "Triggered by: $REF"
-
-      if [[ -z "$SYSTEM_ACCESSTOKEN" ]]; then
-        echo "##vso[task.logissue type=error]SYSTEM_ACCESSTOKEN is empty."
-        echo "##vso[task.logissue type=error]Enable 'Allow scripts to access the OAuth token' in this pipeline's Settings."
-        exit 1
-      fi
-
-      PAYLOAD=$(jq -nc --arg ref "$REF" '{"templateParameters":{"appRefOverride":$ref}}')
-      RESPONSE=$(curl -sS -w "\n%{http_code}" \
-        -X POST \
-        -H "Authorization: Bearer $SYSTEM_ACCESSTOKEN" \
-        -H "Content-Type: application/json" \
-        -d "$PAYLOAD" \
-        "$(System.CollectionUri)$(System.TeamProjectId)/_apis/pipelines/1223/runs?api-version=7.1")
-
-      HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-      BODY=$(echo "$RESPONSE" | head -n -1)
-      echo "HTTP $HTTP_CODE"
-
-      if [[ "$HTTP_CODE" -lt 200 || "$HTTP_CODE" -ge 300 ]]; then
-        if echo "$BODY" | grep -q "Queue builds"; then
-          echo "##vso[task.logissue type=error]PERMISSION DENIED: grant Queue builds to 'IAC Transcription Build Service (hmcts)' on pipeline 1223."
-          echo "##vso[task.logissue type=error]Fix: Pipeline 1223 -> ... -> Manage security -> IAC Transcription Build Service (hmcts) -> Queue builds: Allow"
-        else
-          echo "##vso[task.logissue type=error]Failed to queue infra pipeline (HTTP $HTTP_CODE): $BODY"
-        fi
-        exit 1
-      fi
-
-      RUN_ID=$(echo "$BODY" | jq -r '.id // empty')
-      echo "Queued run $RUN_ID: $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$RUN_ID"
+  - task: Bash@3
     displayName: Queue infra pipeline (1223)
+    inputs:
+      targetType: filePath
+      filePath: scripts/queue-infra-pipeline.sh
     env:
       SYSTEM_ACCESSTOKEN: $(System.AccessToken)
