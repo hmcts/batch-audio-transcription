@@ -115,6 +115,9 @@ jobs:
             VERSION=${{ needs.version.outputs.version }}
 
       - name: Build and push frontend image
+        # TODO: pin to a full commit SHA for supply-chain safety.
+        # Run: git ls-remote https://github.com/hmcts/cnp-githubactions-library HEAD
+        # then replace @main with @<40-char-sha>
         uses: hmcts/cnp-githubactions-library/container-build-push@main
         with:
           registry: ${{ env.ACR_NAME }}

@@ -8,14 +8,14 @@
 		# Python API endpoints
 		@api path /api/* /health /docs /openapi.json
 		handle @api {
-			reverse_proxy {$BACKEND_INTERNAL_URL:http://localhost:3001} {
+			reverse_proxy {$BACKEND_INTERNAL_URL} {
 				header_up Host {http.reverse_proxy.upstream.host}
 			}
 		}
 
 		# Next.js handles everything else (including /batch/*)
 		handle {
-			reverse_proxy localhost:3001
+			reverse_proxy 127.0.0.1:3001
 		}
 	}
 }
