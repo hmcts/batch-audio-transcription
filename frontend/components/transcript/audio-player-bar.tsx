@@ -70,7 +70,9 @@ export function AudioPlayerBar({ duration }: AudioPlayerBarProps) {
       >
         <div
           className="absolute inset-y-0 left-0 bg-primary/20"
-          style={{ width: `${(position / duration) * 100}%` }}
+          style={{
+            width: `${duration > 0 ? (position / duration) * 100 : 0}%`,
+          }}
         />
         {/* Decorative waveform bars */}
         <div className="absolute inset-0 flex items-center gap-px px-1">

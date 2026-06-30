@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AudioUpload } from "@/components/audio-upload/audio-upload";
 import { JobsTable } from "@/components/jobs-table/jobs-table";
@@ -14,6 +14,13 @@ function generateId(): string {
 export default function DashboardPage() {
   const [jobs, setJobs] = useState<TranscriptionJob[]>(MOCK_JOBS);
   const [uploading, setUploading] = useState(false);
+  const timerIds = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  useEffect(() => {
+    return () => {
+      for (const id of timerIds.current) clearTimeout(id);
+    };
+  }, []);
 
   const handleUpload = useCallback((file: File) => {
     setUploading(true);
@@ -33,50 +40,56 @@ export default function DashboardPage() {
     toast.success(`"${file.name}" submitted for transcription`);
 
     // Simulate PENDING → PROCESSING → COMPLETED
-    setTimeout(() => {
-      setJobs((prev) =>
-        prev.map((j) =>
-          j.id === newJobId
-            ? { ...j, status: "PROCESSING", progressPercent: 10 }
-            : j
-        )
-      );
-      setUploading(false);
-    }, 1000);
+    timerIds.current.push(
+      setTimeout(() => {
+        setJobs((prev) =>
+          prev.map((j) =>
+            j.id === newJobId
+              ? { ...j, status: "PROCESSING", progressPercent: 10 }
+              : j
+          )
+        );
+        setUploading(false);
+      }, 1000)
+    );
 
     // Simulate progress updates
     const intervals = [30, 55, 75, 90, 100];
-    intervals.forEach((pct, i) => {
-      setTimeout(
-        () => {
-          setJobs((prev) =>
-            prev.map((j) =>
-              j.id === newJobId
-                ? { ...j, status: "PROCESSING", progressPercent: pct }
-                : j
-            )
-          );
-        },
-        2000 + i * 1500
-      );
-    });
-
-    // Complete after ~10s
-    setTimeout(() => {
-      setJobs((prev) =>
-        prev.map((j) =>
-          j.id === newJobId
-            ? {
-                ...j,
-                status: "COMPLETED",
-                progressPercent: 100,
-                completedAt: new Date().toISOString(),
-              }
-            : j
+    for (const [i, pct] of intervals.entries()) {
+      timerIds.current.push(
+        setTimeout(
+          () => {
+            setJobs((prev) =>
+              prev.map((j) =>
+                j.id === newJobId
+                  ? { ...j, status: "PROCESSING", progressPercent: pct }
+                  : j
+              )
+            );
+          },
+          2000 + i * 1500
         )
       );
-      toast.success("Transcription complete!");
-    }, 10000);
+    }
+
+    // Complete after ~10s
+    timerIds.current.push(
+      setTimeout(() => {
+        setJobs((prev) =>
+          prev.map((j) =>
+            j.id === newJobId
+              ? {
+                  ...j,
+                  status: "COMPLETED",
+                  progressPercent: 100,
+                  completedAt: new Date().toISOString(),
+                }
+              : j
+          )
+        );
+        toast.success("Transcription complete!");
+      }, 10000)
+    );
   }, []);
 
   const processingJobs = jobs.filter((j) => j.status === "PROCESSING");

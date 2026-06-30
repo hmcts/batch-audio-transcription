@@ -50,8 +50,7 @@ export default async function TranscriptPage({ params }: PageProps) {
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-lg font-semibold">Transcript</h2>
               <p className="text-sm text-muted-foreground">
-                Click a timestamp to jump the audio · {job.segments.length}{" "}
-                segments
+                {job.segments.length} segments
               </p>
             </div>
             <div className="border border-border rounded-lg divide-y divide-border">
