@@ -27,7 +27,7 @@ COPY --from=caddy:2.9 /usr/bin/caddy /usr/bin/caddy
 # Install Node 24, ffmpeg, supervisor
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      curl gnupg2 ffmpeg supervisor && \
+      curl gnupg2 ffmpeg supervisor libcap2-bin && \
     curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
@@ -59,6 +59,9 @@ COPY supervisord.conf /etc/supervisord.conf
 
 WORKDIR /app
 RUN chown -R appuser:appuser /app
+
+# Grant Caddy the capability to bind privileged ports (≤1024) as non-root
+RUN setcap 'cap_net_bind_service=+ep' /usr/bin/caddy
 
 ENV PYTHONPATH=/app/src
 ENV PYTHONDONTWRITEBYTECODE=1
