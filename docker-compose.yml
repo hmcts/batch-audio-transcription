@@ -37,6 +37,20 @@ services:
       - app-network
     restart: unless-stopped
 
+  frontend-dev:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - PORT=3001
+    profiles:
+      - frontend-dev
+
 volumes:
   postgres_data:
 
