@@ -4,5 +4,5 @@ set -e
 echo "Running database migrations..."
 alembic upgrade head
 
-echo "Starting server..."
-exec python -m transcription_svc.main
+echo "Starting services via supervisord..."
+exec supervisord -c /etc/supervisord.conf
