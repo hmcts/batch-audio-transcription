@@ -1,6 +1,6 @@
+import { ChevronLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ChevronLeft } from "lucide-react";
 import { AudioPlayerBar } from "@/components/transcript/audio-player-bar";
 import { NeedsReviewPanel } from "@/components/transcript/needs-review-panel";
 import { TranscriptAccuracy } from "@/components/transcript/transcript-accuracy";
@@ -19,11 +19,10 @@ export default async function TranscriptPage({ params }: PageProps) {
     notFound();
   }
 
-  const totalDuration =
-    job.segments.reduce(
-      (max, s) => Math.max(max, s.startTime + s.duration),
-      0
-    );
+  const totalDuration = job.segments.reduce(
+    (max, s) => Math.max(max, s.startTime + s.duration),
+    0
+  );
 
   return (
     <main className="min-h-screen bg-background">
@@ -51,8 +50,8 @@ export default async function TranscriptPage({ params }: PageProps) {
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-lg font-semibold">Transcript</h2>
               <p className="text-sm text-muted-foreground">
-                Click a timestamp to jump the audio ·{" "}
-                {job.segments.length} segments
+                Click a timestamp to jump the audio · {job.segments.length}{" "}
+                segments
               </p>
             </div>
             <div className="border border-border rounded-lg divide-y divide-border">

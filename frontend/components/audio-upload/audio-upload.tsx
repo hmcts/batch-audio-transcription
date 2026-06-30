@@ -20,10 +20,7 @@ const ACCEPTED_TYPES = {
   "audio/flac": [".flac"],
 };
 
-export function AudioUpload({
-  onUpload,
-  uploading = false,
-}: AudioUploadProps) {
+export function AudioUpload({ onUpload, uploading = false }: AudioUploadProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
   const onDrop = useCallback((accepted: File[]) => {

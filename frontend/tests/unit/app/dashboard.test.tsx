@@ -25,9 +25,7 @@ describe("DashboardPage", () => {
 
   it("renders upload section", () => {
     render(<DashboardPage />);
-    expect(
-      screen.getByText(/drag and drop an audio file/i)
-    ).toBeDefined();
+    expect(screen.getByText(/drag and drop an audio file/i)).toBeDefined();
   });
 
   it("renders recent transcripts section", () => {

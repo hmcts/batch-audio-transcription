@@ -19,14 +19,14 @@ test.describe("Transcript page", () => {
 
   test("shows tribunal name", async ({ page }) => {
     await expect(
-      page.getByText(
-        "First-tier Tribunal — Immigration and Asylum Chamber"
-      )
+      page.getByText("First-tier Tribunal — Immigration and Asylum Chamber")
     ).toBeVisible();
   });
 
   test("shows transcript segments", async ({ page }) => {
-    await expect(page.getByText("Good morning. We are on the record")).toBeVisible();
+    await expect(
+      page.getByText("Good morning. We are on the record")
+    ).toBeVisible();
   });
 
   test("shows accuracy sidebar", async ({ page }) => {

@@ -1,8 +1,8 @@
 import type {
   LowConfidenceSegment,
   TranscriptAccuracy,
-  TranscriptSegment,
   TranscriptionJob,
+  TranscriptSegment,
 } from "./types";
 
 const SEGMENT_COLORS: Record<string, string> = {
@@ -89,12 +89,42 @@ const JOB_1_ACCURACY: TranscriptAccuracy = {
 };
 
 const JOB_1_LOW_CONFIDENCE: LowConfidenceSegment[] = [
-  { speaker: "Counsel", speakerColor: color("Counsel"), confidence: 0.73, startTime: 19 },
-  { speaker: "Appellant", speakerColor: color("Appellant"), confidence: 0.78, startTime: 159 },
-  { speaker: "Appellant", speakerColor: color("Appellant"), confidence: 0.74, startTime: 178 },
-  { speaker: "Appellant", speakerColor: color("Appellant"), confidence: 0.71, startTime: 220 },
-  { speaker: "Respondent", speakerColor: color("Respondent"), confidence: 0.63, startTime: 239 },
-  { speaker: "Appellant", speakerColor: color("Appellant"), confidence: 0.80, startTime: 264 },
+  {
+    speaker: "Counsel",
+    speakerColor: color("Counsel"),
+    confidence: 0.73,
+    startTime: 19,
+  },
+  {
+    speaker: "Appellant",
+    speakerColor: color("Appellant"),
+    confidence: 0.78,
+    startTime: 159,
+  },
+  {
+    speaker: "Appellant",
+    speakerColor: color("Appellant"),
+    confidence: 0.74,
+    startTime: 178,
+  },
+  {
+    speaker: "Appellant",
+    speakerColor: color("Appellant"),
+    confidence: 0.71,
+    startTime: 220,
+  },
+  {
+    speaker: "Respondent",
+    speakerColor: color("Respondent"),
+    confidence: 0.63,
+    startTime: 239,
+  },
+  {
+    speaker: "Appellant",
+    speakerColor: color("Appellant"),
+    confidence: 0.8,
+    startTime: 264,
+  },
 ];
 
 const JOB_2_SEGMENTS: TranscriptSegment[] = [
@@ -152,7 +182,12 @@ export const MOCK_JOBS: TranscriptionJob[] = [
     segments: JOB_2_SEGMENTS,
     accuracy: JOB_2_ACCURACY,
     lowConfidenceSegments: [
-      { speaker: "Counsel", speakerColor: color("Counsel"), confidence: 0.81, startTime: 88 },
+      {
+        speaker: "Counsel",
+        speakerColor: color("Counsel"),
+        confidence: 0.81,
+        startTime: 88,
+      },
     ],
   },
   {
@@ -165,9 +200,7 @@ export const MOCK_JOBS: TranscriptionJob[] = [
   },
 ];
 
-export function getMockJobById(
-  id: string
-): TranscriptionJob | undefined {
+export function getMockJobById(id: string): TranscriptionJob | undefined {
   return MOCK_JOBS.find((j) => j.id === id);
 }
 

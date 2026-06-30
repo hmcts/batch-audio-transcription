@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  MOCK_JOBS,
   confidencePercent,
   formatTime,
   getMockJobById,
+  MOCK_JOBS,
 } from "@/lib/mock-data";
 
 describe("MOCK_JOBS", () => {

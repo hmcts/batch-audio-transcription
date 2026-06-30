@@ -35,9 +35,7 @@ describe("TranscriptPage", () => {
       })
     );
     expect(
-      screen.getByText(
-        "First-tier Tribunal — Immigration and Asylum Chamber"
-      )
+      screen.getByText("First-tier Tribunal — Immigration and Asylum Chamber")
     ).toBeDefined();
   });
 

@@ -44,9 +44,7 @@ describe("TranscriptSegment", () => {
 
   it("shows flagged indicator when flaggedForReview is true", () => {
     render(
-      <TranscriptSegment
-        segment={{ ...SEGMENT, flaggedForReview: true }}
-      />
+      <TranscriptSegment segment={{ ...SEGMENT, flaggedForReview: true }} />
     );
     expect(screen.getByText(/flagged for clerk review/i)).toBeDefined();
   });

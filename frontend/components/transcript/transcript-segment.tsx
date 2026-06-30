@@ -1,7 +1,7 @@
 import { AlertTriangle } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { confidencePercent, formatTime } from "@/lib/mock-data";
 import type { TranscriptSegment as TranscriptSegmentType } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 interface TranscriptSegmentProps {
   segment: TranscriptSegmentType;
@@ -23,9 +23,7 @@ export function TranscriptSegment({ segment }: TranscriptSegmentProps) {
         <span className="text-xs font-mono text-primary hover:underline cursor-pointer">
           {formatTime(segment.startTime)}
         </span>
-        <div className="text-xs text-muted-foreground">
-          {segment.duration}s
-        </div>
+        <div className="text-xs text-muted-foreground">{segment.duration}s</div>
       </div>
 
       {/* Content */}

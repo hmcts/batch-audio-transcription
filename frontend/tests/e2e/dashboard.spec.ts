@@ -14,9 +14,7 @@ test.describe("Dashboard", () => {
   });
 
   test("shows upload section", async ({ page }) => {
-    await expect(
-      page.getByText(/drag and drop an audio file/i)
-    ).toBeVisible();
+    await expect(page.getByText(/drag and drop an audio file/i)).toBeVisible();
   });
 
   test("upload button is initially disabled", async ({ page }) => {
@@ -26,9 +24,7 @@ test.describe("Dashboard", () => {
     await expect(btn).toBeDisabled();
   });
 
-  test("shows pre-loaded mock jobs in recent transcripts", async ({
-    page,
-  }) => {
+  test("shows pre-loaded mock jobs in recent transcripts", async ({ page }) => {
     await expect(page.getByText("PA/05217/2025")).toBeVisible();
     await expect(page.getByText("EA/11042/2025")).toBeVisible();
   });
@@ -59,8 +55,8 @@ test.describe("Dashboard", () => {
     await submitBtn.click();
 
     // Job appears in the list
-    await expect(
-      page.getByText("test-hearing.mp3")
-    ).toBeVisible({ timeout: 3000 });
+    await expect(page.getByText("test-hearing.mp3")).toBeVisible({
+      timeout: 3000,
+    });
   });
 });

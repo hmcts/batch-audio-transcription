@@ -106,9 +106,19 @@
     "lineWidth": 80,
     "lineEnding": "lf",
     "includes": [
-      "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.json",
-      "!node_modules", "!.next", "!dist", "!build", "!coverage",
-      "!public", "!*.config.js", "!*.config.ts"
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.js",
+      "**/*.jsx",
+      "**/*.json",
+      "!node_modules",
+      "!.next",
+      "!dist",
+      "!build",
+      "!coverage",
+      "!public",
+      "!*.config.js",
+      "!*.config.ts"
     ]
   },
   "javascript": {
@@ -129,9 +139,19 @@
   },
   "files": {
     "includes": [
-      "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.json",
-      "!node_modules", "!.next", "!dist", "!build", "!coverage",
-      "!public", "!*.min.js", "!*.d.ts"
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.js",
+      "**/*.jsx",
+      "**/*.json",
+      "!node_modules",
+      "!.next",
+      "!dist",
+      "!build",
+      "!coverage",
+      "!public",
+      "!*.min.js",
+      "!*.d.ts"
     ]
   }
 }

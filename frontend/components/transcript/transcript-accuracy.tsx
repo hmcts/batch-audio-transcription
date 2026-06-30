@@ -1,9 +1,4 @@
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { TranscriptAccuracy as TranscriptAccuracyType } from "@/lib/types";
 
 interface TranscriptAccuracyProps {

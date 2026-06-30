@@ -36,7 +36,9 @@ export default function DashboardPage() {
     setTimeout(() => {
       setJobs((prev) =>
         prev.map((j) =>
-          j.id === newJobId ? { ...j, status: "PROCESSING", progressPercent: 10 } : j
+          j.id === newJobId
+            ? { ...j, status: "PROCESSING", progressPercent: 10 }
+            : j
         )
       );
       setUploading(false);
@@ -116,9 +118,7 @@ export default function DashboardPage() {
 
         {/* Recent transcripts */}
         <section>
-          <h2 className="text-lg font-semibold mb-4">
-            Recent transcripts
-          </h2>
+          <h2 className="text-lg font-semibold mb-4">Recent transcripts</h2>
           <JobsTable jobs={completedJobs} />
         </section>
 

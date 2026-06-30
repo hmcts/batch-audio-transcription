@@ -3,7 +3,16 @@ import type { JobStatus } from "@/lib/types";
 
 const STATUS_CONFIG: Record<
   JobStatus,
-  { label: string; variant: "default" | "secondary" | "destructive" | "success" | "warning" | "outline" }
+  {
+    label: string;
+    variant:
+      | "default"
+      | "secondary"
+      | "destructive"
+      | "success"
+      | "warning"
+      | "outline";
+  }
 > = {
   PENDING: { label: "Pending", variant: "secondary" },
   PROCESSING: { label: "Processing…", variant: "warning" },

@@ -1,5 +1,5 @@
-import Link from "next/link";
 import { FileAudio } from "lucide-react";
+import Link from "next/link";
 import { JobStatusBadge } from "@/components/job-status/job-status-badge";
 import { Progress } from "@/components/ui/progress";
 import type { TranscriptionJob } from "@/lib/types";
@@ -38,9 +38,7 @@ export function JobsTable({ jobs }: JobsTableProps) {
               <td className="px-4 py-3 text-muted-foreground">
                 <div className="flex items-center gap-2">
                   <FileAudio className="size-4 shrink-0" />
-                  <span className="truncate max-w-48">
-                    {job.audioFileName}
-                  </span>
+                  <span className="truncate max-w-48">{job.audioFileName}</span>
                 </div>
               </td>
               <td className="px-4 py-3 text-muted-foreground">

@@ -1,8 +1,4 @@
-export type JobStatus =
-  | "PENDING"
-  | "PROCESSING"
-  | "COMPLETED"
-  | "FAILED";
+export type JobStatus = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
 
 export interface TranscriptSegment {
   id: string;
