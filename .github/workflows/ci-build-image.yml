@@ -18,6 +18,7 @@ permissions:
 env:
   ACR_NAME: hmctsprod.azurecr.io
   IMAGE_NAME: justiceaiunit/batch-audio-transcription
+  FRONTEND_IMAGE_NAME: justiceaiunit/batch-audio-transcription-frontend
 
 jobs:
   version:
@@ -95,7 +96,7 @@ jobs:
           name: changelog
           path: .
 
-      - name: Build and push image
+      - name: Build and push API image
         # TODO: pin to a full commit SHA for supply-chain safety.
         # Run: git ls-remote https://github.com/hmcts/cnp-githubactions-library HEAD
         # then replace @main with @<40-char-sha>
@@ -109,6 +110,21 @@ jobs:
             ${{ needs.version.outputs.version }}
           context: .
           dockerfile: ./Dockerfile
+          push: true
+          build-args: |
+            VERSION=${{ needs.version.outputs.version }}
+
+      - name: Build and push frontend image
+        uses: hmcts/cnp-githubactions-library/container-build-push@main
+        with:
+          registry: ${{ env.ACR_NAME }}
+          registry-username: ${{ secrets.HMCTSPROD_REGISTRY_USERNAME }}
+          registry-password: ${{ secrets.HMCTSPROD_REGISTRY_PASSWORD }}
+          image-name: ${{ env.FRONTEND_IMAGE_NAME }}
+          image-tags: |
+            ${{ needs.version.outputs.version }}
+          context: ./frontend
+          dockerfile: ./frontend/Dockerfile
           push: true
           build-args: |
             VERSION=${{ needs.version.outputs.version }}

@@ -1,0 +1,21 @@
+{
+	auto_https off
+	admin off
+}
+
+:3000 {
+	route {
+		# Python API endpoints
+		@api path /api/* /health /docs /openapi.json
+		handle @api {
+			reverse_proxy {$BACKEND_INTERNAL_URL:http://localhost:3001} {
+				header_up Host {http.reverse_proxy.upstream.host}
+			}
+		}
+
+		# Next.js handles everything else (including /batch/*)
+		handle {
+			reverse_proxy localhost:3001
+		}
+	}
+}
