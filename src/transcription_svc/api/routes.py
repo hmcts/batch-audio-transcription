@@ -76,6 +76,7 @@ class SubmitJobRequest(BaseModel):
     callback_url: str | None = None
     idempotency_key: str | None = None
     metadata: dict = Field(default_factory=dict)
+    audio_duration_seconds: float | None = None
 
     @field_validator("audio_url")
     @classmethod
@@ -97,6 +98,11 @@ class SubmitJobRequest(BaseModel):
             raise ValueError(
                 f"metadata must not exceed {_METADATA_MAX_BYTES} bytes when serialised"
             )
+        for required_key in ("transcription_id", "user_id"):
+            if not v.get(required_key):
+                raise ValueError(
+                    f"metadata must include '{required_key}' for webhook callbacks to succeed"
+                )
         return v
 
     @field_validator("callback_url")
@@ -187,6 +193,7 @@ async def submit_job(
             callback_url=body.callback_url,
             idempotency_key=body.idempotency_key,
             metadata=body.metadata,
+            audio_duration_seconds=body.audio_duration_seconds,
         )
     except IntegrityError:
         # Two concurrent requests with the same idempotency_key both passed the
