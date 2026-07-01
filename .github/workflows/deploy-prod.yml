@@ -32,10 +32,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Push deploy-prod-<version>-<run_id> tag
-        id: tag
         env:
           VERSION: ${{ inputs.version }}
           RUN_ID: ${{ github.run_id }}
@@ -50,22 +49,3 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "${TAG}" -m "Deploy ${VERSION} to prod (run ${RUN_ID})"
           git push origin "${TAG}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-
-      - name: Trigger infra pipeline in ADO
-        env:
-          ADO_PAT: ${{ secrets.HMCTS_CP_ADO_PAT }}
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          response=$(curl -fsSL -u ":${ADO_PAT}" \
-            -H "Content-Type: application/json" \
-            -d "{\"definition\":{\"id\":1223},\"templateParameters\":{\"appRefOverride\":\"refs/tags/${TAG}\"}}" \
-            "https://dev.azure.com/hmcts/IAC%20Transcription/_apis/build/builds?api-version=7.1") \
-            || { echo "ERROR: curl request to ADO failed" >&2; exit 1; }
-          build_id=$(echo "${response}" | jq -r '.id // empty' 2>/dev/null || true)
-          build_num=$(echo "${response}" | jq -r '.buildNumber // empty' 2>/dev/null || true)
-          if [[ -z "${build_id}" ]]; then
-            echo "ERROR: unexpected ADO response: ${response:0:500}" >&2
-            exit 1
-          fi
-          echo "Queued ADO build: ${build_id} ${build_num}"

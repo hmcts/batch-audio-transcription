@@ -1,0 +1,28 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+/playwright-report
+/test-results
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+.env*.local
+npm-debug.log*
+
+# TypeScript build info
+tsconfig.tsbuildinfo
+
+# Next.js generated
+next-env.d.ts

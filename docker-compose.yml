@@ -19,23 +19,52 @@ services:
       timeout: 5s
       retries: 5
 
-  transcription-svc:
+  api:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8001:8000"
+      - "8001:8001"
     env_file:
       - .env
     environment:
       - DATABASE_CONNECTION_STRING=postgresql://dev:devpass@postgres:5432/transcription_svc
       - ENVIRONMENT=local
+      - UVICORN_PORT=8001
     depends_on:
       postgres:
         condition: service_healthy
     networks:
       - app-network
     restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - BACKEND_INTERNAL_URL=http://api:8001
+    depends_on:
+      - api
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  frontend-dev:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - PORT=3001
+    profiles:
+      - frontend-dev
 
 volumes:
   postgres_data:
