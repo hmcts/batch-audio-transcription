@@ -18,15 +18,14 @@ def upgrade() -> None:
     op.execute(
         sa.text(
             """
-            INSERT INTO caller (
-                name, hashed_key, key_lookup_hash, webhook_secret, callback_url, is_active
-            )
+            INSERT INTO caller (id, created_datetime, name, hashed_key, key_lookup_hash, webhook_secret, is_active)
             SELECT
+                gen_random_uuid(),
+                NOW(),
                 'courtstranscribe',
                 '$2b$12$wxMi1/taneWX7OsZb7z5d.OW5Ak7CBJ1kMw5dTuGeuxFdbpv.pjeK',
                 '32b8d8169714fe7e6e817e29c15f761becc623ce8055c9b6655ea55eb0e34959',
                 'gAAAAABqRM7g1-k28jC9nV4UBPjhhSwVBmukiLuj3SACD4FCpIfvrogn1g449DPz4AJmMmM17Nxi-nrzKUJLEaq6r7IijbGXVYkx0lDH2geh_58pZQggW5wXpguKHxPS-52xCJzc3qUC',
-                'https://hmcts-courtstranscribe-dev.azurewebsites.net/api/batch-webhook',
                 true
             WHERE NOT EXISTS (SELECT 1 FROM caller WHERE name = 'courtstranscribe')
             """
