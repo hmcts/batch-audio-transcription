@@ -12,18 +12,31 @@ deployed environment (see config/settings.py).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path, PurePosixPath
 
 from transcription_svc.config.settings import get_settings
 
+# blob_name may contain "/" (e.g. "uploads/<caller>/<file>") but each segment
+# is restricted to a safe character set with no "." or ".." segments, so path
+# traversal is rejected outright rather than relying solely on resolving the
+# path and checking containment after the fact.
+_SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _validate_blob_name(blob_name: str) -> None:
+    segments = blob_name.split("/")
+    for segment in segments:
+        if segment in ("", ".", "..") or not _SAFE_SEGMENT_RE.match(segment):
+            raise ValueError(f"invalid blob_name: {blob_name!r}")
+
 
 def _resolve_within_root(root: Path, blob_name: str) -> Path:
-    # blob_name may contain "/" (e.g. "uploads/<caller>/<file>"); resolve and
-    # confirm the result still lives under root, rejecting any "../" path
-    # traversal smuggled in via a crafted filename.
+    _validate_blob_name(blob_name)
     target = (root / PurePosixPath(blob_name)).resolve()
+    # Defense in depth: confirm the resolved path still lives under root.
     if target != root and root not in target.parents:
-        raise ValueError(f"blob_name escapes local storage root: {blob_name}")
+        raise ValueError(f"blob_name escapes local storage root: {blob_name!r}")
     return target
 
 

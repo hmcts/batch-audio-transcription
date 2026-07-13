@@ -1,5 +1,5 @@
 import "server-only";
-import type { JobStatus, TranscriptSegment, TranscriptionJob } from "./types";
+import type { JobStatus, TranscriptionJob, TranscriptSegment } from "./types";
 
 // Server-only client for the transcription_svc backend. Never import this
 // from a "use client" component — it reads the backend API key, which must

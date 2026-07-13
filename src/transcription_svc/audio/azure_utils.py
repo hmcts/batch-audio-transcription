@@ -2,6 +2,7 @@
 
 import logging
 import mimetypes
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -14,10 +15,12 @@ from transcription_svc.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
+_LOG_CONTROL_CHARS_RE = re.compile(r"[\r\n\t]+")
+
 
 def _sanitize_for_log(value: object) -> str:
-    """Return a safe string representation of a value for logging."""
-    return str(value)
+    """Strip characters that would let a crafted blob/container name forge log lines."""
+    return _LOG_CONTROL_CHARS_RE.sub(" ", str(value))
 
 
 # =============================================================================
