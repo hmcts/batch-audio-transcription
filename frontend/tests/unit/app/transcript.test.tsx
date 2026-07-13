@@ -18,6 +18,33 @@ vi.mock("next/navigation", () => ({
   }),
 }));
 
+const MOCK_JOB = {
+  id: "job-pa05217-2025",
+  caseReference: "PA/05217/2025",
+  tribunal: "First-tier Tribunal — Immigration and Asylum Chamber",
+  audioFileName: "hearing.wav",
+  status: "COMPLETED" as const,
+  progressPercent: 100,
+  segments: [
+    {
+      id: "seg-0",
+      speaker: "Judge",
+      speakerColor: "#4A90D9",
+      text: "This hearing is now in session.",
+      startTime: 0,
+      duration: 3.5,
+      confidence: 1.0,
+      flaggedForReview: false,
+    },
+  ],
+};
+
+vi.mock("@/lib/api-client", () => ({
+  getJob: vi.fn((id: string) =>
+    Promise.resolve(id === "job-pa05217-2025" ? MOCK_JOB : null)
+  ),
+}));
+
 describe("TranscriptPage", () => {
   it("renders case reference for known job", async () => {
     render(
