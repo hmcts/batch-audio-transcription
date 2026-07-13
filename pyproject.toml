@@ -15,12 +15,24 @@ dependencies = [
     "httpx>=0.27",
     "tenacity>=8.2",
     "passlib[bcrypt]>=1.7",
+    # passlib 1.7.4's bcrypt backend self-test breaks on bcrypt>=4.1 (it
+    # relies on bcrypt internals removed in that release), raising
+    # "password cannot be longer than 72 bytes" for every hash/verify call
+    # regardless of input length. Pin below that until passlib releases a
+    # compatible version.
+    "bcrypt<4.1",
     "cryptography>=42.0",
     "alembic>=1.13",
     "psycopg2-binary>=2.9",
     "sentry-sdk[fastapi]>=2.0",
     "azure-storage-blob>=12.20",
     "azure-identity>=1.17",
+    # Required transport for azure.identity.aio / azure.storage.blob.aio —
+    # DefaultAzureCredential's async pipeline raises ImportError without it
+    # whenever no AZURE_STORAGE_CONNECTION_STRING is set (i.e. everywhere
+    # except local dev), which silently breaks blob access including the
+    # retention-policy cleanup in polling_service.py.
+    "aiohttp>=3.9",
     "uwotm8>=0.1",
     "slowapi>=0.1.9",
     "python-multipart>=0.0.9",
