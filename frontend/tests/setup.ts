@@ -2,6 +2,8 @@ import { afterEach, beforeAll, vi } from "vitest";
 
 beforeAll(() => {
   process.env.NEXT_PUBLIC_API_URL = "http://localhost:8000";
+  process.env.TRANSCRIPTION_API_KEY = "test-api-key"; // pragma: allowlist secret
+  process.env.BACKEND_INTERNAL_URL = "http://localhost:8001";
 });
 
 afterEach(() => {

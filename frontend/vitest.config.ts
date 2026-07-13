@@ -29,6 +29,8 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./"),
+      // Next.js server-only guard has no meaning in Vitest's jsdom environment.
+      "server-only": path.resolve(__dirname, "./tests/__mocks__/server-only.ts"),
     },
   },
 });
