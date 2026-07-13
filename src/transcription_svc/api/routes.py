@@ -1,14 +1,13 @@
-from __future__ import annotations
-
 import ipaddress
 import json
 import logging
 import re
 import socket
+from typing import Annotated
 from urllib.parse import urlparse
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -19,7 +18,11 @@ from transcription_svc.api.dependencies import get_caller
 from transcription_svc.audio.submission import submit_and_queue_batch_job
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.engine import get_session
-from transcription_svc.database.interface import get_job_by_id, get_job_by_idempotency_key
+from transcription_svc.database.interface import (
+    get_job_by_id,
+    get_job_by_idempotency_key,
+    list_jobs_for_caller,
+)
 from transcription_svc.database.models import Caller, JobStatus, TranscriptionJob
 
 logger = logging.getLogger(__name__)
@@ -131,6 +134,13 @@ class JobResponse(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+class ListJobsResponse(BaseModel):
+    jobs: list[JobResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 def _to_response(job: TranscriptionJob) -> JobResponse:
     entries = None
     if job.status == JobStatus.SUCCEEDED and job.dialogue_entries:
@@ -168,7 +178,7 @@ async def health() -> dict:
 @limiter.limit("100/hour")
 async def submit_job(
     request: Request,
-    body: SubmitJobRequest,
+    body: Annotated[SubmitJobRequest, Body()],
     session: Session = Depends(get_session),
     caller: Caller = Depends(get_caller),
 ) -> JobResponse:
@@ -202,6 +212,33 @@ async def submit_job(
         ) from None
 
     return _to_response(job)
+
+
+@router.get("/jobs", response_model=ListJobsResponse)
+async def list_jobs(
+    session: Session = Depends(get_session),
+    caller: Caller = Depends(get_caller),
+    status: str | None = Query(default=None, description="Filter by job status"),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> ListJobsResponse:
+    parsed_status: JobStatus | None = None
+    if status is not None:
+        try:
+            parsed_status = JobStatus(status)
+        except ValueError:
+            valid = ", ".join(s.value for s in JobStatus)
+            raise HTTPException(
+                status_code=400, detail=f"Invalid status '{status}'. Valid values: {valid}"
+            ) from None
+
+    jobs, total = list_jobs_for_caller(session, caller.id, parsed_status, limit, offset)
+    return ListJobsResponse(
+        jobs=[_to_response(j) for j in jobs],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)

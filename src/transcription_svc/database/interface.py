@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy import update as sa_update
 from sqlmodel import Session, col, select
 
@@ -27,6 +28,31 @@ def save_job(session: Session, job: TranscriptionJob) -> TranscriptionJob:
 
 def get_job_by_id(session: Session, job_id: UUID) -> TranscriptionJob | None:
     return session.get(TranscriptionJob, job_id)
+
+
+def list_jobs_for_caller(
+    session: Session,
+    caller_id: UUID,
+    status: JobStatus | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[TranscriptionJob], int]:
+    conditions = [TranscriptionJob.caller_id == caller_id]
+    if status is not None:
+        conditions.append(TranscriptionJob.status == status)
+
+    total: int = session.execute(
+        select(func.count(TranscriptionJob.id)).where(*conditions)
+    ).scalar_one()
+
+    jobs_stmt = (
+        select(TranscriptionJob)
+        .where(*conditions)
+        .order_by(col(TranscriptionJob.created_datetime).desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(session.exec(jobs_stmt).all()), total
 
 
 def get_job_by_idempotency_key(

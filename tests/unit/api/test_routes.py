@@ -75,7 +75,10 @@ class TestSubmitJob:
 
         response = client.post(
             "/api/v1/jobs",
-            json={"audio_url": "https://storage.example.com/audio.wav?sig=token"},
+            json={
+                "audio_url": "https://storage.example.com/audio.wav?sig=token",
+                "metadata": {"transcription_id": "t-1", "user_id": "u-1"},
+            },
         )
         assert response.status_code == 201
         assert "job_id" in response.json()
@@ -91,6 +94,7 @@ class TestSubmitJob:
             json={
                 "audio_url": "https://storage.example.com/audio.wav?sig=token",
                 "idempotency_key": "my-key",
+                "metadata": {"transcription_id": "t-1", "user_id": "u-1"},
             },
         )
         assert response.status_code == 201
@@ -126,6 +130,53 @@ class TestGetJob:
 
         response = client.get(f"/api/v1/jobs/{job.id}")
         assert response.status_code == 404
+
+
+class TestListJobs:
+    def test_returns_jobs(self, client, as_caller, mocker):
+        jobs = [_make_job(JobStatus.SUCCEEDED), _make_job(JobStatus.PENDING)]
+        mocker.patch(
+            "transcription_svc.api.routes.list_jobs_for_caller",
+            return_value=(jobs, 2),
+        )
+
+        response = client.get("/api/v1/jobs")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 2
+        assert len(body["jobs"]) == 2
+        assert body["limit"] == 20
+        assert body["offset"] == 0
+
+    def test_filters_by_status(self, client, as_caller, mocker):
+        mock = mocker.patch(
+            "transcription_svc.api.routes.list_jobs_for_caller",
+            return_value=([_make_job(JobStatus.SUCCEEDED)], 1),
+        )
+
+        response = client.get("/api/v1/jobs?status=succeeded")
+        assert response.status_code == 200
+        from transcription_svc.database.models import JobStatus as JS
+
+        mock.assert_called_once_with(mocker.ANY, mocker.ANY, JS.SUCCEEDED, 20, 0)
+
+    def test_rejects_invalid_status(self, client, as_caller):
+        response = client.get("/api/v1/jobs?status=notastate")
+        assert response.status_code == 400
+
+    def test_pagination_params_forwarded(self, client, as_caller, mocker):
+        mock = mocker.patch(
+            "transcription_svc.api.routes.list_jobs_for_caller",
+            return_value=([], 0),
+        )
+
+        response = client.get("/api/v1/jobs?limit=5&offset=10")
+        assert response.status_code == 200
+        mock.assert_called_once_with(mocker.ANY, mocker.ANY, None, 5, 10)
+
+    def test_requires_auth(self, client):
+        response = client.get("/api/v1/jobs")
+        assert response.status_code in (401, 422)
 
 
 class TestDeleteJob:
