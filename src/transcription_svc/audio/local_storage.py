@@ -12,6 +12,7 @@ deployed environment (see config/settings.py).
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from urllib.parse import quote
@@ -19,10 +20,10 @@ from urllib.parse import quote
 from transcription_svc.config.settings import get_settings
 
 # blob_name is a "/"-separated logical id (e.g. "uploads/<caller>/<file>"),
-# but each segment is restricted to a safe character set with no "." or ".."
-# segments, and the on-disk filename collapses it to a single flat component
-# (see _flat_filename) — so there is no hierarchical directory join for a
-# crafted blob_name to escape, regardless of its content.
+# validated to a safe character set with no "." or ".." segments. The on-disk
+# filename is a SHA-256 hex digest of the validated name (see _flat_filename)
+# rather than any transformation of blob_name itself, so the path used to
+# touch disk has no structural relationship to user input at all.
 _SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
@@ -35,7 +36,7 @@ def _validate_blob_name(blob_name: str) -> None:
 
 def _flat_filename(blob_name: str) -> str:
     _validate_blob_name(blob_name)
-    return blob_name.replace("/", "__")
+    return hashlib.sha256(blob_name.encode()).hexdigest()
 
 
 def _storage_root() -> Path:

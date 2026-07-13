@@ -60,9 +60,11 @@ async function backendFetch(
 ): Promise<Response> {
   const response = await fetch(`${backendUrl()}${path}`, {
     ...init,
+    // Authorization is spread last so a caller-supplied header (present or
+    // future) can never accidentally override the backend bearer token.
     headers: {
-      Authorization: `Bearer ${apiKey()}`,
       ...init?.headers,
+      Authorization: `Bearer ${apiKey()}`,
     },
     cache: "no-store",
   });

@@ -84,5 +84,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    caller = sa.table("caller", sa.column("name", sa.String))
-    op.get_bind().execute(caller.delete().where(caller.c.name == _CALLER_NAME))
+    # Deactivate rather than delete: once the frontend has submitted any
+    # jobs, transcription_job.caller_id's FK constraint would reject a hard
+    # delete of this row. Deactivating has the same practical effect (auth
+    # only accepts active callers) without that failure mode.
+    caller = sa.table("caller", sa.column("name", sa.String), sa.column("is_active", sa.Boolean))
+    op.get_bind().execute(
+        caller.update().where(caller.c.name == _CALLER_NAME).values(is_active=False)
+    )

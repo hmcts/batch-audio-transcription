@@ -1,5 +1,7 @@
 """Unit tests for the dev-only local audio storage backend."""
 
+import hashlib
+
 import pytest
 
 from transcription_svc.audio import local_storage
@@ -19,9 +21,10 @@ class TestSaveAndRead:
         local_storage.save(b"fake-audio-bytes", "uploads/caller-1/file.wav")
         assert local_storage.read("uploads/caller-1/file.wav") == b"fake-audio-bytes"
 
-    def test_flattens_hierarchical_blob_names_to_a_single_file(self, local_storage_dir):
+    def test_stores_hierarchical_blob_names_as_a_hashed_flat_file(self, local_storage_dir):
         local_storage.save(b"x", "a/b/c/file.mp3")
-        assert (local_storage_dir / "a__b__c__file.mp3").exists()
+        digest = hashlib.sha256(b"a/b/c/file.mp3").hexdigest()
+        assert (local_storage_dir / digest).exists()
 
     def test_rejects_path_traversal_on_save(self):
         with pytest.raises(ValueError, match="invalid blob_name"):
