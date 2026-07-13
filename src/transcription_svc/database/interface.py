@@ -29,6 +29,18 @@ def get_job_by_id(session: Session, job_id: UUID) -> TranscriptionJob | None:
     return session.get(TranscriptionJob, job_id)
 
 
+def list_jobs_by_caller(
+    session: Session, caller_id: UUID, limit: int = 50
+) -> list[TranscriptionJob]:
+    stmt = (
+        select(TranscriptionJob)
+        .where(TranscriptionJob.caller_id == caller_id)
+        .order_by(col(TranscriptionJob.created_datetime).desc())
+        .limit(limit)
+    )
+    return list(session.exec(stmt).all())
+
+
 def get_job_by_idempotency_key(
     session: Session, key: str, caller_id: UUID
 ) -> TranscriptionJob | None:

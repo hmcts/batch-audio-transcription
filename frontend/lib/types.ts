@@ -7,8 +7,10 @@ export interface TranscriptSegment {
   text: string;
   startTime: number;
   duration: number;
-  confidence: number;
-  flaggedForReview: boolean;
+  // Confidence/flagged-for-review are only available for mock fixture data —
+  // the real backend doesn't return per-segment confidence scores yet.
+  confidence?: number;
+  flaggedForReview?: boolean;
 }
 
 export interface LowConfidenceSegment {

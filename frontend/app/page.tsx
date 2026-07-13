@@ -4,97 +4,89 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AudioUpload } from "@/components/audio-upload/audio-upload";
 import { JobsTable } from "@/components/jobs-table/jobs-table";
-import { MOCK_JOBS } from "@/lib/mock-data";
+import { apiPath } from "@/lib/base-path";
 import type { TranscriptionJob } from "@/lib/types";
 
-function generateId(): string {
-  return `job-${Math.random().toString(36).slice(2, 10)}`;
+const POLL_INTERVAL_MS = 5000;
+
+async function fetchJobs(): Promise<TranscriptionJob[]> {
+  const response = await fetch(apiPath("/api/jobs"), { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Failed to load jobs: ${response.status}`);
+  }
+  const body = await response.json();
+  return body.jobs as TranscriptionJob[];
 }
 
 export default function DashboardPage() {
-  const [jobs, setJobs] = useState<TranscriptionJob[]>(MOCK_JOBS);
+  const [jobs, setJobs] = useState<TranscriptionJob[]>([]);
+  const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
-  const timerIds = useRef<ReturnType<typeof setTimeout>[]>([]);
+  // Read inside the interval tick rather than as an effect dependency, so a
+  // single interval lives for the component's lifetime instead of being
+  // torn down and recreated on every job list update.
+  const jobsRef = useRef<TranscriptionJob[]>(jobs);
+  jobsRef.current = jobs;
+
+  const refresh = useCallback(async () => {
+    try {
+      setJobs(await fetchJobs());
+    } catch (err) {
+      console.error(err);
+      toast.error("Could not load transcription jobs");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    return () => {
-      for (const id of timerIds.current) clearTimeout(id);
-    };
-  }, []);
+    refresh();
+  }, [refresh]);
 
-  const handleUpload = useCallback((file: File) => {
-    setUploading(true);
-
-    const newJobId = generateId();
-    const newJob: TranscriptionJob = {
-      id: newJobId,
-      caseReference: file.name.replace(/\.[^.]+$/, "").replace(/_/g, "/"),
-      tribunal: "First-tier Tribunal — Immigration and Asylum Chamber",
-      audioFileName: file.name,
-      uploadedAt: new Date().toISOString(),
-      status: "PENDING",
-      progressPercent: 0,
-    };
-
-    setJobs((prev) => [newJob, ...prev]);
-    toast.success(`"${file.name}" submitted for transcription`);
-
-    // Simulate PENDING → PROCESSING → COMPLETED
-    timerIds.current.push(
-      setTimeout(() => {
-        setJobs((prev) =>
-          prev.map((j) =>
-            j.id === newJobId
-              ? { ...j, status: "PROCESSING", progressPercent: 10 }
-              : j
-          )
-        );
-        setUploading(false);
-      }, 1000)
-    );
-
-    // Simulate progress updates
-    const intervals = [30, 55, 75, 90, 100];
-    for (const [i, pct] of intervals.entries()) {
-      timerIds.current.push(
-        setTimeout(
-          () => {
-            setJobs((prev) =>
-              prev.map((j) =>
-                j.id === newJobId
-                  ? { ...j, status: "PROCESSING", progressPercent: pct }
-                  : j
-              )
-            );
-          },
-          2000 + i * 1500
-        )
+  // Poll while any job is still in flight; stop refetching as soon as
+  // everything has reached a terminal state so the dashboard doesn't poll
+  // forever.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const hasActiveJobs = jobsRef.current.some(
+        (job) => job.status === "PENDING" || job.status === "PROCESSING"
       );
-    }
+      if (hasActiveJobs) refresh();
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [refresh]);
 
-    // Complete after ~10s
-    timerIds.current.push(
-      setTimeout(() => {
-        setJobs((prev) =>
-          prev.map((j) =>
-            j.id === newJobId
-              ? {
-                  ...j,
-                  status: "COMPLETED",
-                  progressPercent: 100,
-                  completedAt: new Date().toISOString(),
-                }
-              : j
-          )
+  const handleUpload = useCallback(
+    async (file: File) => {
+      setUploading(true);
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const response = await fetch(apiPath("/api/upload"), {
+          method: "POST",
+          body: formData,
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.error ?? `Upload failed: ${response.status}`);
+        }
+        toast.success(`"${file.name}" submitted for transcription`);
+        await refresh();
+      } catch (err) {
+        console.error(err);
+        toast.error(
+          err instanceof Error ? err.message : "Failed to submit audio file"
         );
-        toast.success("Transcription complete!");
-      }, 10000)
-    );
-  }, []);
+      } finally {
+        setUploading(false);
+      }
+    },
+    [refresh]
+  );
 
-  const processingJobs = jobs.filter((j) => j.status === "PROCESSING");
-  const completedJobs = jobs.filter((j) => j.status === "COMPLETED");
-  const failedJobs = jobs.filter((j) => j.status === "FAILED");
+  const processingJobs = jobs.filter((job) => job.status === "PROCESSING");
+  const completedJobs = jobs.filter((job) => job.status === "COMPLETED");
+  const failedJobs = jobs.filter((job) => job.status === "FAILED");
 
   return (
     <main className="min-h-screen bg-background">
@@ -132,7 +124,11 @@ export default function DashboardPage() {
         {/* Recent transcripts */}
         <section>
           <h2 className="text-lg font-semibold mb-4">Recent transcripts</h2>
-          <JobsTable jobs={completedJobs} />
+          {loading ? (
+            <p className="text-muted-foreground">Loading…</p>
+          ) : (
+            <JobsTable jobs={completedJobs} />
+          )}
         </section>
 
         {/* Failed jobs */}

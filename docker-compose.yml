@@ -46,6 +46,9 @@ services:
       - "3000:3000"
     environment:
       - BACKEND_INTERNAL_URL=http://api:8001
+      # Must match the api service's FRONTEND_SERVICE_API_KEY (see .env) —
+      # that's what migration 004 hashes into the frontend-service Caller row.
+      - TRANSCRIPTION_API_KEY=${FRONTEND_SERVICE_API_KEY:-local-dev-key-change-me}
     depends_on:
       - api
     networks:
@@ -63,6 +66,12 @@ services:
       - /app/node_modules
     environment:
       - PORT=3001
+      - BACKEND_INTERNAL_URL=http://api:8001
+      - TRANSCRIPTION_API_KEY=${FRONTEND_SERVICE_API_KEY:-local-dev-key-change-me}
+    depends_on:
+      - api
+    networks:
+      - app-network
     profiles:
       - frontend-dev
 
