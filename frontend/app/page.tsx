@@ -4,12 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AudioUpload } from "@/components/audio-upload/audio-upload";
 import { JobsTable } from "@/components/jobs-table/jobs-table";
+import { apiPath } from "@/lib/base-path";
 import type { TranscriptionJob } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 5000;
 
 async function fetchJobs(): Promise<TranscriptionJob[]> {
-  const response = await fetch("/api/jobs", { cache: "no-store" });
+  const response = await fetch(apiPath("/api/jobs"), { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Failed to load jobs: ${response.status}`);
   }
@@ -58,7 +59,7 @@ export default function DashboardPage() {
       try {
         const formData = new FormData();
         formData.append("file", file);
-        const response = await fetch("/api/upload", {
+        const response = await fetch(apiPath("/api/upload"), {
           method: "POST",
           body: formData,
         });
