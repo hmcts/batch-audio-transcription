@@ -1,13 +1,25 @@
 import ipaddress
 import json
 import logging
+import mimetypes
 import re
 import socket
+from pathlib import PurePosixPath
 from typing import Annotated
 from urllib.parse import urlparse
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -15,6 +27,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from transcription_svc.api.dependencies import get_caller
+from transcription_svc.audio import local_storage
+from transcription_svc.audio.azure_utils import AsyncAzureBlobManager
 from transcription_svc.audio.submission import submit_and_queue_batch_job
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.engine import get_session
@@ -30,6 +44,24 @@ router = APIRouter(prefix="/api/v1")
 
 _LOCALE_RE = re.compile(r"^[a-z]{2}-[A-Z]{2}$")
 _METADATA_MAX_BYTES = 4096
+_UPLOAD_SAS_EXPIRY_HOURS = 72
+# ~200MB comfortably covers a multi-hour hearing at typical speech bitrates
+# while bounding worst-case memory use for a single upload.
+_MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+_ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".mp4", ".m4a", ".ogg", ".flac"}
+_UNSAFE_FILENAME_CHARS_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def _sanitize_filename(filename: str) -> str:
+    """Collapse anything outside [A-Za-z0-9_.-] to "_".
+
+    Keeps blob names uniformly safe for both storage backends: predictable
+    for the local dev backend's path-traversal allowlist, and free of
+    characters that would need URL-escaping in the returned audio_url.
+    """
+    name = PurePosixPath(filename).name or "audio"
+    return _UNSAFE_FILENAME_CHARS_RE.sub("_", name)
 
 
 # Rate limiter — keyed on the bearer token so limits are per-caller, not per-IP.
@@ -141,6 +173,15 @@ class ListJobsResponse(BaseModel):
     offset: int
 
 
+class JobListResponse(BaseModel):
+    jobs: list[JobResponse]
+
+
+class UploadResponse(BaseModel):
+    audio_url: str
+    blob_name: str
+
+
 def _to_response(job: TranscriptionJob) -> JobResponse:
     entries = None
     if job.status == JobStatus.SUCCEEDED and job.dialogue_entries:
@@ -172,6 +213,85 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
 @router.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+async def _read_upload_capped(file: UploadFile, max_bytes: int) -> bytes:
+    """Read in chunks, aborting as soon as max_bytes is exceeded.
+
+    Bounds worst-case memory use to roughly max_bytes rather than reading an
+    arbitrarily oversized upload in a single call before checking its length.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413, detail="Audio file exceeds the maximum upload size"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@router.post("/uploads", status_code=201, response_model=UploadResponse)
+@limiter.limit("50/hour")
+async def upload_audio(
+    request: Request,
+    file: UploadFile = File(...),
+    caller: Caller = Depends(get_caller),
+) -> UploadResponse:
+    extension = PurePosixPath(file.filename or "").suffix.lower()
+    if extension not in _ALLOWED_AUDIO_EXTENSIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported file type '{extension}'. "
+            f"Allowed: {', '.join(sorted(_ALLOWED_AUDIO_EXTENSIONS))}",
+        )
+
+    content = await _read_upload_capped(file, _MAX_UPLOAD_BYTES)
+
+    safe_filename = _sanitize_filename(file.filename or "audio")
+    blob_name = f"uploads/{caller.id}/{uuid4()}-{safe_filename}"
+
+    if get_settings().AUDIO_STORAGE_BACKEND == "local":
+        local_storage.save(content, blob_name)
+        try:
+            audio_url = local_storage.build_url(blob_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return UploadResponse(audio_url=audio_url, blob_name=blob_name)
+
+    async with AsyncAzureBlobManager() as blob_manager:
+        uploaded = await blob_manager.create_blob_from_bytes(content, blob_name)
+        if not uploaded:
+            raise HTTPException(status_code=502, detail="Failed to store audio file")
+        audio_url = await blob_manager.generate_read_sas_url(
+            blob_name, hours=_UPLOAD_SAS_EXPIRY_HOURS
+        )
+
+    return UploadResponse(audio_url=audio_url, blob_name=blob_name)
+
+
+@router.get("/local-audio/{blob_name:path}")
+async def get_local_audio(blob_name: str) -> Response:
+    """Serve locally-stored audio — only active in AUDIO_STORAGE_BACKEND=local.
+
+    Deliberately unauthenticated: Azure Speech Batch fetches contentUrls
+    directly and cannot send our bearer token. Safe because (a) this route
+    404s outright unless a developer has explicitly opted into local storage,
+    which never happens in a deployed environment, and (b) blob names embed
+    an unguessable UUID.
+    """
+    if get_settings().AUDIO_STORAGE_BACKEND != "local":
+        raise HTTPException(status_code=404)
+
+    try:
+        content = local_storage.read(blob_name)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(status_code=404, detail="Audio file not found") from None
+
+    media_type = mimetypes.guess_type(blob_name)[0] or "application/octet-stream"
+    return Response(content=content, media_type=media_type)
 
 
 @router.post("/jobs", status_code=201, response_model=JobResponse)

@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 
 def _sanitize_for_log(value: object) -> str:
-    """Return a safe string representation of a value for logging."""
-    return str(value)
+    """Stringify and repr-wrap value to prevent log injection via control characters."""
+    return repr(str(value))
 
 
 # =============================================================================

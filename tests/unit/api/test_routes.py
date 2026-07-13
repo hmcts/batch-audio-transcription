@@ -64,6 +64,106 @@ class TestHealth:
         assert response.status_code == 200
 
 
+class TestUploadAudio:
+    def _mock_blob_manager(self, mocker, *, upload_ok=True, sas_url="https://x/y.wav?sig=abc"):
+        manager = mocker.AsyncMock()
+        manager.create_blob_from_bytes = mocker.AsyncMock(return_value=upload_ok)
+        manager.generate_read_sas_url = mocker.AsyncMock(return_value=sas_url)
+        manager.__aenter__ = mocker.AsyncMock(return_value=manager)
+        manager.__aexit__ = mocker.AsyncMock(return_value=False)
+        mocker.patch("transcription_svc.api.routes.AsyncAzureBlobManager", return_value=manager)
+        return manager
+
+    def test_returns_201_with_audio_url(self, client, as_caller, mocker):
+        self._mock_blob_manager(mocker)
+
+        response = client.post(
+            "/api/v1/uploads",
+            files={"file": ("hearing.wav", b"fake-audio-bytes", "audio/wav")},
+        )
+        assert response.status_code == 201
+        body = response.json()
+        assert body["audio_url"] == "https://x/y.wav?sig=abc"
+        assert "hearing.wav" in body["blob_name"]
+
+    def test_rejects_unsupported_extension(self, client, as_caller):
+        response = client.post(
+            "/api/v1/uploads",
+            files={"file": ("notes.txt", b"hello", "text/plain")},
+        )
+        assert response.status_code == 422
+
+    def test_returns_502_when_storage_upload_fails(self, client, as_caller, mocker):
+        self._mock_blob_manager(mocker, upload_ok=False)
+
+        response = client.post(
+            "/api/v1/uploads",
+            files={"file": ("hearing.wav", b"fake-audio-bytes", "audio/wav")},
+        )
+        assert response.status_code == 502
+
+    def test_requires_auth(self, client):
+        response = client.post(
+            "/api/v1/uploads",
+            files={"file": ("hearing.wav", b"fake-audio-bytes", "audio/wav")},
+        )
+        assert response.status_code in (401, 422)
+
+
+class TestUploadAudioLocalBackend:
+    @pytest.fixture(autouse=True)
+    def local_backend(self, tmp_path, monkeypatch):
+        from transcription_svc.config.settings import get_settings
+
+        monkeypatch.setenv("AUDIO_STORAGE_BACKEND", "local")
+        monkeypatch.setenv("LOCAL_AUDIO_STORAGE_DIR", str(tmp_path))
+        monkeypatch.setenv("LOCAL_AUDIO_BASE_URL", "https://abc123.ngrok-free.app")
+        get_settings.cache_clear()
+        yield
+        get_settings.cache_clear()
+
+    def test_stores_locally_and_returns_tunnel_url(self, client, as_caller):
+        response = client.post(
+            "/api/v1/uploads",
+            files={"file": ("hearing.wav", b"fake-audio-bytes", "audio/wav")},
+        )
+        assert response.status_code == 201
+        body = response.json()
+        assert body["audio_url"].startswith("https://abc123.ngrok-free.app/api/v1/local-audio/")
+
+        get_response = client.get(body["audio_url"].replace("https://abc123.ngrok-free.app", ""))
+        assert get_response.status_code == 200
+        assert get_response.content == b"fake-audio-bytes"
+
+    def test_never_touches_azure_blob_manager(self, client, as_caller, mocker):
+        blob_manager_cls = mocker.patch("transcription_svc.api.routes.AsyncAzureBlobManager")
+
+        client.post(
+            "/api/v1/uploads",
+            files={"file": ("hearing.wav", b"fake-audio-bytes", "audio/wav")},
+        )
+
+        blob_manager_cls.assert_not_called()
+
+
+class TestLocalAudio:
+    def test_404_when_backend_is_not_local(self, client):
+        response = client.get("/api/v1/local-audio/uploads/x/hearing.wav")
+        assert response.status_code == 404
+
+    def test_404_for_path_traversal(self, tmp_path, monkeypatch, client):
+        from transcription_svc.config.settings import get_settings
+
+        monkeypatch.setenv("AUDIO_STORAGE_BACKEND", "local")
+        monkeypatch.setenv("LOCAL_AUDIO_STORAGE_DIR", str(tmp_path))
+        get_settings.cache_clear()
+
+        response = client.get("/api/v1/local-audio/../../etc/passwd")
+
+        get_settings.cache_clear()
+        assert response.status_code == 404
+
+
 class TestSubmitJob:
     def test_returns_201_on_success(self, client, as_caller, mocker):
         job = _make_job()
@@ -173,6 +273,18 @@ class TestListJobs:
         response = client.get("/api/v1/jobs?limit=5&offset=10")
         assert response.status_code == 200
         mock.assert_called_once_with(mocker.ANY, mocker.ANY, None, 5, 10)
+
+    def test_returns_empty_list_when_no_jobs(self, client, as_caller, mocker):
+        mocker.patch(
+            "transcription_svc.api.routes.list_jobs_for_caller",
+            return_value=([], 0),
+        )
+
+        response = client.get("/api/v1/jobs")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["jobs"] == []
+        assert body["total"] == 0
 
     def test_requires_auth(self, client):
         response = client.get("/api/v1/jobs")

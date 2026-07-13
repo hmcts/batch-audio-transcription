@@ -5,7 +5,7 @@ import { AudioPlayerBar } from "@/components/transcript/audio-player-bar";
 import { NeedsReviewPanel } from "@/components/transcript/needs-review-panel";
 import { TranscriptAccuracy } from "@/components/transcript/transcript-accuracy";
 import { TranscriptSegment } from "@/components/transcript/transcript-segment";
-import { getMockJobById } from "@/lib/mock-data";
+import { getJob } from "@/lib/api-client";
 
 interface PageProps {
   params: Promise<{ jobId: string }>;
@@ -13,9 +13,9 @@ interface PageProps {
 
 export default async function TranscriptPage({ params }: PageProps) {
   const { jobId } = await params;
-  const job = getMockJobById(jobId);
+  const job = await getJob(jobId);
 
-  if (!job || job.status !== "COMPLETED" || !job.segments || !job.accuracy) {
+  if (!job || job.status !== "COMPLETED" || !job.segments) {
     notFound();
   }
 
@@ -60,17 +60,21 @@ export default async function TranscriptPage({ params }: PageProps) {
             </div>
           </div>
 
-          {/* Sidebar (right) */}
-          <aside className="w-72 shrink-0 space-y-4">
-            <TranscriptAccuracy accuracy={job.accuracy} />
-            {job.lowConfidenceSegments &&
-              job.lowConfidenceSegments.length > 0 && (
-                <NeedsReviewPanel
-                  items={job.lowConfidenceSegments}
-                  threshold={job.accuracy.confidenceThreshold}
-                />
-              )}
-          </aside>
+          {/* Sidebar (right) — accuracy/review metrics are only available for
+              mock fixture data today; the real backend doesn't compute them
+              yet, so the sidebar is simply omitted for live jobs. */}
+          {job.accuracy && (
+            <aside className="w-72 shrink-0 space-y-4">
+              <TranscriptAccuracy accuracy={job.accuracy} />
+              {job.lowConfidenceSegments &&
+                job.lowConfidenceSegments.length > 0 && (
+                  <NeedsReviewPanel
+                    items={job.lowConfidenceSegments}
+                    threshold={job.accuracy.confidenceThreshold}
+                  />
+                )}
+            </aside>
+          )}
         </div>
       </div>
     </main>

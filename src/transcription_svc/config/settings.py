@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     # Leave unset in deployed envs — DefaultAzureCredential uses Managed Identity.
     AZURE_STORAGE_CONNECTION_STRING: str | None = None
 
+    # Local audio storage (dev only — never set in deployed envs)
+    AUDIO_STORAGE_BACKEND: str = "azure"  # "azure" | "local"
+    LOCAL_AUDIO_STORAGE_DIR: str = "/tmp/local-audio"  # noqa: S108
+    LOCAL_AUDIO_BASE_URL: str = ""
+
     # Polling
     BATCH_POLL_INTERVAL_SECONDS: int = 30
     BATCH_TRANSCRIPTION_THRESHOLD_HOURS: float = 2.0
