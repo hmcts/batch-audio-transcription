@@ -5,11 +5,13 @@ import type { LowConfidenceSegment } from "@/lib/types";
 interface NeedsReviewPanelProps {
   items: LowConfidenceSegment[];
   threshold?: number;
+  onSeek?: (time: number) => void;
 }
 
 export function NeedsReviewPanel({
   items,
   threshold = 85,
+  onSeek,
 }: NeedsReviewPanelProps) {
   return (
     <Card>
@@ -43,7 +45,16 @@ export function NeedsReviewPanel({
                 >
                   {confidencePercent(item.confidence)}%
                 </span>
-                <span className="text-sm text-primary font-mono hover:underline cursor-pointer">
+                <span
+                  className="text-sm text-primary font-mono hover:underline cursor-pointer"
+                  onClick={() => onSeek?.(item.startTime)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ")
+                      onSeek?.(item.startTime);
+                  }}
+                  role="button"
+                  tabIndex={onSeek ? 0 : undefined}
+                >
                   {formatTime(item.startTime)}
                 </span>
               </div>

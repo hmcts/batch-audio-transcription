@@ -1,6 +1,11 @@
 "use client";
 
-import { FileAudio } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronsUpDown,
+  ChevronUp,
+  FileAudio,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { JobStatusBadge } from "@/components/job-status/job-status-badge";
 import { Progress } from "@/components/ui/progress";
@@ -13,11 +18,62 @@ const TRANSCRIPT_LINK_LABEL: Record<JobStatus, string> = {
   PROCESSING: "View status →",
 };
 
+export type JobsSortKey = "caseReference" | "uploadedAt" | "status";
+export type SortDirection = "asc" | "desc";
+
 interface JobsTableProps {
   jobs: TranscriptionJob[];
+  sortKey?: JobsSortKey;
+  sortDirection?: SortDirection;
+  onSortChange?: (key: JobsSortKey) => void;
 }
 
-export function JobsTable({ jobs }: JobsTableProps) {
+function SortableHeader({
+  label,
+  sortKeyId,
+  activeSortKey,
+  sortDirection,
+  onSortChange,
+}: {
+  label: string;
+  sortKeyId: JobsSortKey;
+  activeSortKey?: JobsSortKey;
+  sortDirection?: SortDirection;
+  onSortChange?: (key: JobsSortKey) => void;
+}) {
+  if (!onSortChange) {
+    return <th className="px-4 py-3 text-left font-semibold">{label}</th>;
+  }
+
+  const isActive = activeSortKey === sortKeyId;
+  const Icon = isActive
+    ? sortDirection === "asc"
+      ? ChevronUp
+      : ChevronDown
+    : ChevronsUpDown;
+
+  return (
+    <th className="px-4 py-3 text-left font-semibold">
+      <button
+        type="button"
+        onClick={() => onSortChange(sortKeyId)}
+        className={`flex items-center gap-1 hover:text-foreground ${
+          isActive ? "text-foreground" : "text-muted-foreground"
+        }`}
+      >
+        {label}
+        <Icon className="size-3.5" />
+      </button>
+    </th>
+  );
+}
+
+export function JobsTable({
+  jobs,
+  sortKey,
+  sortDirection,
+  onSortChange,
+}: JobsTableProps) {
   const router = useRouter();
 
   if (jobs.length === 0) {
@@ -33,12 +89,28 @@ export function JobsTable({ jobs }: JobsTableProps) {
       <table className="w-full text-sm">
         <thead className="bg-muted/50">
           <tr>
-            <th className="px-4 py-3 text-left font-semibold">
-              Case reference
-            </th>
+            <SortableHeader
+              label="Case reference"
+              sortKeyId="caseReference"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSortChange={onSortChange}
+            />
             <th className="px-4 py-3 text-left font-semibold">File</th>
-            <th className="px-4 py-3 text-left font-semibold">Uploaded</th>
-            <th className="px-4 py-3 text-left font-semibold">Status</th>
+            <SortableHeader
+              label="Uploaded"
+              sortKeyId="uploadedAt"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSortChange={onSortChange}
+            />
+            <SortableHeader
+              label="Status"
+              sortKeyId="status"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSortChange={onSortChange}
+            />
             <th className="px-4 py-3 text-left font-semibold">Transcript</th>
           </tr>
         </thead>

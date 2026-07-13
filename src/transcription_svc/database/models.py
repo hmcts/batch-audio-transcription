@@ -30,11 +30,31 @@ class BaseTable(SQLModel):
     updated_datetime: datetime | None = Field(default=None)
 
 
+class WordInfo(SQLModel):
+    text: str
+    start_time: float
+    end_time: float
+    confidence: float
+
+
 class DialogueEntry(SQLModel):
     speaker: str
     text: str
     start_time: float
     end_time: float
+    # Azure's own per-phrase confidence (0-1), not a verified accuracy
+    # measurement — there's no human reference transcript to compare
+    # against until a clerk corrects a segment (see corrected_text).
+    confidence: float | None = None
+    # Set once a clerk edits this segment. `text` is never mutated, so the
+    # original auto-generated wording stays available to compute a real
+    # word error rate against the correction.
+    corrected_text: str | None = None
+    # Per-word timing/confidence for the original (never corrected) text —
+    # lets the frontend highlight individual low-confidence words and sync
+    # highlighting to live playback position. None if Azure didn't return
+    # word-level detail for this phrase.
+    words: list[WordInfo] | None = None
 
 
 class Caller(BaseTable, table=True):

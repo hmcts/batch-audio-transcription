@@ -1,16 +1,49 @@
 import "server-only";
-import type { JobStatus, TranscriptionJob, TranscriptSegment } from "./types";
+import type {
+  JobStatus,
+  LowConfidenceSegment,
+  TranscriptAccuracy,
+  TranscriptionJob,
+  TranscriptSegment,
+  Word,
+} from "./types";
 
 // Server-only client for the transcription_svc backend. Never import this
 // from a "use client" component — it reads the backend API key, which must
 // not reach the browser bundle. Route handlers under app/api/** are the
 // bridge between client components and this module.
 
+interface BackendWordInfo {
+  text: string;
+  start_time: number;
+  end_time: number;
+  confidence: number;
+}
+
 interface BackendDialogueEntry {
   speaker: string;
   text: string;
   start_time: number;
   end_time: number;
+  confidence?: number | null;
+  corrected_text?: string | null;
+  words?: BackendWordInfo[] | null;
+}
+
+interface BackendAccuracy {
+  confidence_score: number;
+  words_transcribed: number;
+  low_confidence_count: number;
+  confidence_threshold: number;
+  has_corrections: boolean;
+  word_error_rate: number | null;
+  corrected_percent: number | null;
+}
+
+interface BackendNeedsReviewItem {
+  speaker: string;
+  start_time: number;
+  confidence: number;
 }
 
 interface BackendJob {
@@ -19,6 +52,8 @@ interface BackendJob {
   created_at: string;
   updated_at: string | null;
   dialogue_entries: BackendDialogueEntry[] | null;
+  accuracy: BackendAccuracy | null;
+  needs_review: BackendNeedsReviewItem[] | null;
   error_message: string | null;
   metadata: Record<string, unknown>;
 }
@@ -115,6 +150,18 @@ export function colorForSpeaker(speaker: string): string {
   return SPEAKER_COLORS[hash % SPEAKER_COLORS.length];
 }
 
+function toWords(
+  words: BackendWordInfo[] | null | undefined
+): Word[] | undefined {
+  if (!words || words.length === 0) return undefined;
+  return words.map((w) => ({
+    text: w.text,
+    startTime: w.start_time,
+    endTime: w.end_time,
+    confidence: w.confidence,
+  }));
+}
+
 function toSegments(
   entries: BackendDialogueEntry[] | null
 ): TranscriptSegment[] | undefined {
@@ -126,8 +173,38 @@ function toSegments(
     speaker: entry.speaker,
     speakerColor: colorForSpeaker(entry.speaker),
     text: entry.text,
+    correctedText: entry.corrected_text ?? undefined,
     startTime: entry.start_time,
     duration: Math.max(0, entry.end_time - entry.start_time),
+    confidence: entry.confidence ?? undefined,
+    words: toWords(entry.words),
+  }));
+}
+
+function toAccuracy(
+  accuracy: BackendAccuracy | null
+): TranscriptAccuracy | undefined {
+  if (!accuracy) return undefined;
+  return {
+    confidenceScore: accuracy.confidence_score,
+    wordsTranscribed: accuracy.words_transcribed,
+    lowConfidenceCount: accuracy.low_confidence_count,
+    confidenceThreshold: accuracy.confidence_threshold,
+    hasCorrections: accuracy.has_corrections,
+    wordErrorRate: accuracy.word_error_rate ?? undefined,
+    correctedPercent: accuracy.corrected_percent ?? undefined,
+  };
+}
+
+function toLowConfidenceSegments(
+  items: BackendNeedsReviewItem[] | null
+): LowConfidenceSegment[] | undefined {
+  if (!items || items.length === 0) return undefined;
+  return items.map((item) => ({
+    speaker: item.speaker,
+    speakerColor: colorForSpeaker(item.speaker),
+    confidence: item.confidence,
+    startTime: item.start_time,
   }));
 }
 
@@ -156,6 +233,8 @@ function toTranscriptionJob(job: BackendJob): TranscriptionJob {
     progressPercent: PROGRESS_BY_STATUS[job.status] ?? 0,
     errorMessage: job.error_message ?? undefined,
     segments: toSegments(job.dialogue_entries),
+    accuracy: toAccuracy(job.accuracy),
+    lowConfidenceSegments: toLowConfidenceSegments(job.needs_review),
   };
 }
 
@@ -238,6 +317,23 @@ export async function submitJob(
       },
     }),
   });
+  const body: BackendJob = await response.json();
+  return toTranscriptionJob(body);
+}
+
+export async function correctSegment(
+  jobId: string,
+  index: number,
+  correctedText: string
+): Promise<TranscriptionJob> {
+  const response = await backendFetch(
+    `/api/v1/jobs/${jobId}/segments/${index}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ corrected_text: correctedText }),
+    }
+  );
   const body: BackendJob = await response.json();
   return toTranscriptionJob(body);
 }

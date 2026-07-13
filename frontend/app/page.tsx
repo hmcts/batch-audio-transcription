@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AudioUpload } from "@/components/audio-upload/audio-upload";
-import { JobsTable } from "@/components/jobs-table/jobs-table";
+import { FilterableJobsSection } from "@/components/jobs-table/filterable-jobs-section";
 import { apiPath } from "@/lib/base-path";
 import type { TranscriptionJob } from "@/lib/types";
 
@@ -84,9 +84,7 @@ export default function DashboardPage() {
     [refresh]
   );
 
-  const processingJobs = jobs.filter((job) => job.status === "PROCESSING");
   const completedJobs = jobs.filter((job) => job.status === "COMPLETED");
-  const failedJobs = jobs.filter((job) => job.status === "FAILED");
 
   return (
     <main className="min-h-screen bg-background">
@@ -111,41 +109,18 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {/* In-progress jobs */}
-        {processingJobs.length > 0 && (
+        {/* Transcripts: completed jobs only, ready to open */}
+        {loading ? (
           <section>
-            <h2 className="text-lg font-semibold mb-4">
-              In progress ({processingJobs.length})
-            </h2>
-            <JobsTable jobs={processingJobs} />
-          </section>
-        )}
-
-        {/* Recent transcripts */}
-        <section>
-          <h2 className="text-lg font-semibold mb-4">Recent transcripts</h2>
-          {loading ? (
+            <h2 className="text-lg font-semibold mb-4">Transcripts</h2>
             <p className="text-muted-foreground">Loading…</p>
-          ) : (
-            <JobsTable jobs={completedJobs} />
-          )}
-        </section>
-
-        {/* Failed jobs */}
-        {failedJobs.length > 0 && (
-          <section>
-            <h2 className="text-lg font-semibold mb-4">
-              Failed ({failedJobs.length})
-            </h2>
-            <JobsTable jobs={failedJobs} />
           </section>
+        ) : (
+          <FilterableJobsSection title="Transcripts" jobs={completedJobs} />
         )}
 
-        {/* All uploads */}
-        <section>
-          <h2 className="text-lg font-semibold mb-4">All uploads</h2>
-          <JobsTable jobs={jobs} />
-        </section>
+        {/* Uploads: every job regardless of status — full history */}
+        <FilterableJobsSection title="Uploads" jobs={jobs} />
       </div>
     </main>
   );

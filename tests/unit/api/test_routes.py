@@ -380,6 +380,129 @@ class TestGetJob:
         response = client.get(f"/api/v1/jobs/{job.id}")
         assert response.status_code == 404
 
+    def test_includes_accuracy_and_needs_review_for_succeeded_job(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "hello there",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.5,
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        body = response.json()
+
+        assert body["accuracy"]["confidence_score"] == 50.0
+        assert body["accuracy"]["has_corrections"] is False
+        assert body["accuracy"]["word_error_rate"] is None
+        assert len(body["needs_review"]) == 1
+        assert body["needs_review"][0]["speaker"] == "0"
+
+    def test_omits_accuracy_for_non_succeeded_job(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUBMITTED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        body = response.json()
+
+        assert body["accuracy"] is None
+        assert body["needs_review"] is None
+
+
+class TestCorrectSegment:
+    def _patch_session(self, client, mocker):
+        from transcription_svc.database.engine import get_session
+
+        mock_session = MagicMock()
+        client.app.dependency_overrides[get_session] = lambda: mock_session
+        return mock_session
+
+    def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
+        response = client.patch(
+            f"/api/v1/jobs/{uuid.uuid4()}/segments/0", json={"corrected_text": "fixed"}
+        )
+        assert response.status_code == 404
+
+    def test_returns_404_for_other_callers_job(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.uuid4()
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.patch(
+            f"/api/v1/jobs/{job.id}/segments/0", json={"corrected_text": "fixed"}
+        )
+        assert response.status_code == 404
+
+    def test_returns_422_when_job_not_succeeded(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUBMITTED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.patch(
+            f"/api/v1/jobs/{job.id}/segments/0", json={"corrected_text": "fixed"}
+        )
+        assert response.status_code == 422
+
+    def test_returns_404_for_out_of_range_index(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.patch(
+            f"/api/v1/jobs/{job.id}/segments/5", json={"corrected_text": "fixed"}
+        )
+        assert response.status_code == 404
+
+    def test_stores_correction_and_returns_updated_job(self, client, as_caller, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.9,
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mock_session = self._patch_session(client, mocker)
+
+        try:
+            response = client.patch(
+                f"/api/v1/jobs/{job.id}/segments/0",
+                json={"corrected_text": "the slow brown fox"},
+            )
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["dialogue_entries"][0]["corrected_text"] == "the slow brown fox"
+        assert body["dialogue_entries"][0]["text"] == "the quick brown fox"
+        assert body["accuracy"]["has_corrections"] is True
+        mock_session.commit.assert_called_once()
+
+    def test_rejects_empty_correction(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.patch(f"/api/v1/jobs/{job.id}/segments/0", json={"corrected_text": ""})
+        assert response.status_code == 422
+
 
 class TestDeleteJob:
     def test_returns_204(self, client, as_caller, mocker):

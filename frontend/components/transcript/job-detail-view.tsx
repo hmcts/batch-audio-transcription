@@ -75,6 +75,37 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
     setPosition(time);
   };
 
+  // "Needs review" items live in a separate sidebar list — jumping to one
+  // should also bring its actual transcript segment into view, not just
+  // move the audio position.
+  const seekAndScrollToSegment = (time: number) => {
+    seekTo(time);
+    const segment = job.segments?.find(
+      (s) => time >= s.startTime && time < s.startTime + s.duration
+    );
+    if (segment) {
+      document
+        .getElementById(segment.id)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  };
+
+  const correctSegment = async (index: number, correctedText: string) => {
+    const response = await fetch(
+      apiPath(`/api/jobs/${jobId}/segments/${index}`),
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ correctedText }),
+      }
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to save correction: ${response.status}`);
+    }
+    const body = await response.json();
+    setJob(body.job as TranscriptionJob);
+  };
+
   useEffect(() => {
     const id = setInterval(async () => {
       if (
@@ -156,19 +187,28 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
                 </p>
               </div>
               <div className="border border-border rounded-lg divide-y divide-border">
-                {job.segments.map((segment) => (
-                  <TranscriptSegment
-                    key={segment.id}
-                    segment={segment}
-                    onSeek={audioAvailable ? seekTo : undefined}
-                  />
-                ))}
+                {job.segments.map((segment, index) => {
+                  const isActive =
+                    playing &&
+                    position >= segment.startTime &&
+                    position < segment.startTime + segment.duration;
+                  return (
+                    <TranscriptSegment
+                      key={segment.id}
+                      segment={segment}
+                      onSeek={audioAvailable ? seekTo : undefined}
+                      onCorrect={(text) => correctSegment(index, text)}
+                      isActive={isActive}
+                      currentTime={isActive ? position : undefined}
+                    />
+                  );
+                })}
               </div>
             </div>
 
-            {/* Sidebar (right) — accuracy/review metrics are only available
-                for mock fixture data today; the real backend doesn't compute
-                them yet, so the sidebar is simply omitted for live jobs. */}
+            {/* Sidebar (right) — omitted when the backend hasn't returned
+                any confidence-scored segments (e.g. an older job predating
+                this feature). */}
             {job.accuracy && (
               <aside className="w-72 shrink-0 space-y-4">
                 <TranscriptAccuracy accuracy={job.accuracy} />
@@ -177,6 +217,7 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
                     <NeedsReviewPanel
                       items={job.lowConfidenceSegments}
                       threshold={job.accuracy.confidenceThreshold}
+                      onSeek={seekAndScrollToSegment}
                     />
                   )}
               </aside>

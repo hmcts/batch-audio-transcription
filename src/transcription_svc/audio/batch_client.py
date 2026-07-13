@@ -9,7 +9,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from uwotm8 import convert_american_to_british_spelling
 
 from transcription_svc.config.settings import get_settings
-from transcription_svc.database.models import DialogueEntry
+from transcription_svc.database.models import DialogueEntry, WordInfo
 
 _TICKS_PER_SECOND: int = 10_000_000
 _HTTP_TIMEOUT: float = 30.0
@@ -144,9 +144,28 @@ async def get_batch_results(
         ) / _TICKS_PER_SECOND
         speaker = str(phrase.get("speaker", 0))
         text = convert_american_to_british_spelling(best.get("display", ""))
+        confidence = best.get("confidence")
+
+        words = [
+            WordInfo(
+                text=w.get("word", ""),
+                start_time=w.get("offsetInTicks", 0) / _TICKS_PER_SECOND,
+                end_time=(w.get("offsetInTicks", 0) + w.get("durationInTicks", 0))
+                / _TICKS_PER_SECOND,
+                confidence=w.get("confidence", 0.0),
+            )
+            for w in best.get("words", [])
+        ] or None
 
         dialogue_entries.append(
-            DialogueEntry(speaker=speaker, text=text, start_time=start_time, end_time=end_time)
+            DialogueEntry(
+                speaker=speaker,
+                text=text,
+                start_time=start_time,
+                end_time=end_time,
+                confidence=confidence,
+                words=words,
+            )
         )
 
     return dialogue_entries

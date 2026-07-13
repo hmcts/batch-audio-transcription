@@ -6,6 +6,7 @@ import logging
 import mimetypes
 import re
 import socket
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -19,6 +20,7 @@ from sqlmodel import Session
 
 from transcription_svc.api.dependencies import get_caller
 from transcription_svc.audio import local_storage
+from transcription_svc.audio.accuracy import compute_accuracy
 from transcription_svc.audio.azure_utils import AsyncAzureBlobManager
 from transcription_svc.audio.submission import submit_and_queue_batch_job
 from transcription_svc.config.settings import get_settings
@@ -28,7 +30,7 @@ from transcription_svc.database.interface import (
     get_job_by_idempotency_key,
     list_jobs_by_caller,
 )
-from transcription_svc.database.models import Caller, JobStatus, TranscriptionJob
+from transcription_svc.database.models import Caller, DialogueEntry, JobStatus, TranscriptionJob
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
@@ -145,11 +147,37 @@ class SubmitJobRequest(BaseModel):
         return v
 
 
+class WordInfoResponse(BaseModel):
+    text: str
+    start_time: float
+    end_time: float
+    confidence: float
+
+
 class DialogueEntryResponse(BaseModel):
     speaker: str
     text: str
     start_time: float
     end_time: float
+    confidence: float | None = None
+    corrected_text: str | None = None
+    words: list[WordInfoResponse] | None = None
+
+
+class NeedsReviewItemResponse(BaseModel):
+    speaker: str
+    start_time: float
+    confidence: float
+
+
+class AccuracyResponse(BaseModel):
+    confidence_score: float
+    words_transcribed: int
+    low_confidence_count: int
+    confidence_threshold: float
+    has_corrections: bool
+    word_error_rate: float | None = None
+    corrected_percent: float | None = None
 
 
 class JobResponse(BaseModel):
@@ -158,6 +186,8 @@ class JobResponse(BaseModel):
     created_at: str
     updated_at: str | None = None
     dialogue_entries: list[DialogueEntryResponse] | None = None
+    accuracy: AccuracyResponse | None = None
+    needs_review: list[NeedsReviewItemResponse] | None = None
     error_message: str | None = None
     metadata: dict = Field(default_factory=dict)
 
@@ -171,24 +201,84 @@ class UploadResponse(BaseModel):
     blob_name: str
 
 
+class CorrectSegmentRequest(BaseModel):
+    corrected_text: str = Field(min_length=1, max_length=10_000)
+
+
+def _entry_field(entry, field: str, default=None):
+    return entry.get(field, default) if isinstance(entry, dict) else getattr(entry, field, default)
+
+
+def _to_dialogue_entries(job: TranscriptionJob) -> list[DialogueEntry] | None:
+    if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
+        return None
+    return [
+        DialogueEntry(
+            speaker=_entry_field(e, "speaker", ""),
+            text=_entry_field(e, "text", ""),
+            start_time=_entry_field(e, "start_time", 0.0),
+            end_time=_entry_field(e, "end_time", 0.0),
+            confidence=_entry_field(e, "confidence"),
+            corrected_text=_entry_field(e, "corrected_text"),
+            words=_entry_field(e, "words"),
+        )
+        for e in job.dialogue_entries
+    ]
+
+
 def _to_response(job: TranscriptionJob) -> JobResponse:
-    entries = None
-    if job.status == JobStatus.SUCCEEDED and job.dialogue_entries:
-        entries = [
-            DialogueEntryResponse(
-                speaker=e.get("speaker", "") if isinstance(e, dict) else e.speaker,
-                text=e.get("text", "") if isinstance(e, dict) else e.text,
-                start_time=e.get("start_time", 0.0) if isinstance(e, dict) else e.start_time,
-                end_time=e.get("end_time", 0.0) if isinstance(e, dict) else e.end_time,
+    entries = _to_dialogue_entries(job)
+    accuracy = None
+    needs_review = None
+    if entries is not None:
+        summary = compute_accuracy(entries)
+        accuracy = AccuracyResponse(
+            confidence_score=summary.confidence_score,
+            words_transcribed=summary.words_transcribed,
+            low_confidence_count=summary.low_confidence_count,
+            confidence_threshold=summary.confidence_threshold,
+            has_corrections=summary.has_corrections,
+            word_error_rate=summary.word_error_rate,
+            corrected_percent=summary.corrected_percent,
+        )
+        needs_review = [
+            NeedsReviewItemResponse(
+                speaker=item.speaker, start_time=item.start_time, confidence=item.confidence
             )
-            for e in job.dialogue_entries
+            for item in summary.needs_review
         ]
+
     return JobResponse(
         job_id=job.id,
         status=job.status.value,
         created_at=job.created_datetime.isoformat(),
         updated_at=job.updated_datetime.isoformat() if job.updated_datetime else None,
-        dialogue_entries=entries,
+        dialogue_entries=[
+            DialogueEntryResponse(
+                speaker=e.speaker,
+                text=e.text,
+                start_time=e.start_time,
+                end_time=e.end_time,
+                confidence=e.confidence,
+                corrected_text=e.corrected_text,
+                words=[
+                    WordInfoResponse(
+                        text=w.text,
+                        start_time=w.start_time,
+                        end_time=w.end_time,
+                        confidence=w.confidence,
+                    )
+                    for w in e.words
+                ]
+                if e.words
+                else None,
+            )
+            for e in entries
+        ]
+        if entries is not None
+        else None,
+        accuracy=accuracy,
+        needs_review=needs_review,
         error_message=job.error_message,
         metadata=job.metadata_,
     )
@@ -340,6 +430,44 @@ async def get_job(
     job = get_job_by_id(session, job_id)
     if not job or job.caller_id != caller.id:
         raise HTTPException(status_code=404, detail="Job not found")
+    return _to_response(job)
+
+
+@router.patch("/jobs/{job_id}/segments/{index}", response_model=JobResponse)
+async def correct_segment(
+    job_id: UUID,
+    index: int,
+    body: CorrectSegmentRequest,
+    session: Session = Depends(get_session),
+    caller: Caller = Depends(get_caller),
+) -> JobResponse:
+    """Record a clerk's correction for one transcript segment.
+
+    The original text is never overwritten — corrected_text is stored
+    alongside it so a real word error rate can be computed against what
+    Speech Batch actually produced (see audio/accuracy.py).
+    """
+    job = get_job_by_id(session, job_id)
+    if not job or job.caller_id != caller.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
+        raise HTTPException(status_code=422, detail="Job has no transcript to correct")
+    if index < 0 or index >= len(job.dialogue_entries):
+        raise HTTPException(status_code=404, detail="Segment not found")
+
+    # Reassign the whole list (rather than mutating in place) since the
+    # dialogue_entries column isn't wrapped in sqlalchemy.ext.mutable —
+    # in-place changes wouldn't be detected as dirty by the ORM.
+    entries = list(job.dialogue_entries)
+    entry = dict(entries[index])
+    entry["corrected_text"] = body.corrected_text
+    entries[index] = entry
+    job.dialogue_entries = entries
+    job.updated_datetime = datetime.now(UTC)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
     return _to_response(job)
 
 

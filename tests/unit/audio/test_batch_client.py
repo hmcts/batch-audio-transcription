@@ -213,6 +213,96 @@ class TestGetBatchResults:
         assert entries[0].start_time == pytest.approx(1.0)
 
     @pytest.mark.asyncio
+    async def test_captures_word_level_confidence_and_timing(self):
+        from transcription_svc.audio.batch_client import get_batch_results
+
+        files_data = {
+            "values": [{"kind": "Transcription", "links": {"contentUrl": "https://results-url"}}]
+        }
+        result_data = {
+            "recognizedPhrases": [
+                {
+                    "offsetInTicks": 0,
+                    "durationInTicks": 20_000_000,
+                    "speaker": 0,
+                    "nBest": [
+                        {
+                            "display": "Hello world",
+                            "confidence": 0.9,
+                            "words": [
+                                {
+                                    "word": "hello",
+                                    "offsetInTicks": 0,
+                                    "durationInTicks": 5_000_000,
+                                    "confidence": 0.95,
+                                },
+                                {
+                                    "word": "world",
+                                    "offsetInTicks": 5_000_000,
+                                    "durationInTicks": 5_000_000,
+                                    "confidence": 0.6,
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+
+        def make_response_for(url, **kwargs):
+            if "files" in url:
+                return _make_response(body=files_data)
+            return _make_response(body=result_data)
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(side_effect=make_response_for)
+
+            entries = await get_batch_results("https://job-url")
+
+        assert entries[0].words is not None
+        assert len(entries[0].words) == 2
+        assert entries[0].words[0].text == "hello"
+        assert entries[0].words[0].start_time == pytest.approx(0.0)
+        assert entries[0].words[0].end_time == pytest.approx(0.5)
+        assert entries[0].words[1].confidence == pytest.approx(0.6)
+
+    @pytest.mark.asyncio
+    async def test_words_is_none_when_azure_returns_no_word_detail(self):
+        from transcription_svc.audio.batch_client import get_batch_results
+
+        files_data = {
+            "values": [{"kind": "Transcription", "links": {"contentUrl": "https://results-url"}}]
+        }
+        result_data = {
+            "recognizedPhrases": [
+                {
+                    "offsetInTicks": 0,
+                    "durationInTicks": 10_000_000,
+                    "speaker": 0,
+                    "nBest": [{"display": "Hello"}],
+                }
+            ]
+        }
+
+        def make_response_for(url, **kwargs):
+            if "files" in url:
+                return _make_response(body=files_data)
+            return _make_response(body=result_data)
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(side_effect=make_response_for)
+
+            entries = await get_batch_results("https://job-url")
+
+        assert entries[0].words is None
+
+    @pytest.mark.asyncio
     async def test_raises_when_no_transcription_file(self):
         from transcription_svc.audio.batch_client import BatchResultError, get_batch_results
 
