@@ -166,7 +166,10 @@ export async function getJob(jobId: string): Promise<TranscriptionJob | null> {
     const body: BackendJob = await response.json();
     return toTranscriptionJob(body);
   } catch (err) {
-    if (err instanceof BackendApiError && err.status === 404) {
+    // 404: no job with that id. 422: the backend validates job_id as a UUID
+    // path param and rejects anything else before it can even look it up —
+    // from the caller's perspective that's just as much "not found".
+    if (err instanceof BackendApiError && (err.status === 404 || err.status === 422)) {
       return null;
     }
     throw err;

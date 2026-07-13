@@ -1,8 +1,14 @@
+import path from "node:path";
 import { expect, test } from "@playwright/test";
 
-// These E2E tests require a running server.
+// These E2E tests require a running server with a real backend behind it
+// (docker-compose, or `pnpm dev` + the transcription_svc API) — there is no
+// more mock data to fall back on.
 // Run with: pnpm run test:e2e (not included in pnpm run test:unit)
 // Set PLAYWRIGHT_BASE_URL env var to target a deployed environment.
+
+const REAL_AUDIO_PATH =
+  process.env.E2E_AUDIO_FILE ?? path.join("/Users/hmcts/Downloads", "24-813.mp3");
 
 test.describe("Dashboard", () => {
   test.beforeEach(async ({ page }) => {
@@ -24,29 +30,30 @@ test.describe("Dashboard", () => {
     await expect(btn).toBeDisabled();
   });
 
-  test("shows pre-loaded mock jobs in recent transcripts", async ({ page }) => {
-    await expect(page.getByText("PA/05217/2025")).toBeVisible();
-    await expect(page.getByText("EA/11042/2025")).toBeVisible();
-  });
-
-  test("View transcript link navigates to transcript page", async ({
+  test("shows an empty state when there are no jobs yet", async ({
     page,
   }) => {
-    const link = page.getByRole("link", { name: /view transcript/i }).first();
-    await link.click();
-    await expect(page).toHaveURL(/\/batch\/jobs\//);
+    const jobsSections = page.locator("section", { hasText: "All uploads" });
+    await expect(
+      jobsSections.getByText(/no transcription jobs yet/i)
+    ).toBeVisible();
   });
+});
 
-  test("upload a file and see it appear in the list", async ({ page }) => {
-    const fileChooserPromise = page.waitForEvent("filechooser");
-    await page.getByLabel("Audio file input").click();
-    const fileChooser = await fileChooserPromise;
-    await fileChooser.setFiles({
-      name: "test-hearing.mp3",
-      mimeType: "audio/mpeg",
-      buffer: Buffer.from("mock-audio"),
-    });
-    await expect(page.getByText("Selected: test-hearing.mp3")).toBeVisible();
+// Full round trip against the real backend and real Azure Speech Batch —
+// slow (batch transcription can take minutes), so it's isolated here rather
+// than mixed into the fast dashboard checks above.
+test.describe("Real transcription pipeline", () => {
+  test("upload real audio and see the transcript appear", async ({
+    page,
+  }) => {
+    test.setTimeout(15 * 60 * 1000); // batch transcription can take a while
+
+    await page.goto("/batch");
+
+    await page.getByLabel("Audio file input").setInputFiles(REAL_AUDIO_PATH);
+    const fileName = path.basename(REAL_AUDIO_PATH);
+    await expect(page.getByText(`Selected: ${fileName}`)).toBeVisible();
 
     const submitBtn = page.getByRole("button", {
       name: /upload for transcription/i,
@@ -54,9 +61,24 @@ test.describe("Dashboard", () => {
     await expect(submitBtn).toBeEnabled();
     await submitBtn.click();
 
-    // Job appears in the list
-    await expect(page.getByText("test-hearing.mp3")).toBeVisible({
-      timeout: 3000,
+    // Job appears in the "All uploads" list, initially PENDING/PROCESSING.
+    const allUploads = page.locator("section", { hasText: "All uploads" });
+    await expect(allUploads.getByText(fileName)).toBeVisible({
+      timeout: 10_000,
     });
+
+    // Poll (via page reloads) until the job reaches COMPLETED and a
+    // "View transcript" link shows up, or FAILED is surfaced explicitly.
+    const row = allUploads.locator("tr", { hasText: fileName });
+    await expect(async () => {
+      await page.reload();
+      const text = await row.innerText();
+      expect(text).not.toMatch(/failed/i);
+      expect(text).toMatch(/view transcript/i);
+    }).toPass({ timeout: 15 * 60 * 1000, intervals: [5000] });
+
+    await row.getByRole("link", { name: /view transcript/i }).click();
+    await expect(page).toHaveURL(/\/batch\/jobs\//);
+    await expect(page.locator("main")).toContainText(/./); // transcript rendered
   });
 });

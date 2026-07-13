@@ -89,6 +89,12 @@ describe("getJob", () => {
     expect(job).toBeNull();
   });
 
+  it("returns null on 422 (backend rejects non-UUID job ids before lookup)", async () => {
+    mockFetchOnce({ detail: "Invalid UUID" }, { ok: false, status: 422 });
+    const job = await getJob("not-a-uuid");
+    expect(job).toBeNull();
+  });
+
   it("does not swallow non-404 errors", async () => {
     mockFetchOnce({ detail: "boom" }, { ok: false, status: 500 });
     await expect(getJob("x")).rejects.toThrow();
