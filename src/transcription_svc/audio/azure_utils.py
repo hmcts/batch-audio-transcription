@@ -2,13 +2,12 @@
 
 import logging
 import mimetypes
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.identity.aio import DefaultAzureCredential
-from azure.storage.blob import BlobSasPermissions, ContentSettings, generate_blob_sas
+from azure.storage.blob import ContentSettings
 from azure.storage.blob.aio import BlobServiceClient as AsyncBlobServiceClient
 
 from transcription_svc.config.settings import get_settings
@@ -70,56 +69,21 @@ class AsyncAzureBlobManager:
         except Exception as e:
             logger.warning(f"Error closing credential: {e}")
 
-    async def generate_read_sas_url(
-        self, blob_name: str, container_name: str | None = None, hours: int = 72
-    ) -> str:
-        """Return a time-limited, read-only SAS URL for a blob.
+    def build_blob_url(self, blob_name: str, container_name: str | None = None) -> str:
+        """Return a plain (no-SAS) blob URL for Azure Speech Batch.
 
-        Locally, where a connection string is configured, a classic account-key
-        SAS is used. In deployed environments the storage account has
-        shared_access_key_enabled=false (Managed Identity only), so a user
-        delegation SAS is generated instead.
+        Speech's batch backend authenticates directly against this storage
+        account via its own system-assigned managed identity, under Azure's
+        "trusted Azure services" mechanism (a storage network_rules
+        resource-instance exception plus a Storage Blob Data Reader role
+        grant on the Speech resource — see the infra repo's storage.tf).
+        Microsoft's docs are explicit that a SAS token alongside
+        managed-identity auth makes the request fail, so this must stay
+        SAS-free — unlike generate_read_sas_url, which is for callers
+        without a trusted-service grant.
         """
         container = container_name or self.container_name
-        # Backdate the start time so a validator (Azure Storage, or Azure
-        # Speech Batch fetching the URL moments later) whose clock is
-        # slightly behind ours doesn't reject the token as "not yet valid" —
-        # this caused a real "Authentication failed for recordings URI."
-        # error from Speech Batch when the key/token started at exactly
-        # datetime.now().
-        start = datetime.now(UTC) - timedelta(minutes=5)
-        expiry = datetime.now(UTC) + timedelta(hours=hours)
-
-        async with self._blob_service_client() as blob_service:
-            if self._connection_string:
-                sas_token = generate_blob_sas(
-                    account_name=self.account_name,
-                    container_name=container,
-                    blob_name=blob_name,
-                    account_key=blob_service.credential.account_key,
-                    permission=BlobSasPermissions(read=True),
-                    start=start,
-                    expiry=expiry,
-                )
-            else:
-                delegation_key = await blob_service.get_user_delegation_key(
-                    key_start_time=start,
-                    key_expiry_time=expiry,
-                )
-                sas_token = generate_blob_sas(
-                    account_name=self.account_name,
-                    container_name=container,
-                    blob_name=blob_name,
-                    user_delegation_key=delegation_key,
-                    permission=BlobSasPermissions(read=True),
-                    start=start,
-                    expiry=expiry,
-                )
-
-        # blob_name is sanitized to a safe character set at upload time (see
-        # api/routes.py:_sanitize_filename), but quote defensively here too in
-        # case this method is ever called with an unsanitized name.
-        return f"{self.account_url}/{container}/{quote(blob_name, safe='/')}?{sas_token}"
+        return f"{self.account_url}/{container}/{quote(blob_name, safe='/')}"
 
     async def create_blob_from_bytes(
         self, content: bytes, blob_name: str, container_name: str | None = None
