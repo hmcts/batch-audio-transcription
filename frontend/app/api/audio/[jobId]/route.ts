@@ -11,13 +11,17 @@ export async function GET(request: Request, { params }: RouteContext) {
     // Forward the browser's Range header so <audio> seeking works — without
     // this, the browser can request a byte range it never receives and
     // seeking on an unbuffered position silently does nothing.
-    const backendResponse = await getJobAudio(jobId, request.headers.get("range"));
+    const backendResponse = await getJobAudio(
+      jobId,
+      request.headers.get("range")
+    );
     if (!backendResponse) {
       return NextResponse.json({ error: "Audio not found" }, { status: 404 });
     }
     const headers: Record<string, string> = {
       "Content-Type":
-        backendResponse.headers.get("Content-Type") ?? "application/octet-stream",
+        backendResponse.headers.get("Content-Type") ??
+        "application/octet-stream",
     };
     for (const name of ["Accept-Ranges", "Content-Range", "Content-Length"]) {
       const value = backendResponse.headers.get(name);

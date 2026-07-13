@@ -102,9 +102,7 @@ describe("TranscriptPage", () => {
         params: Promise.resolve({ jobId: COMPLETED_JOB.id }),
       })
     );
-    expect(
-      screen.getByText(/no content to display/i)
-    ).toBeDefined();
+    expect(screen.getByText(/no content to display/i)).toBeDefined();
   });
 
   it("shows an in-progress message and does not 404 for a processing job", async () => {

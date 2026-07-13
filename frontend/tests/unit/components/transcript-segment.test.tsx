@@ -64,7 +64,10 @@ describe("TranscriptSegment", () => {
     const onSeek = vi.fn();
     const user = userEvent.setup();
     render(
-      <TranscriptSegment segment={{ ...SEGMENT, startTime: 152.6 }} onSeek={onSeek} />
+      <TranscriptSegment
+        segment={{ ...SEGMENT, startTime: 152.6 }}
+        onSeek={onSeek}
+      />
     );
     await user.click(screen.getByRole("button", { name: "2:32" }));
     expect(onSeek).toHaveBeenCalledWith(152.6);
@@ -73,8 +76,6 @@ describe("TranscriptSegment", () => {
   it("does not throw when the timestamp is clicked with no onSeek provided", async () => {
     const user = userEvent.setup();
     render(<TranscriptSegment segment={SEGMENT} />);
-    await expect(
-      user.click(screen.getByText("0:00"))
-    ).resolves.not.toThrow();
+    await expect(user.click(screen.getByText("0:00"))).resolves.not.toThrow();
   });
 });

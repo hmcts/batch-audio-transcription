@@ -77,7 +77,10 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
 
   useEffect(() => {
     const id = setInterval(async () => {
-      if (jobRef.current.status !== "PENDING" && jobRef.current.status !== "PROCESSING") {
+      if (
+        jobRef.current.status !== "PENDING" &&
+        jobRef.current.status !== "PROCESSING"
+      ) {
         return;
       }
       try {

@@ -71,7 +71,10 @@ export function JobsTable({ jobs }: JobsTableProps) {
                   {job.status === "PROCESSING" &&
                     job.progressPercent !== undefined && (
                       <div className="flex items-center gap-2">
-                        <Progress value={job.progressPercent} className="w-24" />
+                        <Progress
+                          value={job.progressPercent}
+                          className="w-24"
+                        />
                         <span className="text-xs text-muted-foreground tabular-nums">
                           {job.progressPercent}%
                         </span>

@@ -31,9 +31,7 @@ describe("JobsTable", () => {
   it("shows a details link for non-completed jobs", () => {
     const failedJobs = MOCK_JOBS.filter((j) => j.status === "FAILED");
     render(<JobsTable jobs={failedJobs} />);
-    expect(screen.getAllByText(/view details/i).length).toBe(
-      failedJobs.length
-    );
+    expect(screen.getAllByText(/view details/i).length).toBe(failedJobs.length);
   });
 
   it("shows percentage alongside the progress bar for processing jobs", () => {
