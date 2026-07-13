@@ -81,6 +81,13 @@ class AsyncAzureBlobManager:
         delegation SAS is generated instead.
         """
         container = container_name or self.container_name
+        # Backdate the start time so a validator (Azure Storage, or Azure
+        # Speech Batch fetching the URL moments later) whose clock is
+        # slightly behind ours doesn't reject the token as "not yet valid" —
+        # this caused a real "Authentication failed for recordings URI."
+        # error from Speech Batch when the key/token started at exactly
+        # datetime.now().
+        start = datetime.now(UTC) - timedelta(minutes=5)
         expiry = datetime.now(UTC) + timedelta(hours=hours)
 
         async with self._blob_service_client() as blob_service:
@@ -91,11 +98,12 @@ class AsyncAzureBlobManager:
                     blob_name=blob_name,
                     account_key=blob_service.credential.account_key,
                     permission=BlobSasPermissions(read=True),
+                    start=start,
                     expiry=expiry,
                 )
             else:
                 delegation_key = await blob_service.get_user_delegation_key(
-                    key_start_time=datetime.now(UTC),
+                    key_start_time=start,
                     key_expiry_time=expiry,
                 )
                 sas_token = generate_blob_sas(
@@ -104,6 +112,7 @@ class AsyncAzureBlobManager:
                     blob_name=blob_name,
                     user_delegation_key=delegation_key,
                     permission=BlobSasPermissions(read=True),
+                    start=start,
                     expiry=expiry,
                 )
 
