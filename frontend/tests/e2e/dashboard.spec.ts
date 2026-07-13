@@ -78,14 +78,23 @@ test.describe("Real transcription pipeline", () => {
     });
 
     // Poll (via page reloads) until the job reaches COMPLETED and a
-    // "View transcript" link shows up, or FAILED is surfaced explicitly.
+    // "View transcript" link shows up. Exits as soon as FAILED appears
+    // instead of retrying blindly for the full timeout — a terminal FAILED
+    // status will never turn into a pass, so waiting out toPass()'s full
+    // window on it just wastes ~15 minutes per run.
     const row = allUploads.locator("tr", { hasText: fileName });
-    await expect(async () => {
+    const deadline = Date.now() + 15 * 60 * 1000;
+    let text = "";
+    while (Date.now() < deadline) {
       await page.reload();
-      const text = await row.innerText();
-      expect(text).not.toMatch(/failed/i);
-      expect(text).toMatch(/view transcript/i);
-    }).toPass({ timeout: 15 * 60 * 1000, intervals: [5000] });
+      text = await row.innerText();
+      if (/failed/i.test(text)) {
+        throw new Error(`Job reached FAILED status:\n${text}`);
+      }
+      if (/view transcript/i.test(text)) break;
+      await page.waitForTimeout(5000);
+    }
+    expect(text).toMatch(/view transcript/i);
 
     await row.getByRole("link", { name: /view transcript/i }).click();
     await expect(page).toHaveURL(/\/batch\/jobs\//);
