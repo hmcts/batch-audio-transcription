@@ -65,10 +65,10 @@ class TestHealth:
 
 
 class TestUploadAudio:
-    def _mock_blob_manager(self, mocker, *, upload_ok=True, sas_url="https://x/y.wav?sig=abc"):
+    def _mock_blob_manager(self, mocker, *, upload_ok=True, blob_url="https://x/y.wav"):
         manager = mocker.AsyncMock()
         manager.create_blob_from_bytes = mocker.AsyncMock(return_value=upload_ok)
-        manager.generate_read_sas_url = mocker.AsyncMock(return_value=sas_url)
+        manager.build_blob_url = mocker.Mock(return_value=blob_url)
         manager.__aenter__ = mocker.AsyncMock(return_value=manager)
         manager.__aexit__ = mocker.AsyncMock(return_value=False)
         mocker.patch("transcription_svc.api.routes.AsyncAzureBlobManager", return_value=manager)
@@ -83,7 +83,7 @@ class TestUploadAudio:
         )
         assert response.status_code == 201
         body = response.json()
-        assert body["audio_url"] == "https://x/y.wav?sig=abc"
+        assert body["audio_url"] == "https://x/y.wav"
         assert "hearing.wav" in body["blob_name"]
 
     def test_rejects_unsupported_extension(self, client, as_caller):

@@ -35,7 +35,6 @@ router = APIRouter(prefix="/api/v1")
 
 _LOCALE_RE = re.compile(r"^[a-z]{2}-[A-Z]{2}$")
 _METADATA_MAX_BYTES = 4096
-_UPLOAD_SAS_EXPIRY_HOURS = 72
 # ~200MB comfortably covers a multi-hour hearing at typical speech bitrates
 # while bounding worst-case memory use for a single upload.
 _MAX_UPLOAD_BYTES = 200 * 1024 * 1024
@@ -249,9 +248,7 @@ async def upload_audio(
         uploaded = await blob_manager.create_blob_from_bytes(content, blob_name)
         if not uploaded:
             raise HTTPException(status_code=502, detail="Failed to store audio file")
-        audio_url = await blob_manager.generate_read_sas_url(
-            blob_name, hours=_UPLOAD_SAS_EXPIRY_HOURS
-        )
+        audio_url = blob_manager.build_blob_url(blob_name)
 
     return UploadResponse(audio_url=audio_url, blob_name=blob_name)
 
