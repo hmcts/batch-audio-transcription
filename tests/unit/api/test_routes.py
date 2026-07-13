@@ -129,13 +129,9 @@ class TestUploadAudioLocalBackend:
         )
         assert response.status_code == 201
         body = response.json()
-        assert body["audio_url"].startswith(
-            "https://abc123.ngrok-free.app/api/v1/local-audio/"
-        )
+        assert body["audio_url"].startswith("https://abc123.ngrok-free.app/api/v1/local-audio/")
 
-        get_response = client.get(
-            body["audio_url"].replace("https://abc123.ngrok-free.app", "")
-        )
+        get_response = client.get(body["audio_url"].replace("https://abc123.ngrok-free.app", ""))
         assert get_response.status_code == 200
         assert get_response.content == b"fake-audio-bytes"
 

@@ -8,7 +8,8 @@ import { expect, test } from "@playwright/test";
 // Set PLAYWRIGHT_BASE_URL env var to target a deployed environment.
 
 const REAL_AUDIO_PATH =
-  process.env.E2E_AUDIO_FILE ?? path.join("/Users/hmcts/Downloads", "24-813.mp3");
+  process.env.E2E_AUDIO_FILE ??
+  path.join("/Users/hmcts/Downloads", "24-813.mp3");
 
 test.describe("Dashboard", () => {
   test.beforeEach(async ({ page }) => {
@@ -30,9 +31,7 @@ test.describe("Dashboard", () => {
     await expect(btn).toBeDisabled();
   });
 
-  test("shows an empty state when there are no jobs yet", async ({
-    page,
-  }) => {
+  test("shows an empty state when there are no jobs yet", async ({ page }) => {
     const jobsSections = page.locator("section", { hasText: "All uploads" });
     await expect(
       jobsSections.getByText(/no transcription jobs yet/i)
@@ -44,9 +43,7 @@ test.describe("Dashboard", () => {
 // slow (batch transcription can take minutes), so it's isolated here rather
 // than mixed into the fast dashboard checks above.
 test.describe("Real transcription pipeline", () => {
-  test("upload real audio and see the transcript appear", async ({
-    page,
-  }) => {
+  test("upload real audio and see the transcript appear", async ({ page }) => {
     test.setTimeout(15 * 60 * 1000); // batch transcription can take a while
 
     await page.goto("/batch");
