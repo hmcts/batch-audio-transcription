@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path, PurePosixPath
+from urllib.parse import quote
 
 from transcription_svc.config.settings import get_settings
 
@@ -64,4 +65,6 @@ def build_url(blob_name: str) -> str:
     base = get_settings().LOCAL_AUDIO_BASE_URL
     if not base:
         raise ValueError("LOCAL_AUDIO_BASE_URL is not configured")
-    return f"{base.rstrip('/')}/api/v1/local-audio/{blob_name}"
+    # blob_name segments are already restricted to a safe character set (see
+    # _validate_blob_name), but quote defensively in case that ever changes.
+    return f"{base.rstrip('/')}/api/v1/local-audio/{quote(blob_name, safe='/')}"

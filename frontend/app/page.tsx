@@ -22,7 +22,11 @@ export default function DashboardPage() {
   const [jobs, setJobs] = useState<TranscriptionJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
-  const pollId = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Read inside the interval tick rather than as an effect dependency, so a
+  // single interval lives for the component's lifetime instead of being
+  // torn down and recreated on every job list update.
+  const jobsRef = useRef<TranscriptionJob[]>(jobs);
+  jobsRef.current = jobs;
 
   const refresh = useCallback(async () => {
     try {
@@ -39,19 +43,18 @@ export default function DashboardPage() {
     refresh();
   }, [refresh]);
 
-  // Poll while any job is still in flight; stop as soon as everything has
-  // reached a terminal state so the dashboard doesn't poll forever.
+  // Poll while any job is still in flight; stop refetching as soon as
+  // everything has reached a terminal state so the dashboard doesn't poll
+  // forever.
   useEffect(() => {
-    const hasActiveJobs = jobs.some(
-      (job) => job.status === "PENDING" || job.status === "PROCESSING"
-    );
-    if (!hasActiveJobs) return;
-
-    pollId.current = setInterval(refresh, POLL_INTERVAL_MS);
-    return () => {
-      if (pollId.current) clearInterval(pollId.current);
-    };
-  }, [jobs, refresh]);
+    const id = setInterval(() => {
+      const hasActiveJobs = jobsRef.current.some(
+        (job) => job.status === "PENDING" || job.status === "PROCESSING"
+      );
+      if (hasActiveJobs) refresh();
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [refresh]);
 
   const handleUpload = useCallback(
     async (file: File) => {

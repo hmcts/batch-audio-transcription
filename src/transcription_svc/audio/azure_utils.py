@@ -5,6 +5,7 @@ import mimetypes
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.identity.aio import DefaultAzureCredential
@@ -109,7 +110,10 @@ class AsyncAzureBlobManager:
                     expiry=expiry,
                 )
 
-        return f"{self.account_url}/{container}/{blob_name}?{sas_token}"
+        # blob_name is sanitized to a safe character set at upload time (see
+        # api/routes.py:_sanitize_filename), but quote defensively here too in
+        # case this method is ever called with an unsanitized name.
+        return f"{self.account_url}/{container}/{quote(blob_name, safe='/')}?{sas_token}"
 
     async def create_blob_from_bytes(
         self, content: bytes, blob_name: str, container_name: str | None = None

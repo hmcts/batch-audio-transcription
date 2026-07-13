@@ -36,8 +36,23 @@ router = APIRouter(prefix="/api/v1")
 _LOCALE_RE = re.compile(r"^[a-z]{2}-[A-Z]{2}$")
 _METADATA_MAX_BYTES = 4096
 _UPLOAD_SAS_EXPIRY_HOURS = 72
-_MAX_UPLOAD_BYTES = 500 * 1024 * 1024
+# ~200MB comfortably covers a multi-hour hearing at typical speech bitrates
+# while bounding worst-case memory use for a single upload.
+_MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
 _ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".mp4", ".m4a", ".ogg", ".flac"}
+_UNSAFE_FILENAME_CHARS_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def _sanitize_filename(filename: str) -> str:
+    """Collapse anything outside [A-Za-z0-9_.-] to "_".
+
+    Keeps blob names uniformly safe for both storage backends: predictable
+    for the local dev backend's path-traversal allowlist, and free of
+    characters that would need URL-escaping in the returned audio_url.
+    """
+    name = PurePosixPath(filename).name or "audio"
+    return _UNSAFE_FILENAME_CHARS_RE.sub("_", name)
 
 
 # Rate limiter — keyed on the bearer token so limits are per-caller, not per-IP.
@@ -184,6 +199,24 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+async def _read_upload_capped(file: UploadFile, max_bytes: int) -> bytes:
+    """Read in chunks, aborting as soon as max_bytes is exceeded.
+
+    Bounds worst-case memory use to roughly max_bytes rather than reading an
+    arbitrarily oversized upload in a single call before checking its length.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413, detail="Audio file exceeds the maximum upload size"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @router.post("/uploads", status_code=201, response_model=UploadResponse)
 @limiter.limit("50/hour")
 async def upload_audio(
@@ -199,16 +232,18 @@ async def upload_audio(
             f"Allowed: {', '.join(sorted(_ALLOWED_AUDIO_EXTENSIONS))}",
         )
 
-    content = await file.read(_MAX_UPLOAD_BYTES + 1)
-    if len(content) > _MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="Audio file exceeds the maximum upload size")
+    content = await _read_upload_capped(file, _MAX_UPLOAD_BYTES)
 
-    safe_filename = PurePosixPath(file.filename or "audio").name
+    safe_filename = _sanitize_filename(file.filename or "audio")
     blob_name = f"uploads/{caller.id}/{uuid4()}-{safe_filename}"
 
     if get_settings().AUDIO_STORAGE_BACKEND == "local":
         local_storage.save(content, blob_name)
-        return UploadResponse(audio_url=local_storage.build_url(blob_name), blob_name=blob_name)
+        try:
+            audio_url = local_storage.build_url(blob_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return UploadResponse(audio_url=audio_url, blob_name=blob_name)
 
     async with AsyncAzureBlobManager() as blob_manager:
         uploaded = await blob_manager.create_blob_from_bytes(content, blob_name)

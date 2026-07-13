@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 
@@ -7,9 +8,11 @@ import { expect, test } from "@playwright/test";
 // Run with: pnpm run test:e2e (not included in pnpm run test:unit)
 // Set PLAYWRIGHT_BASE_URL env var to target a deployed environment.
 
-const REAL_AUDIO_PATH =
-  process.env.E2E_AUDIO_FILE ??
-  path.join("/Users/hmcts/Downloads", "24-813.mp3");
+// Opt-in only: no default path, since a real audio file is developer/CI
+// environment-specific and shouldn't be assumed to exist.
+const REAL_AUDIO_PATH = process.env.E2E_AUDIO_FILE;
+const REAL_AUDIO_AVAILABLE =
+  !!REAL_AUDIO_PATH && fs.existsSync(REAL_AUDIO_PATH);
 
 test.describe("Dashboard", () => {
   test.beforeEach(async ({ page }) => {
@@ -43,13 +46,19 @@ test.describe("Dashboard", () => {
 // slow (batch transcription can take minutes), so it's isolated here rather
 // than mixed into the fast dashboard checks above.
 test.describe("Real transcription pipeline", () => {
+  test.skip(
+    !REAL_AUDIO_AVAILABLE,
+    "Set E2E_AUDIO_FILE to a real audio file's path to run this test"
+  );
+
   test("upload real audio and see the transcript appear", async ({ page }) => {
     test.setTimeout(15 * 60 * 1000); // batch transcription can take a while
 
+    const audioPath = REAL_AUDIO_PATH as string;
     await page.goto("/batch");
 
-    await page.getByLabel("Audio file input").setInputFiles(REAL_AUDIO_PATH);
-    const fileName = path.basename(REAL_AUDIO_PATH);
+    await page.getByLabel("Audio file input").setInputFiles(audioPath);
+    const fileName = path.basename(audioPath);
     await expect(page.getByText(`Selected: ${fileName}`)).toBeVisible();
 
     const submitBtn = page.getByRole("button", {
