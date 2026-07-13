@@ -50,12 +50,13 @@ const BACKEND_JOB = {
 
 describe("listJobs", () => {
   it("maps backend jobs to frontend TranscriptionJob shape", async () => {
-    mockFetchOnce({ jobs: [BACKEND_JOB] });
+    mockFetchOnce({ jobs: [BACKEND_JOB], total: 1, limit: 20, offset: 0 });
 
-    const jobs = await listJobs();
+    const result = await listJobs();
 
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0]).toMatchObject({
+    expect(result.total).toBe(1);
+    expect(result.jobs).toHaveLength(1);
+    expect(result.jobs[0]).toMatchObject({
       id: BACKEND_JOB.job_id,
       caseReference: "PA/00001/2026",
       tribunal: "First-tier Tribunal — Immigration and Asylum Chamber",
@@ -63,12 +64,12 @@ describe("listJobs", () => {
       status: "COMPLETED",
       progressPercent: 100,
     });
-    expect(jobs[0].segments).toHaveLength(2);
-    expect(jobs[0].segments?.[0].speaker).toBe("Speaker 0");
+    expect(result.jobs[0].segments).toHaveLength(2);
+    expect(result.jobs[0].segments?.[0].speaker).toBe("Speaker 0");
   });
 
   it("sends the bearer token from TRANSCRIPTION_API_KEY", async () => {
-    const fetchMock = mockFetchOnce({ jobs: [] });
+    const fetchMock = mockFetchOnce({ jobs: [], total: 0, limit: 20, offset: 0 });
     await listJobs();
 
     const [, init] = fetchMock.mock.calls[0];

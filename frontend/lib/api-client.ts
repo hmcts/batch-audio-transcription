@@ -25,6 +25,9 @@ interface BackendJob {
 
 interface BackendJobList {
   jobs: BackendJob[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 interface BackendUpload {
@@ -156,10 +159,24 @@ function toTranscriptionJob(job: BackendJob): TranscriptionJob {
   };
 }
 
-export async function listJobs(): Promise<TranscriptionJob[]> {
-  const response = await backendFetch("/api/v1/jobs");
+export async function listJobs(params?: {
+  status?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ jobs: TranscriptionJob[]; total: number; limit: number; offset: number }> {
+  const query = new URLSearchParams();
+  if (params?.status) query.set("status", params.status);
+  if (params?.limit !== undefined) query.set("limit", String(params.limit));
+  if (params?.offset !== undefined) query.set("offset", String(params.offset));
+  const qs = query.size ? `?${query}` : "";
+  const response = await backendFetch(`/api/v1/jobs${qs}`);
   const body: BackendJobList = await response.json();
-  return body.jobs.map(toTranscriptionJob);
+  return {
+    jobs: body.jobs.map(toTranscriptionJob),
+    total: body.total,
+    limit: body.limit,
+    offset: body.offset,
+  };
 }
 
 export async function getJob(jobId: string): Promise<TranscriptionJob | null> {

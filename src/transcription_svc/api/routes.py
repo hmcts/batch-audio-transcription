@@ -173,10 +173,6 @@ class ListJobsResponse(BaseModel):
     offset: int
 
 
-class JobListResponse(BaseModel):
-    jobs: list[JobResponse]
-
-
 class UploadResponse(BaseModel):
     audio_url: str
     blob_name: str
