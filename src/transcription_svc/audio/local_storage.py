@@ -13,15 +13,16 @@ deployed environment (see config/settings.py).
 from __future__ import annotations
 
 import re
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from urllib.parse import quote
 
 from transcription_svc.config.settings import get_settings
 
-# blob_name may contain "/" (e.g. "uploads/<caller>/<file>") but each segment
-# is restricted to a safe character set with no "." or ".." segments, so path
-# traversal is rejected outright rather than relying solely on resolving the
-# path and checking containment after the fact.
+# blob_name is a "/"-separated logical id (e.g. "uploads/<caller>/<file>"),
+# but each segment is restricted to a safe character set with no "." or ".."
+# segments, and the on-disk filename collapses it to a single flat component
+# (see _flat_filename) — so there is no hierarchical directory join for a
+# crafted blob_name to escape, regardless of its content.
 _SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
@@ -32,13 +33,9 @@ def _validate_blob_name(blob_name: str) -> None:
             raise ValueError(f"invalid blob_name: {blob_name!r}")
 
 
-def _resolve_within_root(root: Path, blob_name: str) -> Path:
+def _flat_filename(blob_name: str) -> str:
     _validate_blob_name(blob_name)
-    target = (root / PurePosixPath(blob_name)).resolve()
-    # Defense in depth: confirm the resolved path still lives under root.
-    if target != root and root not in target.parents:
-        raise ValueError(f"blob_name escapes local storage root: {blob_name!r}")
-    return target
+    return blob_name.replace("/", "__")
 
 
 def _storage_root() -> Path:
@@ -48,16 +45,13 @@ def _storage_root() -> Path:
 
 
 def save(content: bytes, blob_name: str) -> Path:
-    root = _storage_root()
-    target = _resolve_within_root(root, blob_name)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target = _storage_root() / _flat_filename(blob_name)
     target.write_bytes(content)
     return target
 
 
 def read(blob_name: str) -> bytes:
-    root = _storage_root()
-    target = _resolve_within_root(root, blob_name)
+    target = _storage_root() / _flat_filename(blob_name)
     return target.read_bytes()
 
 

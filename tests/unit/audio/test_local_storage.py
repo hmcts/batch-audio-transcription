@@ -19,9 +19,9 @@ class TestSaveAndRead:
         local_storage.save(b"fake-audio-bytes", "uploads/caller-1/file.wav")
         assert local_storage.read("uploads/caller-1/file.wav") == b"fake-audio-bytes"
 
-    def test_creates_nested_directories(self, local_storage_dir):
+    def test_flattens_hierarchical_blob_names_to_a_single_file(self, local_storage_dir):
         local_storage.save(b"x", "a/b/c/file.mp3")
-        assert (local_storage_dir / "a" / "b" / "c" / "file.mp3").exists()
+        assert (local_storage_dir / "a__b__c__file.mp3").exists()
 
     def test_rejects_path_traversal_on_save(self):
         with pytest.raises(ValueError, match="invalid blob_name"):
