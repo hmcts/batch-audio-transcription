@@ -129,6 +129,8 @@ function toSegments(
     text: entry.text,
     startTime: entry.start_time,
     duration: Math.max(0, entry.end_time - entry.start_time),
+    confidence: 1.0,
+    flaggedForReview: false,
   }));
 }
 
@@ -163,7 +165,12 @@ export async function listJobs(params?: {
   status?: string;
   limit?: number;
   offset?: number;
-}): Promise<{ jobs: TranscriptionJob[]; total: number; limit: number; offset: number }> {
+}): Promise<{
+  jobs: TranscriptionJob[];
+  total: number;
+  limit: number;
+  offset: number;
+}> {
   const query = new URLSearchParams();
   if (params?.status) query.set("status", params.status);
   if (params?.limit !== undefined) query.set("limit", String(params.limit));

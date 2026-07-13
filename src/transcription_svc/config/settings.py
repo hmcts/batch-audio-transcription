@@ -27,7 +27,7 @@ class Settings(BaseSettings):
 
     # Local audio storage (dev only — never set in deployed envs)
     AUDIO_STORAGE_BACKEND: str = "azure"  # "azure" | "local"
-    LOCAL_AUDIO_STORAGE_DIR: str = "/tmp/local-audio"  # noqa: S108
+    LOCAL_AUDIO_STORAGE_DIR: str = "/tmp/local-audio"  # noqa: S108  # nosec B108
     LOCAL_AUDIO_BASE_URL: str = ""
 
     # Polling

@@ -69,7 +69,12 @@ describe("listJobs", () => {
   });
 
   it("sends the bearer token from TRANSCRIPTION_API_KEY", async () => {
-    const fetchMock = mockFetchOnce({ jobs: [], total: 0, limit: 20, offset: 0 });
+    const fetchMock = mockFetchOnce({
+      jobs: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+    });
     await listJobs();
 
     const [, init] = fetchMock.mock.calls[0];

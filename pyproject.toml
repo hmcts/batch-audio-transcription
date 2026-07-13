@@ -23,6 +23,7 @@ dependencies = [
     "azure-identity>=1.17",
     "uwotm8>=0.1",
     "slowapi>=0.1.9",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
