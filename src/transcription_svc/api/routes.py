@@ -5,10 +5,11 @@ import json
 import logging
 import re
 import socket
+from pathlib import PurePosixPath
 from urllib.parse import urlparse
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -16,10 +17,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from transcription_svc.api.dependencies import get_caller
+from transcription_svc.audio.azure_utils import AsyncAzureBlobManager
 from transcription_svc.audio.submission import submit_and_queue_batch_job
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.engine import get_session
-from transcription_svc.database.interface import get_job_by_id, get_job_by_idempotency_key
+from transcription_svc.database.interface import (
+    get_job_by_id,
+    get_job_by_idempotency_key,
+    list_jobs_by_caller,
+)
 from transcription_svc.database.models import Caller, JobStatus, TranscriptionJob
 
 logger = logging.getLogger(__name__)
@@ -27,6 +33,9 @@ router = APIRouter(prefix="/api/v1")
 
 _LOCALE_RE = re.compile(r"^[a-z]{2}-[A-Z]{2}$")
 _METADATA_MAX_BYTES = 4096
+_UPLOAD_SAS_EXPIRY_HOURS = 72
+_MAX_UPLOAD_BYTES = 500 * 1024 * 1024
+_ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".mp4", ".m4a", ".ogg", ".flac"}
 
 
 # Rate limiter — keyed on the bearer token so limits are per-caller, not per-IP.
@@ -131,6 +140,15 @@ class JobResponse(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+class JobListResponse(BaseModel):
+    jobs: list[JobResponse]
+
+
+class UploadResponse(BaseModel):
+    audio_url: str
+    blob_name: str
+
+
 def _to_response(job: TranscriptionJob) -> JobResponse:
     entries = None
     if job.status == JobStatus.SUCCEEDED and job.dialogue_entries:
@@ -162,6 +180,39 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
 @router.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@router.post("/uploads", status_code=201, response_model=UploadResponse)
+@limiter.limit("50/hour")
+async def upload_audio(
+    request: Request,
+    file: UploadFile = File(...),
+    caller: Caller = Depends(get_caller),
+) -> UploadResponse:
+    extension = PurePosixPath(file.filename or "").suffix.lower()
+    if extension not in _ALLOWED_AUDIO_EXTENSIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported file type '{extension}'. "
+            f"Allowed: {', '.join(sorted(_ALLOWED_AUDIO_EXTENSIONS))}",
+        )
+
+    content = await file.read(_MAX_UPLOAD_BYTES + 1)
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Audio file exceeds the maximum upload size")
+
+    safe_filename = PurePosixPath(file.filename or "audio").name
+    blob_name = f"uploads/{caller.id}/{uuid4()}-{safe_filename}"
+
+    async with AsyncAzureBlobManager() as blob_manager:
+        uploaded = await blob_manager.create_blob_from_bytes(content, blob_name)
+        if not uploaded:
+            raise HTTPException(status_code=502, detail="Failed to store audio file")
+        audio_url = await blob_manager.generate_read_sas_url(
+            blob_name, hours=_UPLOAD_SAS_EXPIRY_HOURS
+        )
+
+    return UploadResponse(audio_url=audio_url, blob_name=blob_name)
 
 
 @router.post("/jobs", status_code=201, response_model=JobResponse)
@@ -202,6 +253,15 @@ async def submit_job(
         ) from None
 
     return _to_response(job)
+
+
+@router.get("/jobs", response_model=JobListResponse)
+async def list_jobs(
+    session: Session = Depends(get_session),
+    caller: Caller = Depends(get_caller),
+) -> JobListResponse:
+    jobs = list_jobs_by_caller(session, caller.id)
+    return JobListResponse(jobs=[_to_response(job) for job in jobs])
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
