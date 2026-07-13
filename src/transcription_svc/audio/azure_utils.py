@@ -371,6 +371,34 @@ class AsyncAzureBlobManager:
         else:
             return True
 
+    async def get_blob_size(self, blob_name: str, container_name: str | None = None) -> int | None:
+        """Return a blob's size in bytes, or None if it doesn't exist."""
+        container = container_name or self.container_name
+        try:
+            async with self._blob_service_client() as blob_service:
+                blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
+                properties = await blob_client.get_blob_properties()
+                return properties.size
+        except ResourceNotFoundError:
+            return None
+
+    async def download_blob_range(
+        self, blob_name: str, start: int, length: int, container_name: str | None = None
+    ) -> bytes | None:
+        """Download a byte range of a blob's content (async). None if it doesn't exist.
+
+        Used to serve HTTP Range requests (e.g. audio playback seeking)
+        without pulling the whole blob into memory.
+        """
+        container = container_name or self.container_name
+        try:
+            async with self._blob_service_client() as blob_service:
+                blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
+                download_stream = await blob_client.download_blob(offset=start, length=length)
+                return await download_stream.readall()
+        except ResourceNotFoundError:
+            return None
+
     async def download_blob_to_file(
         self, blob_name: str, file_path: Path, container_name: str | None = None
     ) -> bool:

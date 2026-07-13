@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
 
 _LOCALE_RE = re.compile(r"^[a-z]{2}-[A-Z]{2}$")
+_RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 _METADATA_MAX_BYTES = 4096
 # ~200MB comfortably covers a multi-hour hearing at typical speech bitrates
 # while bounding worst-case memory use for a single upload.
@@ -96,6 +97,11 @@ def _reject_private_url(url: str, field: str = "url") -> None:
 
 class SubmitJobRequest(BaseModel):
     audio_url: str
+    # Blob name (as returned by POST /uploads) for the job's own audio, used
+    # to serve it back for playback via GET /jobs/{id}/audio. Optional since
+    # audio_url may point at storage this service doesn't own (e.g. a caller
+    # submitting an already-public URL) — playback is simply unavailable then.
+    blob_name: str | None = None
     locale: str = "en-GB"
     enable_diarization: bool = True
     callback_url: str | None = None
@@ -298,6 +304,7 @@ async def submit_job(
             callback_url=body.callback_url,
             idempotency_key=body.idempotency_key,
             metadata=body.metadata,
+            audio_blob_path=body.blob_name,
         )
     except IntegrityError:
         # Two concurrent requests with the same idempotency_key both passed the
@@ -334,6 +341,72 @@ async def get_job(
     if not job or job.caller_id != caller.id:
         raise HTTPException(status_code=404, detail="Job not found")
     return _to_response(job)
+
+
+@router.get("/jobs/{job_id}/audio")
+async def get_job_audio(
+    job_id: UUID,
+    request: Request,
+    session: Session = Depends(get_session),
+    caller: Caller = Depends(get_caller),
+) -> Response:
+    """Stream a job's source audio back for playback.
+
+    The browser never talks to blob storage directly — it's deny-by-default
+    outside this service's own managed identity — so this proxies the bytes
+    through the same auth the rest of the API uses. Honours HTTP Range
+    requests (returning 206 Partial Content) since browsers issue them when
+    a user seeks to an unbuffered position — without this, seeking on an
+    <audio> element that hasn't downloaded the whole file silently no-ops.
+    """
+    job = get_job_by_id(session, job_id)
+    if not job or job.caller_id != caller.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not job.audio_blob_path:
+        raise HTTPException(status_code=404, detail="Audio not available for this job")
+
+    is_local = get_settings().AUDIO_STORAGE_BACKEND == "local"
+
+    if is_local:
+        try:
+            total_size = local_storage.size(job.audio_blob_path)
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(status_code=404, detail="Audio file not found") from None
+    else:
+        async with AsyncAzureBlobManager() as blob_manager:
+            total_size = await blob_manager.get_blob_size(job.audio_blob_path)
+        if total_size is None:
+            raise HTTPException(status_code=404, detail="Audio file not found")
+
+    start, end = 0, total_size - 1
+    status_code = 200
+    range_match = _RANGE_RE.match(request.headers.get("range") or "")
+    if range_match:
+        start = int(range_match.group(1)) if range_match.group(1) else 0
+        end = (
+            min(int(range_match.group(2)), total_size - 1)
+            if range_match.group(2)
+            else total_size - 1
+        )
+        status_code = 206
+    length = max(0, end - start + 1)
+
+    if is_local:
+        content = local_storage.read_range(job.audio_blob_path, start, length)
+    else:
+        async with AsyncAzureBlobManager() as blob_manager:
+            content = await blob_manager.download_blob_range(job.audio_blob_path, start, length)
+        if content is None:
+            raise HTTPException(status_code=404, detail="Audio file not found")
+
+    media_type = mimetypes.guess_type(job.audio_blob_path)[0] or "application/octet-stream"
+    headers = {"Accept-Ranges": "bytes", "Content-Length": str(length)}
+    if status_code == 206:
+        headers["Content-Range"] = f"bytes {start}-{end}/{total_size}"
+
+    return Response(
+        content=content, media_type=media_type, status_code=status_code, headers=headers
+    )
 
 
 @router.delete("/jobs/{job_id}", status_code=204)

@@ -24,6 +24,57 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
   const jobRef = useRef(job);
   jobRef.current = job;
 
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const audioCleanupRef = useRef<(() => void) | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [position, setPosition] = useState(0);
+  const [audioDuration, setAudioDuration] = useState(0);
+  const [audioAvailable, setAudioAvailable] = useState(true);
+
+  // A callback ref (rather than an effect) so listeners attach exactly when
+  // the <audio> element mounts — which happens on first render if the job is
+  // already COMPLETED, or later, whenever polling flips it to COMPLETED.
+  const attachAudioRef = (el: HTMLAudioElement | null) => {
+    audioCleanupRef.current?.();
+    audioCleanupRef.current = null;
+    audioElRef.current = el;
+    if (!el) return;
+
+    const onTimeUpdate = () => setPosition(el.currentTime);
+    const onLoadedMetadata = () => setAudioDuration(el.duration);
+    const onPlay = () => setPlaying(true);
+    const onPause = () => setPlaying(false);
+    const onError = () => setAudioAvailable(false);
+
+    el.addEventListener("timeupdate", onTimeUpdate);
+    el.addEventListener("loadedmetadata", onLoadedMetadata);
+    el.addEventListener("play", onPlay);
+    el.addEventListener("pause", onPause);
+    el.addEventListener("error", onError);
+
+    audioCleanupRef.current = () => {
+      el.removeEventListener("timeupdate", onTimeUpdate);
+      el.removeEventListener("loadedmetadata", onLoadedMetadata);
+      el.removeEventListener("play", onPlay);
+      el.removeEventListener("pause", onPause);
+      el.removeEventListener("error", onError);
+    };
+  };
+
+  const togglePlay = () => {
+    const audio = audioElRef.current;
+    if (!audio) return;
+    if (audio.paused) audio.play();
+    else audio.pause();
+  };
+
+  const seekTo = (time: number) => {
+    const audio = audioElRef.current;
+    if (!audio) return;
+    audio.currentTime = time;
+    setPosition(time);
+  };
+
   useEffect(() => {
     const id = setInterval(async () => {
       if (jobRef.current.status !== "PENDING" && jobRef.current.status !== "PROCESSING") {
@@ -61,7 +112,31 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
 
     return (
       <main className="min-h-screen bg-background">
-        <AudioPlayerBar duration={totalDuration} />
+        <audio
+          ref={attachAudioRef}
+          src={apiPath(`/api/audio/${job.id}`)}
+          preload="metadata"
+          className="hidden"
+        >
+          <track kind="captions" />
+        </audio>
+
+        {audioAvailable ? (
+          <AudioPlayerBar
+            duration={audioDuration || totalDuration}
+            position={position}
+            playing={playing}
+            onTogglePlay={togglePlay}
+            onSeek={seekTo}
+            onSpeedChange={(speed) => {
+              if (audioElRef.current) audioElRef.current.playbackRate = speed;
+            }}
+          />
+        ) : (
+          <div className="bg-white border-b border-border px-4 py-3 text-sm text-muted-foreground">
+            Audio playback is unavailable for this recording.
+          </div>
+        )}
 
         <div className="max-w-5xl mx-auto px-4 py-6">
           {backLink}
@@ -79,7 +154,11 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
               </div>
               <div className="border border-border rounded-lg divide-y divide-border">
                 {job.segments.map((segment) => (
-                  <TranscriptSegment key={segment.id} segment={segment} />
+                  <TranscriptSegment
+                    key={segment.id}
+                    segment={segment}
+                    onSeek={audioAvailable ? seekTo : undefined}
+                  />
                 ))}
               </div>
             </div>

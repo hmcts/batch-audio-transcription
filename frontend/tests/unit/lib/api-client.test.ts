@@ -32,9 +32,11 @@ const BACKEND_JOB = {
   created_at: "2026-07-01T09:00:00Z",
   updated_at: "2026-07-01T09:30:00Z",
   dialogue_entries: [
-    { speaker: "0", text: "Good morning.", start_time: 0, end_time: 2.5 },
+    // The backend already labels speakers (e.g. "Speaker 0") via
+    // add_speaker_labels before this ever reaches the frontend.
+    { speaker: "Speaker 0", text: "Good morning.", start_time: 0, end_time: 2.5 },
     {
-      speaker: "1",
+      speaker: "Speaker 1",
       text: "Good morning, Judge.",
       start_time: 2.5,
       end_time: 5,

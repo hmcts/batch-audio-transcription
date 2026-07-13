@@ -164,6 +164,136 @@ class TestLocalAudio:
         assert response.status_code == 404
 
 
+class TestGetJobAudio:
+    def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
+        response = client.get(f"/api/v1/jobs/{uuid.uuid4()}/audio")
+        assert response.status_code == 404
+
+    def test_returns_404_for_other_callers_job(self, client, as_caller, mocker):
+        job = _make_job()
+        job.caller_id = uuid.uuid4()
+        job.audio_blob_path = "uploads/x/hearing.wav"
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        response = client.get(f"/api/v1/jobs/{job.id}/audio")
+        assert response.status_code == 404
+
+    def test_returns_404_when_job_has_no_blob_path(self, client, as_caller, mocker):
+        job = _make_job()
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.audio_blob_path = None
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        response = client.get(f"/api/v1/jobs/{job.id}/audio")
+        assert response.status_code == 404
+
+    def test_streams_full_content_from_local_backend(
+        self, client, as_caller, mocker, tmp_path, monkeypatch
+    ):
+        from transcription_svc.audio import local_storage
+        from transcription_svc.config.settings import get_settings
+
+        monkeypatch.setenv("AUDIO_STORAGE_BACKEND", "local")
+        monkeypatch.setenv("LOCAL_AUDIO_STORAGE_DIR", str(tmp_path))
+        get_settings.cache_clear()
+
+        blob_name = "uploads/x/hearing.wav"
+        local_storage.save(b"fake-audio-bytes", blob_name)
+
+        job = _make_job()
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.audio_blob_path = blob_name
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}/audio")
+        get_settings.cache_clear()
+
+        assert response.status_code == 200
+        assert response.content == b"fake-audio-bytes"
+        assert response.headers["accept-ranges"] == "bytes"
+        assert response.headers["content-length"] == "16"
+
+    def test_streams_partial_range_from_local_backend(
+        self, client, as_caller, mocker, tmp_path, monkeypatch
+    ):
+        from transcription_svc.audio import local_storage
+        from transcription_svc.config.settings import get_settings
+
+        monkeypatch.setenv("AUDIO_STORAGE_BACKEND", "local")
+        monkeypatch.setenv("LOCAL_AUDIO_STORAGE_DIR", str(tmp_path))
+        get_settings.cache_clear()
+
+        blob_name = "uploads/x/hearing.wav"
+        local_storage.save(b"0123456789", blob_name)
+
+        job = _make_job()
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.audio_blob_path = blob_name
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}/audio", headers={"Range": "bytes=2-4"})
+        get_settings.cache_clear()
+
+        assert response.status_code == 206
+        assert response.content == b"234"
+        assert response.headers["content-range"] == "bytes 2-4/10"
+        assert response.headers["content-length"] == "3"
+
+    def test_returns_404_when_local_file_missing(
+        self, client, as_caller, mocker, tmp_path, monkeypatch
+    ):
+        from transcription_svc.config.settings import get_settings
+
+        monkeypatch.setenv("AUDIO_STORAGE_BACKEND", "local")
+        monkeypatch.setenv("LOCAL_AUDIO_STORAGE_DIR", str(tmp_path))
+        get_settings.cache_clear()
+
+        job = _make_job()
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.audio_blob_path = "uploads/x/missing.wav"
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}/audio")
+        get_settings.cache_clear()
+
+        assert response.status_code == 404
+
+    def test_streams_partial_range_from_azure_backend(self, client, as_caller, mocker):
+        job = _make_job()
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.audio_blob_path = "uploads/x/hearing.wav"
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        manager = mocker.AsyncMock()
+        manager.get_blob_size = mocker.AsyncMock(return_value=100)
+        manager.download_blob_range = mocker.AsyncMock(return_value=b"partial-bytes")
+        manager.__aenter__ = mocker.AsyncMock(return_value=manager)
+        manager.__aexit__ = mocker.AsyncMock(return_value=False)
+        mocker.patch("transcription_svc.api.routes.AsyncAzureBlobManager", return_value=manager)
+
+        response = client.get(f"/api/v1/jobs/{job.id}/audio", headers={"Range": "bytes=10-30"})
+
+        assert response.status_code == 206
+        assert response.content == b"partial-bytes"
+        assert response.headers["content-range"] == "bytes 10-30/100"
+        manager.download_blob_range.assert_awaited_once_with("uploads/x/hearing.wav", 10, 21)
+
+    def test_returns_404_when_azure_blob_missing(self, client, as_caller, mocker):
+        job = _make_job()
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.audio_blob_path = "uploads/x/missing.wav"
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        manager = mocker.AsyncMock()
+        manager.get_blob_size = mocker.AsyncMock(return_value=None)
+        manager.__aenter__ = mocker.AsyncMock(return_value=manager)
+        manager.__aexit__ = mocker.AsyncMock(return_value=False)
+        mocker.patch("transcription_svc.api.routes.AsyncAzureBlobManager", return_value=manager)
+
+        response = client.get(f"/api/v1/jobs/{job.id}/audio")
+
+        assert response.status_code == 404
+
+
 class TestSubmitJob:
     def test_returns_201_on_success(self, client, as_caller, mocker):
         job = _make_job()

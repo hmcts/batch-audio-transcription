@@ -121,7 +121,9 @@ function toSegments(
   if (!entries || entries.length === 0) return undefined;
   return entries.map((entry, index) => ({
     id: `seg-${index}`,
-    speaker: `Speaker ${entry.speaker}`,
+    // The backend already labels speakers (e.g. "Speaker 1") via
+    // add_speaker_labels — prefixing again here produced "Speaker Speaker 1".
+    speaker: entry.speaker,
     speakerColor: colorForSpeaker(entry.speaker),
     text: entry.text,
     startTime: entry.start_time,
@@ -182,6 +184,22 @@ export async function getJob(jobId: string): Promise<TranscriptionJob | null> {
   }
 }
 
+export async function getJobAudio(
+  jobId: string,
+  rangeHeader?: string | null
+): Promise<Response | null> {
+  try {
+    return await backendFetch(`/api/v1/jobs/${jobId}/audio`, {
+      headers: rangeHeader ? { Range: rangeHeader } : undefined,
+    });
+  } catch (err) {
+    if (err instanceof BackendApiError && err.status === 404) {
+      return null;
+    }
+    throw err;
+  }
+}
+
 export async function uploadAudio(
   file: Blob,
   filename: string
@@ -204,13 +222,15 @@ export interface SubmitJobMetadata {
 
 export async function submitJob(
   audioUrl: string,
-  metadata: SubmitJobMetadata
+  metadata: SubmitJobMetadata,
+  blobName?: string
 ): Promise<TranscriptionJob> {
   const response = await backendFetch("/api/v1/jobs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       audio_url: audioUrl,
+      blob_name: blobName,
       metadata: {
         case_reference: metadata.caseReference,
         tribunal: metadata.tribunal,
@@ -226,11 +246,15 @@ export async function uploadAndSubmit(
   file: Blob,
   filename: string
 ): Promise<TranscriptionJob> {
-  const { audio_url } = await uploadAudio(file, filename);
+  const { audio_url, blob_name } = await uploadAudio(file, filename);
   const caseReference = filename.replace(/\.[^.]+$/, "").replace(/_/g, "/");
-  return submitJob(audio_url, {
-    caseReference,
-    tribunal: "First-tier Tribunal — Immigration and Asylum Chamber",
-    audioFileName: filename,
-  });
+  return submitJob(
+    audio_url,
+    {
+      caseReference,
+      tribunal: "First-tier Tribunal — Immigration and Asylum Chamber",
+      audioFileName: filename,
+    },
+    blob_name
+  );
 }

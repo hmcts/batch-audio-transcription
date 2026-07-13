@@ -5,9 +5,10 @@ import { cn } from "@/lib/utils";
 
 interface TranscriptSegmentProps {
   segment: TranscriptSegmentType;
+  onSeek?: (time: number) => void;
 }
 
-export function TranscriptSegment({ segment }: TranscriptSegmentProps) {
+export function TranscriptSegment({ segment, onSeek }: TranscriptSegmentProps) {
   const pct =
     segment.confidence !== undefined
       ? confidencePercent(segment.confidence)
@@ -23,10 +24,20 @@ export function TranscriptSegment({ segment }: TranscriptSegmentProps) {
     >
       {/* Timestamp */}
       <div className="w-14 shrink-0 text-right">
-        <span className="text-xs font-mono text-primary hover:underline cursor-pointer">
+        <span
+          className="text-xs font-mono text-primary hover:underline cursor-pointer"
+          onClick={() => onSeek?.(segment.startTime)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") onSeek?.(segment.startTime);
+          }}
+          role="button"
+          tabIndex={onSeek ? 0 : undefined}
+        >
           {formatTime(segment.startTime)}
         </span>
-        <div className="text-xs text-muted-foreground">{segment.duration}s</div>
+        <div className="text-xs text-muted-foreground">
+          {Math.round(segment.duration)}s
+        </div>
       </div>
 
       {/* Content */}
