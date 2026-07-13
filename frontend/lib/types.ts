@@ -37,6 +37,7 @@ export interface TranscriptionJob {
   completedAt?: string;
   status: JobStatus;
   progressPercent?: number;
+  errorMessage?: string;
   segments?: TranscriptSegment[];
   accuracy?: TranscriptAccuracy;
   lowConfidenceSegments?: LowConfidenceSegment[];

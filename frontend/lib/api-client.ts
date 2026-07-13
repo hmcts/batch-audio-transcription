@@ -152,6 +152,7 @@ function toTranscriptionJob(job: BackendJob): TranscriptionJob {
         : undefined,
     status,
     progressPercent: PROGRESS_BY_STATUS[job.status] ?? 0,
+    errorMessage: job.error_message ?? undefined,
     segments: toSegments(job.dialogue_entries),
   };
 }

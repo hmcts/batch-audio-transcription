@@ -1,14 +1,25 @@
+"use client";
+
 import { FileAudio } from "lucide-react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { JobStatusBadge } from "@/components/job-status/job-status-badge";
 import { Progress } from "@/components/ui/progress";
-import type { TranscriptionJob } from "@/lib/types";
+import type { JobStatus, TranscriptionJob } from "@/lib/types";
+
+const TRANSCRIPT_LINK_LABEL: Record<JobStatus, string> = {
+  COMPLETED: "View transcript →",
+  FAILED: "View details →",
+  PENDING: "View status →",
+  PROCESSING: "View status →",
+};
 
 interface JobsTableProps {
   jobs: TranscriptionJob[];
 }
 
 export function JobsTable({ jobs }: JobsTableProps) {
+  const router = useRouter();
+
   if (jobs.length === 0) {
     return (
       <p className="text-center text-muted-foreground py-8">
@@ -33,7 +44,11 @@ export function JobsTable({ jobs }: JobsTableProps) {
         </thead>
         <tbody className="divide-y divide-border">
           {jobs.map((job) => (
-            <tr key={job.id} className="hover:bg-muted/30 transition-colors">
+            <tr
+              key={job.id}
+              onClick={() => router.push(`/jobs/${job.id}`)}
+              className="hover:bg-muted/30 transition-colors cursor-pointer"
+            >
               <td className="px-4 py-3 font-medium">{job.caseReference}</td>
               <td className="px-4 py-3 text-muted-foreground">
                 <div className="flex items-center gap-2">
@@ -55,21 +70,19 @@ export function JobsTable({ jobs }: JobsTableProps) {
                   <JobStatusBadge status={job.status} />
                   {job.status === "PROCESSING" &&
                     job.progressPercent !== undefined && (
-                      <Progress value={job.progressPercent} className="w-24" />
+                      <div className="flex items-center gap-2">
+                        <Progress value={job.progressPercent} className="w-24" />
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          {job.progressPercent}%
+                        </span>
+                      </div>
                     )}
                 </div>
               </td>
               <td className="px-4 py-3">
-                {job.status === "COMPLETED" ? (
-                  <Link
-                    href={`/jobs/${job.id}`}
-                    className="text-primary hover:underline font-medium"
-                  >
-                    View transcript →
-                  </Link>
-                ) : (
-                  <span className="text-muted-foreground">—</span>
-                )}
+                <span className="text-primary hover:underline font-medium">
+                  {TRANSCRIPT_LINK_LABEL[job.status]}
+                </span>
               </td>
             </tr>
           ))}

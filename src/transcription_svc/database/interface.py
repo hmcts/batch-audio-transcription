@@ -70,6 +70,8 @@ def update_job_batch_status(session: Session, job_id: UUID, batch_status: BatchJ
     job = session.get(TranscriptionJob, job_id)
     if job:
         job.batch_job_status = batch_status
+        if batch_status == BatchJobStatus.RUNNING:
+            job.status = JobStatus.RUNNING
         job.updated_datetime = datetime.now(UTC)
         session.add(job)
         session.commit()

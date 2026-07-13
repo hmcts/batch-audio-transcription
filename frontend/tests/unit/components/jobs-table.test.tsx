@@ -3,14 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { JobsTable } from "@/components/jobs-table/jobs-table";
 import { MOCK_JOBS } from "@/lib/mock-data";
 
-vi.mock("next/link", () => ({
-  default: ({
-    href,
-    children,
-  }: {
-    href: string;
-    children: React.ReactNode;
-  }) => <a href={href}>{children}</a>,
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
 describe("JobsTable", () => {
@@ -34,9 +28,22 @@ describe("JobsTable", () => {
     );
   });
 
-  it("shows dash for non-completed jobs", () => {
+  it("shows a details link for non-completed jobs", () => {
     const failedJobs = MOCK_JOBS.filter((j) => j.status === "FAILED");
     render(<JobsTable jobs={failedJobs} />);
-    expect(screen.getByText("—")).toBeDefined();
+    expect(screen.getAllByText(/view details/i).length).toBe(
+      failedJobs.length
+    );
+  });
+
+  it("shows percentage alongside the progress bar for processing jobs", () => {
+    const processingJob = {
+      ...MOCK_JOBS[0],
+      id: "job-processing-test",
+      status: "PROCESSING" as const,
+      progressPercent: 60,
+    };
+    render(<JobsTable jobs={[processingJob]} />);
+    expect(screen.getByText("60%")).toBeDefined();
   });
 });
