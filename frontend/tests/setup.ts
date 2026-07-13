@@ -1,7 +1,14 @@
 import { afterEach, beforeAll, vi } from "vitest";
 
+// The real "server-only" package throws on import unless resolved with the
+// "react-server" condition (which Next.js's bundler sets but Vitest doesn't),
+// so stub it out for tests that exercise lib/api-client.ts directly.
+vi.mock("server-only", () => ({}));
+
 beforeAll(() => {
   process.env.NEXT_PUBLIC_API_URL = "http://localhost:8000";
+  process.env.BACKEND_INTERNAL_URL = "http://localhost:8001";
+  process.env.TRANSCRIPTION_API_KEY = "test-api-key";
 });
 
 afterEach(() => {

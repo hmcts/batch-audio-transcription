@@ -8,8 +8,11 @@ interface TranscriptSegmentProps {
 }
 
 export function TranscriptSegment({ segment }: TranscriptSegmentProps) {
-  const pct = confidencePercent(segment.confidence);
-  const isLowConf = pct < 85;
+  const pct =
+    segment.confidence !== undefined
+      ? confidencePercent(segment.confidence)
+      : undefined;
+  const isLowConf = pct !== undefined && pct < 85;
 
   return (
     <div
@@ -35,16 +38,18 @@ export function TranscriptSegment({ segment }: TranscriptSegmentProps) {
             style={{ backgroundColor: segment.speakerColor }}
           />
           <span className="font-semibold text-sm">{segment.speaker}</span>
-          <span
-            className={cn(
-              "text-xs font-semibold px-1.5 py-0.5 rounded",
-              isLowConf
-                ? "bg-orange-100 text-orange-800"
-                : "bg-muted text-muted-foreground"
-            )}
-          >
-            {pct}% CONF
-          </span>
+          {pct !== undefined && (
+            <span
+              className={cn(
+                "text-xs font-semibold px-1.5 py-0.5 rounded",
+                isLowConf
+                  ? "bg-orange-100 text-orange-800"
+                  : "bg-muted text-muted-foreground"
+              )}
+            >
+              {pct}% CONF
+            </span>
+          )}
         </div>
 
         {/* Text */}
