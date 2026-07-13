@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import mimetypes
 import re
 import socket
 from pathlib import PurePosixPath
@@ -17,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from transcription_svc.api.dependencies import get_caller
+from transcription_svc.audio import local_storage
 from transcription_svc.audio.azure_utils import AsyncAzureBlobManager
 from transcription_svc.audio.submission import submit_and_queue_batch_job
 from transcription_svc.config.settings import get_settings
@@ -204,6 +206,10 @@ async def upload_audio(
     safe_filename = PurePosixPath(file.filename or "audio").name
     blob_name = f"uploads/{caller.id}/{uuid4()}-{safe_filename}"
 
+    if get_settings().AUDIO_STORAGE_BACKEND == "local":
+        local_storage.save(content, blob_name)
+        return UploadResponse(audio_url=local_storage.build_url(blob_name), blob_name=blob_name)
+
     async with AsyncAzureBlobManager() as blob_manager:
         uploaded = await blob_manager.create_blob_from_bytes(content, blob_name)
         if not uploaded:
@@ -213,6 +219,28 @@ async def upload_audio(
         )
 
     return UploadResponse(audio_url=audio_url, blob_name=blob_name)
+
+
+@router.get("/local-audio/{blob_name:path}")
+async def get_local_audio(blob_name: str) -> Response:
+    """Serve locally-stored audio — only active in AUDIO_STORAGE_BACKEND=local.
+
+    Deliberately unauthenticated: Azure Speech Batch fetches contentUrls
+    directly and cannot send our bearer token. Safe because (a) this route
+    404s outright unless a developer has explicitly opted into local storage,
+    which never happens in a deployed environment, and (b) blob names embed
+    an unguessable UUID.
+    """
+    if get_settings().AUDIO_STORAGE_BACKEND != "local":
+        raise HTTPException(status_code=404)
+
+    try:
+        content = local_storage.read(blob_name)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(status_code=404, detail="Audio file not found") from None
+
+    media_type = mimetypes.guess_type(blob_name)[0] or "application/octet-stream"
+    return Response(content=content, media_type=media_type)
 
 
 @router.post("/jobs", status_code=201, response_model=JobResponse)
