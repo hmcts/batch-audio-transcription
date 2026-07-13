@@ -42,10 +42,12 @@ export function JobsTable({ jobs }: JobsTableProps) {
                 </div>
               </td>
               <td className="px-4 py-3 text-muted-foreground">
-                {new Date(job.uploadedAt).toLocaleDateString("en-GB", {
+                {new Date(job.uploadedAt).toLocaleString("en-GB", {
                   day: "numeric",
                   month: "short",
                   year: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
                 })}
               </td>
               <td className="px-4 py-3">

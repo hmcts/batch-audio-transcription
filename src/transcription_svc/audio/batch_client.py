@@ -12,7 +12,6 @@ from transcription_svc.config.settings import get_settings
 from transcription_svc.database.models import DialogueEntry
 
 _TICKS_PER_SECOND: int = 10_000_000
-_BATCH_API_VERSION: str = "2024-11-15"
 _HTTP_TIMEOUT: float = 30.0
 _HTTP_SERVER_ERROR_MIN: int = 500
 
@@ -36,8 +35,13 @@ def _auth_headers() -> dict[str, str]:
 
 
 def _submit_url() -> str:
+    # Path-versioned, no api-version query string: the "?api-version=..."
+    # form 404s outright (route doesn't exist), confirmed against a real
+    # Speech resource. Downstream calls (status/results/delete) use the
+    # Location URL Azure itself returns from this call, so they don't need
+    # a matching fix.
     endpoint = get_settings().AZURE_SPEECH_ENDPOINT.rstrip("/")
-    return f"{endpoint}/speechtotext/transcriptions?api-version={_BATCH_API_VERSION}"
+    return f"{endpoint}/speechtotext/v3.2/transcriptions"
 
 
 @_RETRY_POLICY
