@@ -1,6 +1,13 @@
 "use client";
 
-import { AlertTriangle, Check, History, Pencil, RotateCcw, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  History,
+  Pencil,
+  RotateCcw,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { confidencePercent, formatTime } from "@/lib/mock-data";
@@ -225,7 +232,9 @@ function Words({
               }
               role={onCorrectRange ? "button" : undefined}
               tabIndex={onCorrectRange ? 0 : undefined}
-              title={onCorrectRange ? "Click to edit this correction" : undefined}
+              title={
+                onCorrectRange ? "Click to edit this correction" : undefined
+              }
               className={cn(
                 "rounded bg-emerald-100 text-emerald-900",
                 isSpoken && "bg-primary/30",
@@ -245,7 +254,9 @@ function Words({
             const isSpoken =
               isActive && liveTime >= word.startTime && liveTime < word.endTime;
             const isHighlighted =
-              !!highlightRange && i >= highlightRange.start && i <= highlightRange.end;
+              !!highlightRange &&
+              i >= highlightRange.start &&
+              i <= highlightRange.end;
             return (
               <span
                 key={i}
@@ -334,9 +345,7 @@ function HistoryPanel({
   onRollbackToHistory,
   onHoverRange,
 }: HistoryPanelProps) {
-  const [pendingIndex, setPendingIndex] = useState<number | "all" | null>(
-    null
-  );
+  const [pendingIndex, setPendingIndex] = useState<number | "all" | null>(null);
 
   const rollbackAll = async () => {
     setPendingIndex("all");
@@ -380,7 +389,8 @@ function HistoryPanel({
             key={`${entry.timestamp}-${index}`}
             className="text-xs border-t border-border pt-2 first:border-t-0 first:pt-0"
             onMouseEnter={
-              entry.startWordIndex !== undefined && entry.endWordIndex !== undefined
+              entry.startWordIndex !== undefined &&
+              entry.endWordIndex !== undefined
                 ? () =>
                     onHoverRange?.({
                       start: entry.startWordIndex as number,
@@ -391,7 +401,9 @@ function HistoryPanel({
             onMouseLeave={() => onHoverRange?.(null)}
           >
             <div className="flex items-center justify-between gap-2">
-              <span className="font-medium">{historyKindLabel(entry.kind)}</span>
+              <span className="font-medium">
+                {historyKindLabel(entry.kind)}
+              </span>
               {onRollbackToHistory && (
                 <button
                   type="button"

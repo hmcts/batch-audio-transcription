@@ -937,10 +937,9 @@ class TestRollbackSegment:
         entry = response.json()["dialogue_entries"][0]
         assert entry["corrected_text"] is None
         assert entry["word_corrections"] is None
-        assert len(entry["correction_history"]) == 2
-        assert entry["correction_history"][1]["kind"] == "rollback"
-        assert entry["correction_history"][1]["previous_text"] == "the slow brown fox"
-        assert entry["correction_history"][1]["new_text"] == "the quick brown fox"
+        # A whole-section rollback is a hard reset — the log itself is
+        # cleared too, rather than logging "yet another change".
+        assert entry["correction_history"] is None
         mock_session.commit.assert_called_once()
 
     def test_rolls_back_word_range_correction(self, client, as_caller, mocker):
@@ -970,9 +969,7 @@ class TestRollbackSegment:
         entry = response.json()["dialogue_entries"][0]
         assert entry["corrected_text"] is None
         assert entry["word_corrections"] is None
-        assert entry["correction_history"][0]["kind"] == "rollback"
-        assert entry["correction_history"][0]["previous_text"] == "the slow brown fox"
-        assert entry["correction_history"][0]["new_text"] == "the quick brown fox"
+        assert entry["correction_history"] is None
         mock_session.commit.assert_called_once()
 
 
@@ -1275,6 +1272,72 @@ class TestRollbackToHistoryEntry:
         # entry.text already reads "the quick brown fox".
         assert entry["corrected_text"] is None
         assert entry["word_corrections"] is None
+        mock_session.commit.assert_called_once()
+
+    def test_surgically_reverts_an_undo_when_range_is_currently_untouched(
+        self, client, as_caller, mocker
+    ):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "words": _words_payload("the", "quick", "brown", "fox"),
+                # The word_range correction below was already rolled back
+                # (word_corrections is empty/None), so index 1 currently
+                # reads the plain original word "quick".
+                "word_corrections": None,
+                "correction_history": [
+                    {
+                        "timestamp": "2026-01-01T00:00:00+00:00",
+                        "kind": "word_range",
+                        "previous_text": "the quick brown fox",
+                        "new_text": "the slow brown fox",
+                        "start_word_index": 1,
+                        "end_word_index": 1,
+                        "previous_phrase": "quick",
+                        "new_phrase": "slow",
+                    },
+                    {
+                        "timestamp": "2026-01-01T00:01:00+00:00",
+                        "kind": "rollback",
+                        "previous_text": "the slow brown fox",
+                        "new_text": "the quick brown fox",
+                        "start_word_index": 1,
+                        "end_word_index": 1,
+                        "previous_phrase": "slow",
+                        "new_phrase": "quick",
+                    },
+                ],
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mock_session = self._patch_session(client, mocker)
+
+        try:
+            # "Undo the undo" — roll back to before the rollback entry
+            # itself, which should restore the "slow" correction rather
+            # than falling back to a whole-segment flat snapshot just
+            # because no WordCorrection currently exists for this range.
+            response = client.post(f"/api/v1/jobs/{job.id}/segments/0/history/1/rollback")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        entry = response.json()["dialogue_entries"][0]
+        assert entry["corrected_text"] is None
+        assert entry["word_corrections"] == [
+            {"start_word_index": 1, "end_word_index": 1, "text": "slow"}
+        ]
+        new_history = entry["correction_history"][2]
+        assert new_history["kind"] == "rollback"
+        assert new_history["previous_phrase"] == "quick"
+        assert new_history["new_phrase"] == "slow"
         mock_session.commit.assert_called_once()
 
 

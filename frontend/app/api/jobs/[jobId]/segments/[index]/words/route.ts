@@ -27,7 +27,9 @@ export async function PATCH(request: Request, { params }: RouteContext) {
       correctedText.trim().length === 0
     ) {
       return NextResponse.json(
-        { error: "startWordIndex, endWordIndex and correctedText are required" },
+        {
+          error: "startWordIndex, endWordIndex and correctedText are required",
+        },
         { status: 422 }
       );
     }

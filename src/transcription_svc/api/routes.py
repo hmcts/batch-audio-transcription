@@ -711,7 +711,14 @@ async def rollback_segment(
     session: Session = Depends(get_session),
     caller: Caller = Depends(get_caller),
 ) -> JobResponse:
-    """Revert a segment entirely back to its original Speech Batch output."""
+    """Revert a segment entirely back to its original Speech Batch output.
+
+    Unlike rolling back to a specific history entry, this is a hard reset —
+    every correction AND the history log itself are cleared, restoring
+    original per-word confidence/timing highlighting exactly as Speech
+    Batch produced it. It's a deliberate "start over" action, not one more
+    logged change.
+    """
     job, entry = _load_entry_for_correction(session, job_id, index, caller)
 
     previous_text = entry.effective_text()
@@ -720,15 +727,7 @@ async def rollback_segment(
 
     entry.corrected_text = None
     entry.word_corrections = None
-    entry.correction_history = [
-        *(entry.correction_history or []),
-        CorrectionEntry(
-            timestamp=datetime.now(UTC).isoformat(),
-            kind="rollback",
-            previous_text=previous_text,
-            new_text=entry.text,
-        ),
-    ]
+    entry.correction_history = None
 
     _save_corrected_entry(session, job, index, entry)
     return _to_response(job)
@@ -767,10 +766,28 @@ async def rollback_to_history_entry(
     target = history[history_index]
     previous_text = entry.effective_text()
 
-    matching_correction = next(
-        (
+    # Anything currently overlapping the targeted range at all — not just an
+    # exact match. An empty overlap means the range is presently untouched
+    # (e.g. a previous rollback already reverted it to the original words,
+    # and this is "undo that undo"), which is just as revertible as an
+    # exact match; anything else (a *different*, only partially-overlapping
+    # correction now covers part of this range) is genuinely ambiguous.
+    overlapping = (
+        [
             wc
             for wc in (entry.word_corrections or [])
+            if not (
+                wc.end_word_index < target.start_word_index
+                or wc.start_word_index > target.end_word_index
+            )
+        ]
+        if target.start_word_index is not None and target.end_word_index is not None
+        else []
+    )
+    exact_match = next(
+        (
+            wc
+            for wc in overlapping
             if wc.start_word_index == target.start_word_index
             and wc.end_word_index == target.end_word_index
         ),
@@ -780,7 +797,8 @@ async def rollback_to_history_entry(
         target.start_word_index is not None
         and target.end_word_index is not None
         and entry.corrected_text is None
-        and matching_correction is not None
+        and entry.words is not None
+        and (not overlapping or exact_match is not None)
     )
 
     if can_revert_surgically:
@@ -789,7 +807,8 @@ async def rollback_to_history_entry(
         original_phrase = " ".join(
             w.text for w in entry.words[target.start_word_index : target.end_word_index + 1]
         )
-        remaining = [wc for wc in entry.word_corrections if wc is not matching_correction]
+        current_phrase = exact_match.text if exact_match else original_phrase
+        remaining = [wc for wc in (entry.word_corrections or []) if wc is not exact_match]
         if target.previous_phrase != original_phrase:
             remaining.append(
                 WordCorrection(
@@ -808,7 +827,7 @@ async def rollback_to_history_entry(
                 new_text=entry.effective_text(),
                 start_word_index=target.start_word_index,
                 end_word_index=target.end_word_index,
-                previous_phrase=matching_correction.text,
+                previous_phrase=current_phrase,
                 new_phrase=target.previous_phrase,
             ),
         ]
