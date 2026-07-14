@@ -82,9 +82,11 @@ interface CorrectionRange {
 
 // Corrections are non-overlapping in *lexical* word indices (enforced by
 // the backend), but a single display token can span many lexical words —
-// so two otherwise-disjoint corrections can still map onto the same or
-// touching display-token range. Merge those into one, rather than
-// rendering duplicate/overlapping corrected spans for the same tokens.
+// so two otherwise-disjoint corrections can still map onto the same
+// display-token range. Merge those into one, rather than rendering
+// duplicate/overlapping corrected spans for the same tokens. Merely
+// touching (adjacent, non-overlapping) ranges are left as separate runs —
+// two adjacent corrected spans render fine and aren't a correctness issue.
 function mergeOverlappingCorrectionRanges(
   ranges: CorrectionRange[]
 ): CorrectionRange[] {

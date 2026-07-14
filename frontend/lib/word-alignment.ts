@@ -75,14 +75,24 @@ export function alignWordsToDisplayTokens(
 
   return tokens.map((text, i) => {
     const [start, end] = proportionalBucket(i, tokens.length, words.length);
-    const span = words.slice(start, end + 1);
+    // A plain loop rather than Math.min(...span.map(...)) — spreading a
+    // large array as call arguments risks exceeding the JS engine's
+    // argument-count limit, and this avoids the intermediate arrays too.
+    let confidence = words[start].confidence;
+    let startTime = words[start].startTime;
+    let endTime = words[start].endTime;
+    for (let j = start + 1; j <= end; j++) {
+      if (words[j].confidence < confidence) confidence = words[j].confidence;
+      if (words[j].startTime < startTime) startTime = words[j].startTime;
+      if (words[j].endTime > endTime) endTime = words[j].endTime;
+    }
     return {
       text,
       startWordIndex: start,
       endWordIndex: end,
-      confidence: Math.min(...span.map((w) => w.confidence)),
-      startTime: Math.min(...span.map((w) => w.startTime)),
-      endTime: Math.max(...span.map((w) => w.endTime)),
+      confidence,
+      startTime,
+      endTime,
     };
   });
 }
