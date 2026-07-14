@@ -72,29 +72,62 @@ function groupByConfidence(
 // Splices active word_corrections (given in lexical word indices) into the
 // display-token stream, so untouched tokens keep rendering with their own
 // confidence/timing while corrected ranges render as a single replacement.
+interface CorrectionRange {
+  start: number; // display token index
+  end: number; // display token index
+  text: string;
+  wordStart: number;
+  wordEnd: number;
+}
+
+// Corrections are non-overlapping in *lexical* word indices (enforced by
+// the backend), but a single display token can span many lexical words —
+// so two otherwise-disjoint corrections can still map onto the same or
+// touching display-token range. Merge those into one, rather than
+// rendering duplicate/overlapping corrected spans for the same tokens.
+function mergeOverlappingCorrectionRanges(
+  ranges: CorrectionRange[]
+): CorrectionRange[] {
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  const merged: CorrectionRange[] = [];
+  for (const r of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && r.start <= last.end) {
+      last.end = Math.max(last.end, r.end);
+      last.wordStart = Math.min(last.wordStart, r.wordStart);
+      last.wordEnd = Math.max(last.wordEnd, r.wordEnd);
+      last.text = `${last.text} ${r.text}`;
+    } else {
+      merged.push({ ...r });
+    }
+  }
+  return merged;
+}
+
 function buildRuns(
   tokens: DisplayToken[],
   corrections: WordCorrectionList | undefined
 ): Run[] {
-  const correctionRanges = (corrections ?? [])
-    .map((c) => {
-      const range = displayRangeForWordRange(
-        tokens,
-        c.startWordIndex,
-        c.endWordIndex
-      );
-      return range
-        ? {
-            start: range.start,
-            end: range.end,
-            text: c.text,
-            wordStart: c.startWordIndex,
-            wordEnd: c.endWordIndex,
-          }
-        : null;
-    })
-    .filter((r): r is NonNullable<typeof r> => r !== null)
-    .sort((a, b) => a.start - b.start);
+  const correctionRanges = mergeOverlappingCorrectionRanges(
+    (corrections ?? [])
+      .map((c) => {
+        const range = displayRangeForWordRange(
+          tokens,
+          c.startWordIndex,
+          c.endWordIndex
+        );
+        return range
+          ? {
+              start: range.start,
+              end: range.end,
+              text: c.text,
+              wordStart: c.startWordIndex,
+              wordEnd: c.endWordIndex,
+            }
+          : null;
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null)
+  );
 
   const runs: Run[] = [];
   let cursor = 0;
@@ -266,7 +299,7 @@ function Words({
             liveTime < tokens[run.end].endTime;
           return (
             <span
-              key={`corrected-${run.start}`}
+              key={`corrected-${run.wordStart}-${run.wordEnd}`}
               onClick={
                 onCorrectRange
                   ? () =>

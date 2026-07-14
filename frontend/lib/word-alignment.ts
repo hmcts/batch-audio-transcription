@@ -12,7 +12,7 @@ import type { Word } from "./types";
 // per-word confidence/timing for highlighting and word-range corrections —
 // so it proportionally maps each whitespace-separated display token to the
 // range of lexical words it most likely corresponds to. This is inherently
-// approximate: a single display token like "PA/04471/20206" can span many
+// approximate: a single display token like "PA/04471/2026" can span many
 // lexical words ("PA", "slash", "zero", "four", ...), and the boundary
 // between two display tokens won't always land exactly where the lexical
 // boundary does. It's good enough for highlighting and phrase-level
@@ -35,10 +35,10 @@ export function tokenizeDisplayText(text: string): string[] {
   return text.split(/\s+/).filter((t) => t.length > 0);
 }
 
-// Splits `count` lexical words into `bucketCount` contiguous, non-empty*
-// buckets as evenly as possible. (*a bucket can only be empty if there are
-// fewer lexical words than display tokens, which doesn't happen in
-// practice — display text is never more granular than the lexical stream.)
+// Splits `count` lexical words into `bucketCount` contiguous buckets as
+// evenly as possible. Requires bucketCount <= count (callers must collapse
+// any excess buckets first) so every bucket gets at least one distinct
+// word and consecutive buckets never share or overlap a word index.
 function proportionalBucket(
   index: number,
   bucketCount: number,
@@ -56,8 +56,22 @@ export function alignWordsToDisplayTokens(
   displayText: string,
   words: Word[]
 ): DisplayToken[] {
-  const tokens = tokenizeDisplayText(displayText);
-  if (tokens.length === 0 || words.length === 0) return [];
+  const rawTokens = tokenizeDisplayText(displayText);
+  if (rawTokens.length === 0 || words.length === 0) return [];
+
+  // Display text is normally a compressed form of the lexical stream (as
+  // many or fewer tokens than lexical words), never more — but if it ever
+  // is (e.g. unusual whitespace, or Azure returning fewer word entries
+  // than expected), collapse the excess into the last token rather than
+  // letting proportionalBucket hand out duplicate word ranges to several
+  // distinct display tokens.
+  const tokens =
+    rawTokens.length <= words.length
+      ? rawTokens
+      : [
+          ...rawTokens.slice(0, words.length - 1),
+          rawTokens.slice(words.length - 1).join(" "),
+        ];
 
   return tokens.map((text, i) => {
     const [start, end] = proportionalBucket(i, tokens.length, words.length);

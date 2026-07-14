@@ -101,6 +101,25 @@ describe("alignWordsToDisplayTokens", () => {
     expect(alignWordsToDisplayTokens("", [word("a", 0.9, 0, 1)])).toEqual([]);
     expect(alignWordsToDisplayTokens("hello", [])).toEqual([]);
   });
+
+  it("collapses excess display tokens instead of handing out duplicate word ranges", () => {
+    // Unusual: more display tokens than lexical words. Without collapsing,
+    // several distinct tokens would all map to word range [0,0].
+    const words = [word("a", 0.9, 0, 1)];
+    const tokens = alignWordsToDisplayTokens("one two three", words);
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0].text).toBe("one two three");
+    expect(tokens[0].startWordIndex).toBe(0);
+    expect(tokens[0].endWordIndex).toBe(0);
+  });
+
+  it("collapses only the excess when tokens outnumber words by more than one", () => {
+    const words = [word("a", 0.9, 0, 1), word("b", 0.8, 1, 2)];
+    const tokens = alignWordsToDisplayTokens("one two three four", words);
+    expect(tokens).toHaveLength(2);
+    expect(tokens[0].text).toBe("one");
+    expect(tokens[1].text).toBe("two three four");
+  });
 });
 
 describe("displayRangeForWordRange", () => {

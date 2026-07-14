@@ -416,6 +416,37 @@ describe("TranscriptSegment", () => {
         screen.queryByText("Good morning. We are on the record.")
       ).toBeNull();
     });
+
+    it("merges two corrections that land on the same coarse display token instead of duplicating it", () => {
+      // A single display token ("ABCD", no internal whitespace) can span
+      // several lexical words. Two distinct, non-overlapping lexical
+      // corrections landing inside that same span must render as one
+      // merged corrected run, not two overlapping/duplicate-keyed ones.
+      const denseWords: SegmentType["words"] = [
+        { text: "a", startTime: 0, endTime: 0.1, confidence: 0.9 },
+        { text: "b", startTime: 0.1, endTime: 0.2, confidence: 0.9 },
+        { text: "c", startTime: 0.2, endTime: 0.3, confidence: 0.9 },
+        { text: "d", startTime: 0.3, endTime: 0.4, confidence: 0.9 },
+      ];
+      const { container } = render(
+        <TranscriptSegment
+          segment={{
+            ...SEGMENT,
+            text: "ABCD",
+            words: denseWords,
+            wordCorrections: [
+              { startWordIndex: 0, endWordIndex: 0, text: "X" },
+              { startWordIndex: 2, endWordIndex: 2, text: "Y" },
+            ],
+          }}
+        />
+      );
+      const p = container.querySelector("p");
+      if (!p) throw new Error("words paragraph not found");
+      const correctedSpans = p.querySelectorAll("span.bg-emerald-100");
+      expect(correctedSpans).toHaveLength(1);
+      expect(correctedSpans[0].textContent?.trim()).toBe("X Y");
+    });
   });
 
   describe("change history", () => {
