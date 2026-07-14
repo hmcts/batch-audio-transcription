@@ -39,7 +39,11 @@ export function tokenizeDisplayText(text: string): string[] {
 // buckets as evenly as possible. (*a bucket can only be empty if there are
 // fewer lexical words than display tokens, which doesn't happen in
 // practice — display text is never more granular than the lexical stream.)
-function proportionalBucket(index: number, bucketCount: number, count: number): [number, number] {
+function proportionalBucket(
+  index: number,
+  bucketCount: number,
+  count: number
+): [number, number] {
   const start = Math.floor((index * count) / bucketCount);
   const end = Math.floor(((index + 1) * count) / bucketCount) - 1;
   return [start, Math.max(start, end)];
@@ -83,7 +87,8 @@ export function displayRangeForWordRange(
   let end = -1;
   for (let i = 0; i < tokens.length; i++) {
     const overlaps =
-      tokens[i].startWordIndex <= endWordIndex && tokens[i].endWordIndex >= startWordIndex;
+      tokens[i].startWordIndex <= endWordIndex &&
+      tokens[i].endWordIndex >= startWordIndex;
     if (overlaps) {
       if (start === -1) start = i;
       end = i;

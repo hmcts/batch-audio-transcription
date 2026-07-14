@@ -78,7 +78,11 @@ function buildRuns(
 ): Run[] {
   const correctionRanges = (corrections ?? [])
     .map((c) => {
-      const range = displayRangeForWordRange(tokens, c.startWordIndex, c.endWordIndex);
+      const range = displayRangeForWordRange(
+        tokens,
+        c.startWordIndex,
+        c.endWordIndex
+      );
       return range
         ? {
             start: range.start,
@@ -158,7 +162,10 @@ function Words({
   const [rangeDraft, setRangeDraft] = useState("");
   const [savingRange, setSavingRange] = useState(false);
 
-  const tokens = useMemo(() => alignWordsToDisplayTokens(text, words), [text, words]);
+  const tokens = useMemo(
+    () => alignWordsToDisplayTokens(text, words),
+    [text, words]
+  );
 
   useEffect(() => {
     if (!isActive || !getCurrentTime) return;
@@ -305,27 +312,31 @@ function Words({
           );
         }
 
-        const runTokens = tokens.slice(run.start, run.end + 1).map((token, offset) => {
-          const i = run.start + offset;
-          const isSpoken =
-            isActive && liveTime >= token.startTime && liveTime < token.endTime;
-          const isHighlighted =
-            !!highlightDisplayRange &&
-            i >= highlightDisplayRange.start &&
-            i <= highlightDisplayRange.end;
-          return (
-            <span
-              key={i}
-              className={cn(
-                "rounded",
-                isSpoken && "bg-primary/30",
-                isHighlighted && "ring-2 ring-amber-500"
-              )}
-            >
-              {token.text}{" "}
-            </span>
-          );
-        });
+        const runTokens = tokens
+          .slice(run.start, run.end + 1)
+          .map((token, offset) => {
+            const i = run.start + offset;
+            const isSpoken =
+              isActive &&
+              liveTime >= token.startTime &&
+              liveTime < token.endTime;
+            const isHighlighted =
+              !!highlightDisplayRange &&
+              i >= highlightDisplayRange.start &&
+              i <= highlightDisplayRange.end;
+            return (
+              <span
+                key={i}
+                className={cn(
+                  "rounded",
+                  isSpoken && "bg-primary/30",
+                  isHighlighted && "ring-2 ring-amber-500"
+                )}
+              >
+                {token.text}{" "}
+              </span>
+            );
+          });
 
         if (!run.lowConfidence) return runTokens;
 
@@ -341,7 +352,14 @@ function Words({
             key={run.start}
             onClick={
               onCorrectRange
-                ? () => startEditingRun(run.start, run.end, wordStart, wordEnd, initialText)
+                ? () =>
+                    startEditingRun(
+                      run.start,
+                      run.end,
+                      wordStart,
+                      wordEnd,
+                      initialText
+                    )
                 : undefined
             }
             onKeyDown={
@@ -349,7 +367,13 @@ function Words({
                 ? (e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      startEditingRun(run.start, run.end, wordStart, wordEnd, initialText);
+                      startEditingRun(
+                        run.start,
+                        run.end,
+                        wordStart,
+                        wordEnd,
+                        initialText
+                      );
                     }
                   }
                 : undefined
