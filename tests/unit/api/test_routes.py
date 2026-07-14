@@ -333,6 +333,55 @@ class TestGetJobAudio:
         assert response.status_code == 416
         assert response.headers["content-range"] == "bytes */10"
 
+    def test_returns_200_with_empty_body_for_a_zero_byte_file(
+        self, client, as_caller, mocker, tmp_path, monkeypatch
+    ):
+        from transcription_svc.audio import local_storage
+        from transcription_svc.config.settings import get_settings
+
+        monkeypatch.setenv("AUDIO_STORAGE_BACKEND", "local")
+        monkeypatch.setenv("LOCAL_AUDIO_STORAGE_DIR", str(tmp_path))
+        get_settings.cache_clear()
+
+        blob_name = "uploads/x/empty.wav"
+        local_storage.save(b"", blob_name)
+
+        job = _make_job()
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.audio_blob_path = blob_name
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}/audio")
+        get_settings.cache_clear()
+
+        assert response.status_code == 200
+        assert response.content == b""
+        assert response.headers["content-length"] == "0"
+
+    def test_returns_416_for_a_range_request_against_a_zero_byte_file(
+        self, client, as_caller, mocker, tmp_path, monkeypatch
+    ):
+        from transcription_svc.audio import local_storage
+        from transcription_svc.config.settings import get_settings
+
+        monkeypatch.setenv("AUDIO_STORAGE_BACKEND", "local")
+        monkeypatch.setenv("LOCAL_AUDIO_STORAGE_DIR", str(tmp_path))
+        get_settings.cache_clear()
+
+        blob_name = "uploads/x/empty.wav"
+        local_storage.save(b"", blob_name)
+
+        job = _make_job()
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.audio_blob_path = blob_name
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}/audio", headers={"Range": "bytes=0-9"})
+        get_settings.cache_clear()
+
+        assert response.status_code == 416
+        assert response.headers["content-range"] == "bytes */0"
+
     def test_streams_partial_range_from_azure_backend(self, client, as_caller, mocker):
         async def achunks(chunks):
             for c in chunks:
@@ -624,6 +673,15 @@ class TestCorrectSegment:
         response = client.patch(f"/api/v1/jobs/{job.id}/segments/0", json={"corrected_text": ""})
         assert response.status_code == 422
 
+    def test_rejects_whitespace_only_correction(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.patch(f"/api/v1/jobs/{job.id}/segments/0", json={"corrected_text": "   "})
+        assert response.status_code == 422
+
 
 def _words_payload(*texts: str) -> list[dict]:
     return [
@@ -728,6 +786,26 @@ class TestCorrectWordRange:
         response = client.patch(
             f"/api/v1/jobs/{job.id}/segments/0/words",
             json={"start_word_index": 0, "end_word_index": 10, "corrected_text": "fixed"},
+        )
+        assert response.status_code == 422
+
+    def test_rejects_whitespace_only_correction(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0,
+                "end_time": 1,
+                "words": _words_payload("the", "quick", "brown", "fox"),
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.patch(
+            f"/api/v1/jobs/{job.id}/segments/0/words",
+            json={"start_word_index": 0, "end_word_index": 0, "corrected_text": "   "},
         )
         assert response.status_code == 422
 
@@ -1338,6 +1416,51 @@ class TestRollbackToHistoryEntry:
         assert new_history["kind"] == "rollback"
         assert new_history["previous_phrase"] == "quick"
         assert new_history["new_phrase"] == "slow"
+        mock_session.commit.assert_called_once()
+
+    def test_falls_back_to_flat_rollback_when_history_entry_has_no_previous_phrase(
+        self, client, as_caller, mocker
+    ):
+        from transcription_svc.database.engine import get_session
+
+        # Legacy/malformed history entry: has word-range indices but no
+        # previous_phrase (optional on CorrectionEntry). Attempting a
+        # surgical revert here would try to create a WordCorrection with
+        # text=None, which should never be allowed to reach that code path.
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "words": _words_payload("the", "quick", "brown", "fox"),
+                "word_corrections": [{"start_word_index": 1, "end_word_index": 1, "text": "slow"}],
+                "correction_history": [
+                    {
+                        "timestamp": "2026-01-01T00:00:00+00:00",
+                        "kind": "word_range",
+                        "previous_text": "the quick brown fox",
+                        "new_text": "the slow brown fox",
+                        "start_word_index": 1,
+                        "end_word_index": 1,
+                    }
+                ],
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mock_session = self._patch_session(client, mocker)
+
+        try:
+            response = client.post(f"/api/v1/jobs/{job.id}/segments/0/history/0/rollback")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        entry = response.json()["dialogue_entries"][0]
+        assert entry["corrected_text"] is None
+        assert entry["word_corrections"] is None
         mock_session.commit.assert_called_once()
 
 

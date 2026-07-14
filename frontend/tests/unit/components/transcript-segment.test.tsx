@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { TranscriptSegment } from "@/components/transcript/transcript-segment";
@@ -251,6 +251,20 @@ describe("TranscriptSegment", () => {
       expect(run).toBeUndefined();
     });
 
+    it("prevents the default Space action so the page doesn't scroll on activation", () => {
+      const { container } = render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, words: WORDS }}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      const run = Array.from(
+        wordsParagraph(container).querySelectorAll('[role="button"]')
+      ).find((el) => el.textContent?.includes("morning"));
+      const notCancelled = fireEvent.keyDown(run as Element, { key: " " });
+      expect(notCancelled).toBe(false);
+    });
+
     it("opens an inline editor pre-filled with just the run's text", async () => {
       const user = userEvent.setup();
       const { container } = render(
@@ -334,6 +348,24 @@ describe("TranscriptSegment", () => {
         wordsParagraph(container).querySelectorAll("span")
       ).find((el) => el.className.includes("bg-orange-100"));
       expect(lowConf).toBeUndefined();
+    });
+
+    it("prevents the default Space action on the corrected span", () => {
+      render(
+        <TranscriptSegment
+          segment={{
+            ...SEGMENT,
+            words: WORDS,
+            wordCorrections: [
+              { startWordIndex: 1, endWordIndex: 1, text: "afternoon" },
+            ],
+          }}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      const correctedSpan = screen.getByText("afternoon", { exact: false });
+      const notCancelled = fireEvent.keyDown(correctedSpan, { key: " " });
+      expect(notCancelled).toBe(false);
     });
 
     it("re-opens the editor pre-filled with the correction's current text", async () => {

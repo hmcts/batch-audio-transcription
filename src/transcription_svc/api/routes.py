@@ -111,6 +111,18 @@ def _parse_range(range_header: str | None, total_size: int) -> tuple[int, int, b
     produce a 206 with an empty or misaligned body that breaks <audio>
     seeking.
     """
+    if total_size == 0:
+        # Explicit branch rather than relying on total_size - 1 incidentally
+        # producing a length-zero range — a zero-byte file has no bytes to
+        # satisfy any Range request against.
+        if range_header:
+            raise HTTPException(
+                status_code=416,
+                detail="Range not satisfiable",
+                headers={"Content-Range": "bytes */0"},
+            )
+        return 0, -1, False
+
     if not range_header:
         return 0, total_size - 1, False
 
@@ -269,14 +281,30 @@ class UploadResponse(BaseModel):
     blob_name: str
 
 
+def _validate_not_blank(v: str) -> str:
+    if not v.strip():
+        raise ValueError("corrected_text must not be blank")
+    return v
+
+
 class CorrectSegmentRequest(BaseModel):
     corrected_text: str = Field(min_length=1, max_length=10_000)
+
+    @field_validator("corrected_text")
+    @classmethod
+    def validate_corrected_text(cls, v: str) -> str:
+        return _validate_not_blank(v)
 
 
 class CorrectWordRangeRequest(BaseModel):
     start_word_index: int = Field(ge=0)
     end_word_index: int = Field(ge=0)
     corrected_text: str = Field(min_length=1, max_length=10_000)
+
+    @field_validator("corrected_text")
+    @classmethod
+    def validate_corrected_text(cls, v: str) -> str:
+        return _validate_not_blank(v)
 
 
 class RollbackHistoryRequest(BaseModel):
@@ -796,6 +824,7 @@ async def rollback_to_history_entry(
     can_revert_surgically = (
         target.start_word_index is not None
         and target.end_word_index is not None
+        and target.previous_phrase is not None
         and entry.corrected_text is None
         and entry.words is not None
         and (not overlapping or exact_match is not None)

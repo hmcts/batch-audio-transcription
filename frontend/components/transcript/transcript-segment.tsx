@@ -225,6 +225,7 @@ function Words({
                 onCorrectRange
                   ? (e) => {
                       if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
                         startEditingRun(run.start, run.end, run.text);
                       }
                     }
@@ -290,6 +291,7 @@ function Words({
               onCorrectRange
                 ? (e) => {
                     if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
                       startEditingRun(run.start, run.end, initialText);
                     }
                   }
