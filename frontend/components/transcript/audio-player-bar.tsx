@@ -1,26 +1,34 @@
 "use client";
 
 import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { formatTime } from "@/lib/mock-data";
 
 interface AudioPlayerBarProps {
   duration: number;
+  position: number;
+  playing: boolean;
+  onTogglePlay: () => void;
+  onSeek: (time: number) => void;
+  onSpeedChange: (speed: number) => void;
 }
 
-export function AudioPlayerBar({ duration }: AudioPlayerBarProps) {
-  const [playing, setPlaying] = useState(false);
-  const [position, setPosition] = useState(0);
-
+export function AudioPlayerBar({
+  duration,
+  position,
+  playing,
+  onTogglePlay,
+  onSeek,
+  onSpeedChange,
+}: AudioPlayerBarProps) {
   return (
-    <div className="bg-white border-b border-border px-4 py-3 flex items-center gap-3">
+    <div className="sticky top-0 z-10 bg-white border-b border-border px-4 py-3 flex items-center gap-3">
       {/* Skip back */}
       <Button
         variant="ghost"
         size="icon"
         className="size-8 text-xs"
-        onClick={() => setPosition((p) => Math.max(0, p - 10))}
+        onClick={() => onSeek(Math.max(0, position - 10))}
         aria-label="Skip back 10 seconds"
       >
         <SkipBack className="size-4" />
@@ -31,7 +39,7 @@ export function AudioPlayerBar({ duration }: AudioPlayerBarProps) {
       <Button
         size="icon"
         className="size-10 rounded-full bg-primary"
-        onClick={() => setPlaying((p) => !p)}
+        onClick={onTogglePlay}
         aria-label={playing ? "Pause" : "Play"}
       >
         {playing ? (
@@ -46,7 +54,7 @@ export function AudioPlayerBar({ duration }: AudioPlayerBarProps) {
         variant="ghost"
         size="icon"
         className="size-8"
-        onClick={() => setPosition((p) => Math.min(duration, p + 10))}
+        onClick={() => onSeek(Math.min(duration, position + 10))}
         aria-label="Skip forward 10 seconds"
       >
         <SkipForward className="size-4" />
@@ -64,7 +72,7 @@ export function AudioPlayerBar({ duration }: AudioPlayerBarProps) {
         onClick={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
           const pct = (e.clientX - rect.left) / rect.width;
-          setPosition(Math.round(pct * duration));
+          onSeek(Math.max(0, Math.min(duration, pct * duration)));
         }}
         aria-label="Audio timeline"
       >
@@ -98,6 +106,7 @@ export function AudioPlayerBar({ duration }: AudioPlayerBarProps) {
         className="text-sm border rounded px-1 py-0.5 bg-background"
         defaultValue="1"
         aria-label="Playback speed"
+        onChange={(e) => onSpeedChange(Number(e.target.value))}
       >
         <option value="0.5">0.5×</option>
         <option value="1">1×</option>

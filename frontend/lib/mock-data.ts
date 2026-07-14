@@ -81,11 +81,13 @@ const JOB_1_SEGMENTS: TranscriptSegment[] = [
 ];
 
 const JOB_1_ACCURACY: TranscriptAccuracy = {
-  wordErrorRate: 4.7,
+  confidenceScore: 95.3,
   wordsTranscribed: 2284,
-  samplePercent: 12,
   lowConfidenceCount: 6,
   confidenceThreshold: 85,
+  hasCorrections: true,
+  wordErrorRate: 4.7,
+  correctedPercent: 12,
 };
 
 const JOB_1_LOW_CONFIDENCE: LowConfidenceSegment[] = [
@@ -151,11 +153,13 @@ const JOB_2_SEGMENTS: TranscriptSegment[] = [
 ];
 
 const JOB_2_ACCURACY: TranscriptAccuracy = {
-  wordErrorRate: 2.1,
+  confidenceScore: 97.8,
   wordsTranscribed: 1456,
-  samplePercent: 15,
   lowConfidenceCount: 1,
   confidenceThreshold: 85,
+  hasCorrections: true,
+  wordErrorRate: 2.1,
+  correctedPercent: 15,
 };
 
 export const MOCK_JOBS: TranscriptionJob[] = [

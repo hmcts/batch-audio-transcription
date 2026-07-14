@@ -39,6 +39,28 @@ class TestSaveAndRead:
             local_storage.read("does/not/exist.wav")
 
 
+class TestSizeAndReadRange:
+    def test_size_returns_byte_count(self):
+        local_storage.save(b"0123456789", "uploads/caller-1/file.wav")
+        assert local_storage.size("uploads/caller-1/file.wav") == 10
+
+    def test_size_missing_file_raises(self):
+        with pytest.raises(FileNotFoundError):
+            local_storage.size("does/not/exist.wav")
+
+    def test_read_range_returns_requested_slice(self):
+        local_storage.save(b"0123456789", "uploads/caller-1/file.wav")
+        assert local_storage.read_range("uploads/caller-1/file.wav", 2, 3) == b"234"
+
+    def test_read_range_from_start(self):
+        local_storage.save(b"0123456789", "uploads/caller-1/file.wav")
+        assert local_storage.read_range("uploads/caller-1/file.wav", 0, 4) == b"0123"
+
+    def test_read_range_missing_file_raises_file_not_found(self):
+        with pytest.raises(FileNotFoundError):
+            local_storage.read_range("does/not/exist.wav", 0, 4)
+
+
 class TestValidateBlobName:
     @pytest.mark.parametrize(
         "blob_name",

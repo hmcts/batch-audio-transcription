@@ -2,7 +2,9 @@
 
 import logging
 import mimetypes
+from collections.abc import AsyncIterator
 from pathlib import Path
+from urllib.parse import quote
 
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.identity.aio import DefaultAzureCredential
@@ -67,6 +69,22 @@ class AsyncAzureBlobManager:
                 logger.debug("Closed DefaultAzureCredential for Blob Storage")
         except Exception as e:
             logger.warning(f"Error closing credential: {e}")
+
+    def build_blob_url(self, blob_name: str, container_name: str | None = None) -> str:
+        """Return a plain (no-SAS) blob URL for Azure Speech Batch.
+
+        Speech's batch backend authenticates directly against this storage
+        account via its own system-assigned managed identity, under Azure's
+        "trusted Azure services" mechanism (a storage network_rules
+        resource-instance exception plus a Storage Blob Data Reader role
+        grant on the Speech resource — see the infra repo's storage.tf).
+        Microsoft's docs are explicit that a SAS token alongside
+        managed-identity auth makes the request fail, so this must stay
+        SAS-free — unlike generate_read_sas_url, which is for callers
+        without a trusted-service grant.
+        """
+        container = container_name or self.container_name
+        return f"{self.account_url}/{container}/{quote(blob_name, safe='/')}"
 
     async def create_blob_from_bytes(
         self, content: bytes, blob_name: str, container_name: str | None = None
@@ -353,6 +371,55 @@ class AsyncAzureBlobManager:
             return False
         else:
             return True
+
+    async def get_blob_size(self, blob_name: str, container_name: str | None = None) -> int | None:
+        """Return a blob's size in bytes, or None if it doesn't exist."""
+        container = container_name or self.container_name
+        try:
+            async with self._blob_service_client() as blob_service:
+                blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
+                properties = await blob_client.get_blob_properties()
+                return properties.size
+        except ResourceNotFoundError:
+            return None
+
+    async def download_blob_range(
+        self, blob_name: str, start: int, length: int, container_name: str | None = None
+    ) -> bytes | None:
+        """Download a byte range of a blob's content (async). None if it doesn't exist.
+
+        Used to serve HTTP Range requests (e.g. audio playback seeking)
+        without pulling the whole blob into memory.
+        """
+        container = container_name or self.container_name
+        try:
+            async with self._blob_service_client() as blob_service:
+                blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
+                download_stream = await blob_client.download_blob(offset=start, length=length)
+                return await download_stream.readall()
+        except ResourceNotFoundError:
+            return None
+
+    async def stream_blob_range(
+        self, blob_name: str, start: int, length: int, container_name: str | None = None
+    ) -> AsyncIterator[bytes]:
+        """Stream a byte range of a blob's content in fixed-size chunks.
+
+        Unlike download_blob_range(), this never buffers the whole
+        requested range in memory at once — needed so serving a large
+        (potentially multi-hour) recording for HTTP Range playback doesn't
+        cause a memory spike proportional to the recording's length.
+        Callers should confirm the blob exists (e.g. via get_blob_size)
+        before starting to stream it, since once the caller has begun
+        writing a streaming HTTP response, a not-found error surfacing
+        mid-stream can no longer be turned into a clean 404.
+        """
+        container = container_name or self.container_name
+        async with self._blob_service_client() as blob_service:
+            blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
+            download_stream = await blob_client.download_blob(offset=start, length=length)
+            async for chunk in download_stream.chunks():
+                yield chunk
 
     async def download_blob_to_file(
         self, blob_name: str, file_path: Path, container_name: str | None = None

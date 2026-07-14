@@ -30,11 +30,92 @@ class BaseTable(SQLModel):
     updated_datetime: datetime | None = Field(default=None)
 
 
+class WordInfo(SQLModel):
+    text: str
+    start_time: float
+    end_time: float
+    confidence: float
+
+
+class WordCorrection(SQLModel):
+    """An active replacement for a contiguous run of the *original* words.
+
+    Indices always refer to positions in DialogueEntry.words (never
+    renumbered), so multiple non-overlapping corrections can coexist and
+    still be rendered against the original per-word confidence/timing for
+    everything outside the corrected ranges.
+    """
+
+    start_word_index: int
+    end_word_index: int  # inclusive
+    text: str
+
+
+class CorrectionEntry(SQLModel):
+    """One logged change to a segment's text — append-only audit trail.
+
+    A "rollback" is just another entry (kind="rollback") rather than a
+    destructive edit, so the full history always stays intact and visible.
+    """
+
+    timestamp: str  # ISO 8601, set by the backend
+    kind: str  # "segment" | "word_range" | "rollback"
+    previous_text: str  # effective *segment* text immediately before this change
+    new_text: str  # effective *segment* text immediately after this change
+    start_word_index: int | None = None  # set only for kind="word_range"
+    end_word_index: int | None = None  # inclusive; set only for kind="word_range"
+    # Just the phrase that actually changed — set only for kind="word_range",
+    # so a UI can show "quick" -> "slow" instead of the whole (possibly very
+    # long) segment text. previous_text/new_text stay whole-segment since
+    # rollback_to_history_entry restores from them.
+    previous_phrase: str | None = None
+    new_phrase: str | None = None
+
+
 class DialogueEntry(SQLModel):
     speaker: str
     text: str
     start_time: float
     end_time: float
+    # Azure's own per-phrase confidence (0-1), not a verified accuracy
+    # measurement — there's no human reference transcript to compare
+    # against until a clerk corrects a segment (see corrected_text).
+    confidence: float | None = None
+    # Whole-segment freeform override — set by editing the segment's text
+    # directly rather than a specific low-confidence phrase. Takes full
+    # precedence over word_corrections when set. `text` is never mutated,
+    # so the original auto-generated wording stays available to compute a
+    # real word error rate against it.
+    corrected_text: str | None = None
+    # Active, non-overlapping replacements for specific runs of the
+    # original words — lets the frontend keep showing per-word confidence
+    # and playback-sync highlighting for everything the clerk hasn't
+    # touched, instead of falling back to plain text for the whole segment.
+    word_corrections: list[WordCorrection] | None = None
+    correction_history: list[CorrectionEntry] | None = None
+    # Per-word timing/confidence for the original (never corrected) text —
+    # lets the frontend highlight individual low-confidence words and sync
+    # highlighting to live playback position. None if Azure didn't return
+    # word-level detail for this phrase.
+    words: list[WordInfo] | None = None
+
+    def has_corrections(self) -> bool:
+        return self.corrected_text is not None or bool(self.word_corrections)
+
+    def effective_text(self) -> str:
+        """Current text after any corrections — what a clerk would read today."""
+        if self.corrected_text is not None:
+            return self.corrected_text
+        if self.word_corrections and self.words:
+            parts: list[str] = []
+            cursor = 0
+            for wc in sorted(self.word_corrections, key=lambda w: w.start_word_index):
+                parts.append(" ".join(w.text for w in self.words[cursor : wc.start_word_index]))
+                parts.append(wc.text)
+                cursor = wc.end_word_index + 1
+            parts.append(" ".join(w.text for w in self.words[cursor:]))
+            return " ".join(p for p in parts if p)
+        return self.text
 
 
 class Caller(BaseTable, table=True):

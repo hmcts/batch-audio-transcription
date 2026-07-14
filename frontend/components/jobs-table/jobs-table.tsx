@@ -1,14 +1,82 @@
-import { FileAudio } from "lucide-react";
+"use client";
+
+import {
+  ChevronDown,
+  ChevronsUpDown,
+  ChevronUp,
+  FileAudio,
+} from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { JobStatusBadge } from "@/components/job-status/job-status-badge";
 import { Progress } from "@/components/ui/progress";
-import type { TranscriptionJob } from "@/lib/types";
+import type { JobStatus, TranscriptionJob } from "@/lib/types";
+
+const TRANSCRIPT_LINK_LABEL: Record<JobStatus, string> = {
+  COMPLETED: "View transcript →",
+  FAILED: "View details →",
+  PENDING: "View status →",
+  PROCESSING: "View status →",
+};
+
+export type JobsSortKey = "caseReference" | "uploadedAt" | "status";
+export type SortDirection = "asc" | "desc";
 
 interface JobsTableProps {
   jobs: TranscriptionJob[];
+  sortKey?: JobsSortKey;
+  sortDirection?: SortDirection;
+  onSortChange?: (key: JobsSortKey) => void;
 }
 
-export function JobsTable({ jobs }: JobsTableProps) {
+function SortableHeader({
+  label,
+  sortKeyId,
+  activeSortKey,
+  sortDirection,
+  onSortChange,
+}: {
+  label: string;
+  sortKeyId: JobsSortKey;
+  activeSortKey?: JobsSortKey;
+  sortDirection?: SortDirection;
+  onSortChange?: (key: JobsSortKey) => void;
+}) {
+  if (!onSortChange) {
+    return <th className="px-4 py-3 text-left font-semibold">{label}</th>;
+  }
+
+  const isActive = activeSortKey === sortKeyId;
+  const Icon = isActive
+    ? sortDirection === "asc"
+      ? ChevronUp
+      : ChevronDown
+    : ChevronsUpDown;
+
+  return (
+    <th className="px-4 py-3 text-left font-semibold">
+      <button
+        type="button"
+        onClick={() => onSortChange(sortKeyId)}
+        className={`flex items-center gap-1 hover:text-foreground ${
+          isActive ? "text-foreground" : "text-muted-foreground"
+        }`}
+      >
+        {label}
+        <Icon className="size-3.5" />
+      </button>
+    </th>
+  );
+}
+
+export function JobsTable({
+  jobs,
+  sortKey,
+  sortDirection,
+  onSortChange,
+}: JobsTableProps) {
+  const router = useRouter();
+
   if (jobs.length === 0) {
     return (
       <p className="text-center text-muted-foreground py-8">
@@ -22,18 +90,42 @@ export function JobsTable({ jobs }: JobsTableProps) {
       <table className="w-full text-sm">
         <thead className="bg-muted/50">
           <tr>
-            <th className="px-4 py-3 text-left font-semibold">
-              Case reference
-            </th>
+            <SortableHeader
+              label="Case reference"
+              sortKeyId="caseReference"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSortChange={onSortChange}
+            />
             <th className="px-4 py-3 text-left font-semibold">File</th>
-            <th className="px-4 py-3 text-left font-semibold">Uploaded</th>
-            <th className="px-4 py-3 text-left font-semibold">Status</th>
+            <SortableHeader
+              label="Uploaded"
+              sortKeyId="uploadedAt"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSortChange={onSortChange}
+            />
+            <SortableHeader
+              label="Status"
+              sortKeyId="status"
+              activeSortKey={sortKey}
+              sortDirection={sortDirection}
+              onSortChange={onSortChange}
+            />
             <th className="px-4 py-3 text-left font-semibold">Transcript</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
           {jobs.map((job) => (
-            <tr key={job.id} className="hover:bg-muted/30 transition-colors">
+            <tr
+              key={job.id}
+              // Mouse convenience only — clicking anywhere on the row
+              // navigates. Keyboard/assistive-tech users get a real <Link>
+              // in the last cell instead (overriding <tr>'s role here would
+              // destroy its table-row semantics for the cells within it).
+              onClick={() => router.push(`/jobs/${job.id}`)}
+              className="hover:bg-muted/30 transition-colors cursor-pointer"
+            >
               <td className="px-4 py-3 font-medium">{job.caseReference}</td>
               <td className="px-4 py-3 text-muted-foreground">
                 <div className="flex items-center gap-2">
@@ -42,10 +134,12 @@ export function JobsTable({ jobs }: JobsTableProps) {
                 </div>
               </td>
               <td className="px-4 py-3 text-muted-foreground">
-                {new Date(job.uploadedAt).toLocaleDateString("en-GB", {
+                {new Date(job.uploadedAt).toLocaleString("en-GB", {
                   day: "numeric",
                   month: "short",
                   year: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
                 })}
               </td>
               <td className="px-4 py-3">
@@ -53,21 +147,26 @@ export function JobsTable({ jobs }: JobsTableProps) {
                   <JobStatusBadge status={job.status} />
                   {job.status === "PROCESSING" &&
                     job.progressPercent !== undefined && (
-                      <Progress value={job.progressPercent} className="w-24" />
+                      <div className="flex items-center gap-2">
+                        <Progress
+                          value={job.progressPercent}
+                          className="w-24"
+                        />
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          {job.progressPercent}%
+                        </span>
+                      </div>
                     )}
                 </div>
               </td>
               <td className="px-4 py-3">
-                {job.status === "COMPLETED" ? (
-                  <Link
-                    href={`/jobs/${job.id}`}
-                    className="text-primary hover:underline font-medium"
-                  >
-                    View transcript →
-                  </Link>
-                ) : (
-                  <span className="text-muted-foreground">—</span>
-                )}
+                <Link
+                  href={`/jobs/${job.id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-primary hover:underline font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded"
+                >
+                  {TRANSCRIPT_LINK_LABEL[job.status]}
+                </Link>
               </td>
             </tr>
           ))}

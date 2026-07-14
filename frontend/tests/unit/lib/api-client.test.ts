@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   colorForSpeaker,
   getJob,
+  getJobAudio,
   listJobs,
   submitJob,
   uploadAndSubmit,
@@ -32,9 +33,16 @@ const BACKEND_JOB = {
   created_at: "2026-07-01T09:00:00Z",
   updated_at: "2026-07-01T09:30:00Z",
   dialogue_entries: [
-    { speaker: "0", text: "Good morning.", start_time: 0, end_time: 2.5 },
+    // The backend already labels speakers (e.g. "Speaker 0") via
+    // add_speaker_labels before this ever reaches the frontend.
     {
-      speaker: "1",
+      speaker: "Speaker 0",
+      text: "Good morning.",
+      start_time: 0,
+      end_time: 2.5,
+    },
+    {
+      speaker: "Speaker 1",
       text: "Good morning, Judge.",
       start_time: 2.5,
       end_time: 5,
@@ -181,6 +189,35 @@ describe("uploadAndSubmit", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(job.caseReference).toBe("PA/00003/2026");
+  });
+});
+
+describe("getJobAudio", () => {
+  it("returns the backend's response as-is for a successful range request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 206,
+      headers: new Headers({ "Content-Range": "bytes 0-9/20" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await getJobAudio("job-1", "bytes=0-9");
+    expect(response.status).toBe(206);
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers.Range).toBe("bytes=0-9");
+  });
+
+  it("forwards a non-2xx status instead of throwing", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 416,
+      headers: new Headers({ "Content-Range": "bytes */20" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await getJobAudio("job-1", "bytes=999-1000");
+    expect(response.status).toBe(416);
+    expect(response.headers.get("Content-Range")).toBe("bytes */20");
   });
 });
 

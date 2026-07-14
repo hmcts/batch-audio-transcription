@@ -1,8 +1,18 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expect, test } from "@playwright/test";
 
-// These E2E tests require a running server.
+// These E2E tests require a running server with a real backend behind it
+// (docker-compose, or `pnpm dev` + the transcription_svc API) — there is no
+// more mock data to fall back on.
 // Run with: pnpm run test:e2e (not included in pnpm run test:unit)
 // Set PLAYWRIGHT_BASE_URL env var to target a deployed environment.
+
+// Opt-in only: no default path, since a real audio file is developer/CI
+// environment-specific and shouldn't be assumed to exist.
+const REAL_AUDIO_PATH = process.env.E2E_AUDIO_FILE;
+const REAL_AUDIO_AVAILABLE =
+  !!REAL_AUDIO_PATH && fs.existsSync(REAL_AUDIO_PATH);
 
 test.describe("Dashboard", () => {
   test.beforeEach(async ({ page }) => {
@@ -24,29 +34,32 @@ test.describe("Dashboard", () => {
     await expect(btn).toBeDisabled();
   });
 
-  test("shows pre-loaded mock jobs in recent transcripts", async ({ page }) => {
-    await expect(page.getByText("PA/05217/2025")).toBeVisible();
-    await expect(page.getByText("EA/11042/2025")).toBeVisible();
+  test("shows an empty state when there are no jobs yet", async ({ page }) => {
+    const jobsSections = page.locator("section", { hasText: "All uploads" });
+    await expect(
+      jobsSections.getByText(/no transcription jobs yet/i)
+    ).toBeVisible();
   });
+});
 
-  test("View transcript link navigates to transcript page", async ({
-    page,
-  }) => {
-    const link = page.getByRole("link", { name: /view transcript/i }).first();
-    await link.click();
-    await expect(page).toHaveURL(/\/batch\/jobs\//);
-  });
+// Full round trip against the real backend and real Azure Speech Batch —
+// slow (batch transcription can take minutes), so it's isolated here rather
+// than mixed into the fast dashboard checks above.
+test.describe("Real transcription pipeline", () => {
+  test.skip(
+    !REAL_AUDIO_AVAILABLE,
+    "Set E2E_AUDIO_FILE to a real audio file's path to run this test"
+  );
 
-  test("upload a file and see it appear in the list", async ({ page }) => {
-    const fileChooserPromise = page.waitForEvent("filechooser");
-    await page.getByLabel("Audio file input").click();
-    const fileChooser = await fileChooserPromise;
-    await fileChooser.setFiles({
-      name: "test-hearing.mp3",
-      mimeType: "audio/mpeg",
-      buffer: Buffer.from("mock-audio"),
-    });
-    await expect(page.getByText("Selected: test-hearing.mp3")).toBeVisible();
+  test("upload real audio and see the transcript appear", async ({ page }) => {
+    test.setTimeout(15 * 60 * 1000); // batch transcription can take a while
+
+    const audioPath = REAL_AUDIO_PATH as string;
+    await page.goto("/batch");
+
+    await page.getByLabel("Audio file input").setInputFiles(audioPath);
+    const fileName = path.basename(audioPath);
+    await expect(page.getByText(`Selected: ${fileName}`)).toBeVisible();
 
     const submitBtn = page.getByRole("button", {
       name: /upload for transcription/i,
@@ -54,9 +67,37 @@ test.describe("Dashboard", () => {
     await expect(submitBtn).toBeEnabled();
     await submitBtn.click();
 
-    // Job appears in the list
-    await expect(page.getByText("test-hearing.mp3")).toBeVisible({
-      timeout: 3000,
+    // Job appears in the "All uploads" list, initially PENDING/PROCESSING.
+    // Generous timeout: the upload request is synchronous end-to-end (file
+    // bytes -> blob storage -> Speech Batch submission) before the button
+    // re-enables, so a real multi-MB file over a real network can take a
+    // couple of minutes here, not just a local-only round trip.
+    const allUploads = page.locator("section", { hasText: "All uploads" });
+    await expect(allUploads.getByText(fileName)).toBeVisible({
+      timeout: 180_000,
     });
+
+    // Poll (via page reloads) until the job reaches COMPLETED and a
+    // "View transcript" link shows up. Exits as soon as FAILED appears
+    // instead of retrying blindly for the full timeout — a terminal FAILED
+    // status will never turn into a pass, so waiting out toPass()'s full
+    // window on it just wastes ~15 minutes per run.
+    const row = allUploads.locator("tr", { hasText: fileName });
+    const deadline = Date.now() + 15 * 60 * 1000;
+    let text = "";
+    while (Date.now() < deadline) {
+      await page.reload();
+      text = await row.innerText();
+      if (/failed/i.test(text)) {
+        throw new Error(`Job reached FAILED status:\n${text}`);
+      }
+      if (/view transcript/i.test(text)) break;
+      await page.waitForTimeout(5000);
+    }
+    expect(text).toMatch(/view transcript/i);
+
+    await row.getByRole("link", { name: /view transcript/i }).click();
+    await expect(page).toHaveURL(/\/batch\/jobs\//);
+    await expect(page.locator("main")).toContainText(/./); // transcript rendered
   });
 });
