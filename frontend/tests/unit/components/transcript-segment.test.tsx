@@ -154,10 +154,19 @@ describe("TranscriptSegment", () => {
     expect(container.querySelector(".border-l-primary")).not.toBeNull();
   });
 
+  // One lexical word per display-text token in SEGMENT.text ("Good",
+  // "morning.", "We", "are", "on", "the", "record.") — Azure's per-word
+  // array is always lowercase/unpunctuated ("lexical" form), unlike the
+  // phrase-level display text these render against, so these use that
+  // form even though the rendered text shows the punctuated tokens above.
   const WORDS: SegmentType["words"] = [
-    { text: "Good", startTime: 0, endTime: 0.5, confidence: 0.97 },
+    { text: "good", startTime: 0, endTime: 0.5, confidence: 0.97 },
     { text: "morning", startTime: 0.5, endTime: 1.0, confidence: 0.6 },
-    { text: "Judge", startTime: 1.0, endTime: 1.5, confidence: 0.95 },
+    { text: "we", startTime: 1.0, endTime: 1.3, confidence: 0.95 },
+    { text: "are", startTime: 1.3, endTime: 1.5, confidence: 0.96 },
+    { text: "on", startTime: 1.5, endTime: 1.7, confidence: 0.97 },
+    { text: "the", startTime: 1.7, endTime: 1.9, confidence: 0.98 },
+    { text: "record", startTime: 1.9, endTime: 2.4, confidence: 0.95 },
   ];
 
   it("renders word-by-word when word-level data is available", () => {
@@ -179,7 +188,7 @@ describe("TranscriptSegment", () => {
     );
     const lowConfWord = Array.from(
       wordsParagraph(container).querySelectorAll("span")
-    ).find((el) => el.textContent?.trim() === "morning");
+    ).find((el) => el.textContent?.trim() === "morning.");
     expect(lowConfWord?.className).toContain("bg-orange-100");
   });
 
@@ -203,11 +212,12 @@ describe("TranscriptSegment", () => {
     );
     // The highlight is driven by a requestAnimationFrame loop (polling
     // real playback position instead of the coarser timeupdate event),
-    // so it needs at least one frame to run before asserting.
+    // so it needs at least one frame to run before asserting. 1.2s falls
+    // within "we"'s 1.0-1.3 range.
     await waitFor(() => {
       const spokenWord = Array.from(
         wordsParagraph(container).querySelectorAll("span")
-      ).find((el) => el.textContent?.trim() === "Judge");
+      ).find((el) => el.textContent?.trim() === "We");
       expect(spokenWord?.className).toContain("bg-primary/30");
     });
   });
@@ -278,8 +288,11 @@ describe("TranscriptSegment", () => {
       ).find((el) => el.textContent?.includes("morning"));
       await user.click(run as Element);
 
+      // Includes the trailing period, since it's part of the display
+      // token being edited — a minor trade-off of editing display text
+      // rather than the unpunctuated lexical word.
       const input = screen.getByRole("textbox") as HTMLInputElement;
-      expect(input.value).toBe("morning");
+      expect(input.value).toBe("morning.");
     });
 
     it("saves the run's own word-range, not the whole segment text", async () => {
@@ -479,11 +492,11 @@ describe("TranscriptSegment", () => {
       );
       await user.click(screen.getByLabelText(/show change history/i));
 
-      // "morning" is low-confidence, so it's nested inside an outer orange
+      // "morning." is low-confidence, so it's nested inside an outer orange
       // wrapper span — query the inner (leaf) word span specifically.
       const morningWord = Array.from(
         wordsParagraph(container).querySelectorAll("span span")
-      ).find((el) => el.textContent?.trim() === "morning");
+      ).find((el) => el.textContent?.trim() === "morning.");
       expect(morningWord?.className).not.toContain("ring-amber-500");
 
       const historyItem = screen.getByText(/phrase correction/i).closest("li");
