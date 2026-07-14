@@ -8,43 +8,57 @@ import {
   RotateCcw,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { confidencePercent, formatTime } from "@/lib/mock-data";
 import type { TranscriptSegment as TranscriptSegmentType } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import {
+  alignWordsToDisplayTokens,
+  type DisplayToken,
+  displayRangeForWordRange,
+} from "@/lib/word-alignment";
 
 const LOW_CONFIDENCE_THRESHOLD = 0.85;
 
 type WordList = NonNullable<TranscriptSegmentType["words"]>;
 type WordCorrectionList = NonNullable<TranscriptSegmentType["wordCorrections"]>;
 
+// Runs are expressed in DISPLAY TOKEN indices (positions in the
+// alignWordsToDisplayTokens() output) — never in the underlying lexical
+// `words` array indices, since what's rendered is the properly-formatted
+// phrase text, not the raw per-word recognition tokens. Corrections are
+// still submitted to the backend in lexical indices (wordStart/wordEnd),
+// since that's what the original words array — and any existing
+// WordCorrection this run came from — are keyed on.
 interface OriginalRun {
   kind: "original";
-  start: number;
-  end: number; // inclusive
+  start: number; // inclusive, display token index
+  end: number; // inclusive, display token index
   lowConfidence: boolean;
 }
 
 interface CorrectedRun {
   kind: "corrected";
-  start: number; // inclusive, indices into the original words array
-  end: number; // inclusive
+  start: number; // inclusive, display token index
+  end: number; // inclusive, display token index
   text: string;
+  wordStart: number; // the underlying WordCorrection's own lexical range —
+  wordEnd: number; // used to re-edit the exact same correction.
 }
 
 type Run = OriginalRun | CorrectedRun;
 
-// Groups words[from..to] (inclusive) into runs of consecutive
+// Groups tokens[from..to] (inclusive) into runs of consecutive
 // below/above-threshold confidence.
 function groupByConfidence(
-  words: WordList,
+  tokens: DisplayToken[],
   from: number,
   to: number
 ): OriginalRun[] {
   const runs: OriginalRun[] = [];
   for (let i = from; i <= to; i++) {
-    const lowConfidence = words[i].confidence < LOW_CONFIDENCE_THRESHOLD;
+    const lowConfidence = tokens[i].confidence < LOW_CONFIDENCE_THRESHOLD;
     const last = runs[runs.length - 1];
     if (last && last.lowConfidence === lowConfidence) {
       last.end = i;
@@ -55,56 +69,119 @@ function groupByConfidence(
   return runs;
 }
 
-// Splices active word_corrections into the original word list so untouched
-// words keep rendering with their real per-word confidence/timing, while
-// corrected ranges render as a single replacement span.
+// Splices active word_corrections (given in lexical word indices) into the
+// display-token stream, so untouched tokens keep rendering with their own
+// confidence/timing while corrected ranges render as a single replacement.
+interface CorrectionRange {
+  start: number; // display token index
+  end: number; // display token index
+  text: string;
+  wordStart: number;
+  wordEnd: number;
+}
+
+// Corrections are non-overlapping in *lexical* word indices (enforced by
+// the backend), but a single display token can span many lexical words —
+// so two otherwise-disjoint corrections can still map onto the same
+// display-token range. Merge those into one, rather than rendering
+// duplicate/overlapping corrected spans for the same tokens. Merely
+// touching (adjacent, non-overlapping) ranges are left as separate runs —
+// two adjacent corrected spans render fine and aren't a correctness issue.
+function mergeOverlappingCorrectionRanges(
+  ranges: CorrectionRange[]
+): CorrectionRange[] {
+  // Secondary sort on wordStart: when multiple corrections map onto the
+  // same display-token start (coarse tokenisation), the backend's
+  // word_corrections array isn't guaranteed to already be in lexical
+  // order, so relying on array order alone could merge "Y X" instead of
+  // "X Y".
+  const sorted = [...ranges].sort(
+    (a, b) => a.start - b.start || a.wordStart - b.wordStart
+  );
+  const merged: CorrectionRange[] = [];
+  for (const r of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && r.start <= last.end) {
+      last.end = Math.max(last.end, r.end);
+      last.wordStart = Math.min(last.wordStart, r.wordStart);
+      last.wordEnd = Math.max(last.wordEnd, r.wordEnd);
+      last.text = `${last.text} ${r.text}`;
+    } else {
+      merged.push({ ...r });
+    }
+  }
+  return merged;
+}
+
 function buildRuns(
-  words: WordList,
+  tokens: DisplayToken[],
   corrections: WordCorrectionList | undefined
 ): Run[] {
-  const sorted = [...(corrections ?? [])].sort(
-    (a, b) => a.startWordIndex - b.startWordIndex
+  const correctionRanges = mergeOverlappingCorrectionRanges(
+    (corrections ?? [])
+      .map((c) => {
+        const range = displayRangeForWordRange(
+          tokens,
+          c.startWordIndex,
+          c.endWordIndex
+        );
+        return range
+          ? {
+              start: range.start,
+              end: range.end,
+              text: c.text,
+              wordStart: c.startWordIndex,
+              wordEnd: c.endWordIndex,
+            }
+          : null;
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null)
   );
+
   const runs: Run[] = [];
   let cursor = 0;
-  for (const c of sorted) {
-    if (c.startWordIndex > cursor) {
-      runs.push(...groupByConfidence(words, cursor, c.startWordIndex - 1));
+  for (const c of correctionRanges) {
+    if (c.start > cursor) {
+      runs.push(...groupByConfidence(tokens, cursor, c.start - 1));
     }
     runs.push({
       kind: "corrected",
-      start: c.startWordIndex,
-      end: c.endWordIndex,
+      start: c.start,
+      end: c.end,
       text: c.text,
+      wordStart: c.wordStart,
+      wordEnd: c.wordEnd,
     });
-    cursor = c.endWordIndex + 1;
+    cursor = c.end + 1;
   }
-  if (cursor < words.length) {
-    runs.push(...groupByConfidence(words, cursor, words.length - 1));
+  if (cursor < tokens.length) {
+    runs.push(...groupByConfidence(tokens, cursor, tokens.length - 1));
   }
   return runs;
 }
 
 interface WordsProps {
+  text: string;
   words: WordList;
   wordCorrections?: WordCorrectionList;
   isActive?: boolean;
   getCurrentTime?: () => number;
   // Corrects just the clicked run (a low-confidence phrase, or an existing
-  // correction being re-edited) — indices always refer to positions in the
-  // original `words` array, so everything outside the range keeps its own
-  // confidence/timing untouched.
+  // correction being re-edited). Indices are always in the original lexical
+  // `words` array, matching the backend's word-range correction contract.
   onCorrectRange?: (
     startWordIndex: number,
     endWordIndex: number,
     correctedText: string
   ) => Promise<void> | void;
-  // Set while hovering a history entry, so its word range can be
-  // highlighted here to show the clerk exactly where that change landed.
+  // Set while hovering a history entry (in lexical word indices), so its
+  // range can be highlighted here to show the clerk exactly where that
+  // change landed.
   highlightRange?: { start: number; end: number } | null;
 }
 
 function Words({
+  text,
   words,
   wordCorrections,
   isActive,
@@ -119,11 +196,18 @@ function Words({
   // regardless of word length.
   const [liveTime, setLiveTime] = useState(0);
   const [editingRun, setEditingRun] = useState<{
-    start: number;
-    end: number;
+    start: number; // display token index
+    end: number; // display token index
+    wordStart: number; // lexical index to submit on save
+    wordEnd: number;
   } | null>(null);
   const [rangeDraft, setRangeDraft] = useState("");
   const [savingRange, setSavingRange] = useState(false);
+
+  const tokens = useMemo(
+    () => alignWordsToDisplayTokens(text, words),
+    [text, words]
+  );
 
   useEffect(() => {
     if (!isActive || !getCurrentTime) return;
@@ -136,9 +220,15 @@ function Words({
     return () => cancelAnimationFrame(frame);
   }, [isActive, getCurrentTime]);
 
-  const startEditingRun = (start: number, end: number, initialText: string) => {
+  const startEditingRun = (
+    start: number,
+    end: number,
+    wordStart: number,
+    wordEnd: number,
+    initialText: string
+  ) => {
     setRangeDraft(initialText);
-    setEditingRun({ start, end });
+    setEditingRun({ start, end, wordStart, wordEnd });
   };
 
   const saveRun = async () => {
@@ -150,7 +240,7 @@ function Words({
     }
     setSavingRange(true);
     try {
-      await onCorrectRange?.(editingRun.start, editingRun.end, trimmed);
+      await onCorrectRange?.(editingRun.wordStart, editingRun.wordEnd, trimmed);
       setEditingRun(null);
     } finally {
       setSavingRange(false);
@@ -158,13 +248,13 @@ function Words({
   };
 
   if (editingRun) {
-    const before = words
+    const before = tokens
       .slice(0, editingRun.start)
-      .map((w) => w.text)
+      .map((t) => t.text)
       .join(" ");
-    const after = words
+    const after = tokens
       .slice(editingRun.end + 1)
-      .map((w) => w.text)
+      .map((t) => t.text)
       .join(" ");
     return (
       <div className="space-y-2">
@@ -198,27 +288,37 @@ function Words({
     );
   }
 
-  const runs = buildRuns(words, wordCorrections);
+  const runs = buildRuns(tokens, wordCorrections);
+  const highlightDisplayRange = highlightRange
+    ? displayRangeForWordRange(tokens, highlightRange.start, highlightRange.end)
+    : null;
 
   return (
     <p className="text-sm leading-relaxed">
       {runs.map((run) => {
         const overlapsHighlight =
-          !!highlightRange &&
-          run.start <= highlightRange.end &&
-          run.end >= highlightRange.start;
+          !!highlightDisplayRange &&
+          run.start <= highlightDisplayRange.end &&
+          run.end >= highlightDisplayRange.start;
 
         if (run.kind === "corrected") {
           const isSpoken =
             isActive &&
-            liveTime >= words[run.start].startTime &&
-            liveTime < words[run.end].endTime;
+            liveTime >= tokens[run.start].startTime &&
+            liveTime < tokens[run.end].endTime;
           return (
             <span
-              key={`corrected-${run.start}`}
+              key={`corrected-${run.wordStart}-${run.wordEnd}`}
               onClick={
                 onCorrectRange
-                  ? () => startEditingRun(run.start, run.end, run.text)
+                  ? () =>
+                      startEditingRun(
+                        run.start,
+                        run.end,
+                        run.wordStart,
+                        run.wordEnd,
+                        run.text
+                      )
                   : undefined
               }
               onKeyDown={
@@ -226,7 +326,13 @@ function Words({
                   ? (e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        startEditingRun(run.start, run.end, run.text);
+                        startEditingRun(
+                          run.start,
+                          run.end,
+                          run.wordStart,
+                          run.wordEnd,
+                          run.text
+                        );
                       }
                     }
                   : undefined
@@ -248,16 +354,18 @@ function Words({
           );
         }
 
-        const runWords = words
+        const runTokens = tokens
           .slice(run.start, run.end + 1)
-          .map((word, offset) => {
+          .map((token, offset) => {
             const i = run.start + offset;
             const isSpoken =
-              isActive && liveTime >= word.startTime && liveTime < word.endTime;
+              isActive &&
+              liveTime >= token.startTime &&
+              liveTime < token.endTime;
             const isHighlighted =
-              !!highlightRange &&
-              i >= highlightRange.start &&
-              i <= highlightRange.end;
+              !!highlightDisplayRange &&
+              i >= highlightDisplayRange.start &&
+              i <= highlightDisplayRange.end;
             return (
               <span
                 key={i}
@@ -267,24 +375,33 @@ function Words({
                   isHighlighted && "ring-2 ring-amber-500"
                 )}
               >
-                {word.text}{" "}
+                {token.text}{" "}
               </span>
             );
           });
 
-        if (!run.lowConfidence) return runWords;
+        if (!run.lowConfidence) return runTokens;
 
-        const initialText = words
+        const initialText = tokens
           .slice(run.start, run.end + 1)
-          .map((w) => w.text)
+          .map((t) => t.text)
           .join(" ");
+        const wordStart = tokens[run.start].startWordIndex;
+        const wordEnd = tokens[run.end].endWordIndex;
 
         return (
           <span
             key={run.start}
             onClick={
               onCorrectRange
-                ? () => startEditingRun(run.start, run.end, initialText)
+                ? () =>
+                    startEditingRun(
+                      run.start,
+                      run.end,
+                      wordStart,
+                      wordEnd,
+                      initialText
+                    )
                 : undefined
             }
             onKeyDown={
@@ -292,7 +409,13 @@ function Words({
                 ? (e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      startEditingRun(run.start, run.end, initialText);
+                      startEditingRun(
+                        run.start,
+                        run.end,
+                        wordStart,
+                        wordEnd,
+                        initialText
+                      );
                     }
                   }
                 : undefined
@@ -309,7 +432,7 @@ function Words({
               onCorrectRange && "cursor-pointer hover:bg-orange-200"
             )}
           >
-            {runWords}
+            {runTokens}
           </span>
         );
       })}
@@ -618,6 +741,7 @@ export function TranscriptSegment({
           </div>
         ) : segment.correctedText === undefined && segment.words ? (
           <Words
+            text={segment.text}
             words={segment.words}
             wordCorrections={segment.wordCorrections}
             isActive={isActive}
