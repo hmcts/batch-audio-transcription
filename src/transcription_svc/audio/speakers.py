@@ -7,6 +7,25 @@ from transcription_svc.database.models import DialogueEntry
 logger = logging.getLogger(__name__)
 
 
+def _merged_confidence(
+    existing_text: str,
+    existing_confidence: float | None,
+    new_text: str,
+    new_confidence: float | None,
+) -> float | None:
+    """Word-count-weighted average, matching how accuracy.py aggregates confidence."""
+    if existing_confidence is None and new_confidence is None:
+        return None
+    existing_words = len(existing_text.split())
+    new_words = len(new_text.split())
+    total_words = existing_words + new_words
+    if total_words == 0:
+        return existing_confidence if existing_confidence is not None else new_confidence
+    return (
+        (existing_confidence or 0.0) * existing_words + (new_confidence or 0.0) * new_words
+    ) / total_words
+
+
 def group_dialogue_entries_by_speaker(
     entries: list[DialogueEntry],
 ) -> list[DialogueEntry]:
@@ -24,8 +43,15 @@ def group_dialogue_entries_by_speaker(
                 text=entry.text,
                 start_time=entry.start_time,
                 end_time=entry.end_time,
+                confidence=entry.confidence,
+                words=entry.words,
             )
         elif current_entry:
+            current_entry.confidence = _merged_confidence(
+                current_entry.text, current_entry.confidence, entry.text, entry.confidence
+            )
+            if current_entry.words is not None or entry.words is not None:
+                current_entry.words = (current_entry.words or []) + (entry.words or [])
             current_entry.text += f" {entry.text}"
             current_entry.end_time = entry.end_time
 
@@ -50,6 +76,8 @@ def normalize_speaker_labels(entries: list[DialogueEntry]) -> list[DialogueEntry
                 text=entry.text,
                 start_time=entry.start_time,
                 end_time=entry.end_time,
+                confidence=entry.confidence,
+                words=entry.words,
             )
         )
 
@@ -63,6 +91,8 @@ def add_speaker_labels(entries: list[DialogueEntry]) -> list[DialogueEntry]:
             text=entry.text,
             start_time=entry.start_time,
             end_time=entry.end_time,
+            confidence=entry.confidence,
+            words=entry.words,
         )
         for entry in entries
     ]
