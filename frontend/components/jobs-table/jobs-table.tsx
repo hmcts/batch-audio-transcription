@@ -6,6 +6,7 @@ import {
   ChevronUp,
   FileAudio,
 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { JobStatusBadge } from "@/components/job-status/job-status-badge";
 import { Progress } from "@/components/ui/progress";
@@ -118,6 +119,10 @@ export function JobsTable({
           {jobs.map((job) => (
             <tr
               key={job.id}
+              // Mouse convenience only — clicking anywhere on the row
+              // navigates. Keyboard/assistive-tech users get a real <Link>
+              // in the last cell instead (overriding <tr>'s role here would
+              // destroy its table-row semantics for the cells within it).
               onClick={() => router.push(`/jobs/${job.id}`)}
               className="hover:bg-muted/30 transition-colors cursor-pointer"
             >
@@ -155,9 +160,13 @@ export function JobsTable({
                 </div>
               </td>
               <td className="px-4 py-3">
-                <span className="text-primary hover:underline font-medium">
+                <Link
+                  href={`/jobs/${job.id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-primary hover:underline font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded"
+                >
                   {TRANSCRIPT_LINK_LABEL[job.status]}
-                </span>
+                </Link>
               </td>
             </tr>
           ))}

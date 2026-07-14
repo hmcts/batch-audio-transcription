@@ -65,6 +65,8 @@ def size(blob_name: str) -> int:
 
 def read_range(blob_name: str, start: int, length: int) -> bytes:
     target = _storage_root() / _flat_filename(blob_name)
+    if not target.exists():
+        raise FileNotFoundError(blob_name)
     with target.open("rb") as f:
         f.seek(start)
         return f.read(length)

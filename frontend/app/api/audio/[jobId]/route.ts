@@ -15,8 +15,18 @@ export async function GET(request: Request, { params }: RouteContext) {
       jobId,
       request.headers.get("range")
     );
-    if (!backendResponse) {
-      return NextResponse.json({ error: "Audio not found" }, { status: 404 });
+    // Forward the backend's status verbatim — 200/206 for real audio, but
+    // also 404 (no job/blob) and 416 (unsatisfiable range) need to reach
+    // the browser with their real Content-Range so <audio> can react
+    // correctly instead of every non-2xx collapsing into the same error.
+    if (!backendResponse.ok) {
+      const headers: Record<string, string> = {};
+      const contentRange = backendResponse.headers.get("Content-Range");
+      if (contentRange) headers["Content-Range"] = contentRange;
+      return NextResponse.json(
+        { error: "Audio not available" },
+        { status: backendResponse.status, headers }
+      );
     }
     const headers: Record<string, string> = {
       "Content-Type":

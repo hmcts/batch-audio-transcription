@@ -2,6 +2,7 @@
 
 import logging
 import mimetypes
+from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.parse import quote
 
@@ -398,6 +399,27 @@ class AsyncAzureBlobManager:
                 return await download_stream.readall()
         except ResourceNotFoundError:
             return None
+
+    async def stream_blob_range(
+        self, blob_name: str, start: int, length: int, container_name: str | None = None
+    ) -> AsyncIterator[bytes]:
+        """Stream a byte range of a blob's content in fixed-size chunks.
+
+        Unlike download_blob_range(), this never buffers the whole
+        requested range in memory at once — needed so serving a large
+        (potentially multi-hour) recording for HTTP Range playback doesn't
+        cause a memory spike proportional to the recording's length.
+        Callers should confirm the blob exists (e.g. via get_blob_size)
+        before starting to stream it, since once the caller has begun
+        writing a streaming HTTP response, a not-found error surfacing
+        mid-stream can no longer be turned into a clean 404.
+        """
+        container = container_name or self.container_name
+        async with self._blob_service_client() as blob_service:
+            blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
+            download_stream = await blob_client.download_blob(offset=start, length=length)
+            async for chunk in download_stream.chunks():
+                yield chunk
 
     async def download_blob_to_file(
         self, blob_name: str, file_path: Path, container_name: str | None = None

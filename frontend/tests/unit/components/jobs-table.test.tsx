@@ -3,8 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { JobsTable } from "@/components/jobs-table/jobs-table";
 import { MOCK_JOBS } from "@/lib/mock-data";
 
+const push = vi.fn();
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push }),
 }));
 
 describe("JobsTable", () => {
@@ -43,5 +44,17 @@ describe("JobsTable", () => {
     };
     render(<JobsTable jobs={[processingJob]} />);
     expect(screen.getByText("60%")).toBeDefined();
+  });
+
+  it("gives each row a real, keyboard/screen-reader accessible link", () => {
+    const completedJob = { ...MOCK_JOBS[0], status: "COMPLETED" as const };
+    render(<JobsTable jobs={[completedJob]} />);
+    const link = screen.getByRole("link", { name: /view transcript/i });
+    expect(link.getAttribute("href")).toBe(`/jobs/${completedJob.id}`);
+  });
+
+  it("keeps rows queryable by their table row role", () => {
+    render(<JobsTable jobs={[MOCK_JOBS[0]]} />);
+    expect(screen.getAllByRole("row").length).toBeGreaterThan(0);
   });
 });
