@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import DashboardPage from "@/app/page";
 
@@ -21,6 +21,11 @@ vi.mock("sonner", () => ({
   Toaster: () => null,
 }));
 
+vi.mock("@/lib/base-path", () => ({
+  BASE_PATH: "",
+  apiPath: (path: string) => `http://localhost${path}`,
+}));
+
 describe("DashboardPage", () => {
   it("renders page heading", () => {
     render(<DashboardPage />);
@@ -38,9 +43,40 @@ describe("DashboardPage", () => {
     expect(screen.getByText(/^uploads/i)).toBeDefined();
   });
 
-  it("shows mock completed jobs", () => {
+  it("shows jobs returned by the API", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            jobs: [
+              {
+                id: "job-1",
+                caseReference: "PA/05217/2025",
+                tribunal: "First-tier Tribunal",
+                audioFileName: "hearing1.wav",
+                status: "COMPLETED",
+                progressPercent: 100,
+              },
+              {
+                id: "job-2",
+                caseReference: "EA/11042/2025",
+                tribunal: "First-tier Tribunal",
+                audioFileName: "hearing2.wav",
+                status: "COMPLETED",
+                progressPercent: 100,
+              },
+            ],
+          }),
+      })
+    );
+
     render(<DashboardPage />);
-    expect(screen.getAllByText("PA/05217/2025").length).toBeGreaterThan(0);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("PA/05217/2025").length).toBeGreaterThan(0);
+    });
     expect(screen.getAllByText("EA/11042/2025").length).toBeGreaterThan(0);
   });
 });
