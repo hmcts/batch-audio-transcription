@@ -3,14 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { JobsTable } from "@/components/jobs-table/jobs-table";
 import { MOCK_JOBS } from "@/lib/mock-data";
 
-vi.mock("next/link", () => ({
-  default: ({
-    href,
-    children,
-  }: {
-    href: string;
-    children: React.ReactNode;
-  }) => <a href={href}>{children}</a>,
+const push = vi.fn();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push }),
 }));
 
 describe("JobsTable", () => {
@@ -34,9 +29,32 @@ describe("JobsTable", () => {
     );
   });
 
-  it("shows dash for non-completed jobs", () => {
+  it("shows a details link for non-completed jobs", () => {
     const failedJobs = MOCK_JOBS.filter((j) => j.status === "FAILED");
     render(<JobsTable jobs={failedJobs} />);
-    expect(screen.getByText("—")).toBeDefined();
+    expect(screen.getAllByText(/view details/i).length).toBe(failedJobs.length);
+  });
+
+  it("shows percentage alongside the progress bar for processing jobs", () => {
+    const processingJob = {
+      ...MOCK_JOBS[0],
+      id: "job-processing-test",
+      status: "PROCESSING" as const,
+      progressPercent: 60,
+    };
+    render(<JobsTable jobs={[processingJob]} />);
+    expect(screen.getByText("60%")).toBeDefined();
+  });
+
+  it("gives each row a real, keyboard/screen-reader accessible link", () => {
+    const completedJob = { ...MOCK_JOBS[0], status: "COMPLETED" as const };
+    render(<JobsTable jobs={[completedJob]} />);
+    const link = screen.getByRole("link", { name: /view transcript/i });
+    expect(link.getAttribute("href")).toBe(`/jobs/${completedJob.id}`);
+  });
+
+  it("keeps rows queryable by their table row role", () => {
+    render(<JobsTable jobs={[MOCK_JOBS[0]]} />);
+    expect(screen.getAllByRole("row").length).toBeGreaterThan(0);
   });
 });

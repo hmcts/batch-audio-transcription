@@ -1,16 +1,70 @@
 import "server-only";
-import type { JobStatus, TranscriptionJob, TranscriptSegment } from "./types";
+import type {
+  CorrectionEntry,
+  JobStatus,
+  LowConfidenceSegment,
+  TranscriptAccuracy,
+  TranscriptionJob,
+  TranscriptSegment,
+  Word,
+  WordCorrection,
+} from "./types";
 
 // Server-only client for the transcription_svc backend. Never import this
 // from a "use client" component — it reads the backend API key, which must
 // not reach the browser bundle. Route handlers under app/api/** are the
 // bridge between client components and this module.
 
+interface BackendWordInfo {
+  text: string;
+  start_time: number;
+  end_time: number;
+  confidence: number;
+}
+
+interface BackendWordCorrection {
+  start_word_index: number;
+  end_word_index: number;
+  text: string;
+}
+
+interface BackendCorrectionEntry {
+  timestamp: string;
+  kind: string;
+  previous_text: string;
+  new_text: string;
+  start_word_index?: number | null;
+  end_word_index?: number | null;
+  previous_phrase?: string | null;
+  new_phrase?: string | null;
+}
+
 interface BackendDialogueEntry {
   speaker: string;
   text: string;
   start_time: number;
   end_time: number;
+  confidence?: number | null;
+  corrected_text?: string | null;
+  word_corrections?: BackendWordCorrection[] | null;
+  correction_history?: BackendCorrectionEntry[] | null;
+  words?: BackendWordInfo[] | null;
+}
+
+interface BackendAccuracy {
+  confidence_score: number;
+  words_transcribed: number;
+  low_confidence_count: number;
+  confidence_threshold: number;
+  has_corrections: boolean;
+  word_error_rate: number | null;
+  corrected_percent: number | null;
+}
+
+interface BackendNeedsReviewItem {
+  speaker: string;
+  start_time: number;
+  confidence: number;
 }
 
 interface BackendJob {
@@ -19,6 +73,8 @@ interface BackendJob {
   created_at: string;
   updated_at: string | null;
   dialogue_entries: BackendDialogueEntry[] | null;
+  accuracy: BackendAccuracy | null;
+  needs_review: BackendNeedsReviewItem[] | null;
   error_message: string | null;
   metadata: Record<string, unknown>;
 }
@@ -54,11 +110,18 @@ function apiKey(): string {
   return key;
 }
 
-async function backendFetch(
+// Raw fetch against the backend — returns the Response as-is regardless of
+// status, so a caller that needs to forward non-2xx statuses verbatim (e.g.
+// audio range requests, where 206/404/416 all need to reach the browser
+// with their real status and headers intact) can do so without them being
+// turned into a thrown error first. Most callers want backendFetch()
+// instead, which throws on non-2xx for the common "this should always
+// succeed" case.
+async function rawBackendFetch(
   path: string,
   init?: RequestInit
 ): Promise<Response> {
-  const response = await fetch(`${backendUrl()}${path}`, {
+  return fetch(`${backendUrl()}${path}`, {
     ...init,
     // Authorization is spread last so a caller-supplied header (present or
     // future) can never accidentally override the backend bearer token.
@@ -68,6 +131,13 @@ async function backendFetch(
     },
     cache: "no-store",
   });
+}
+
+async function backendFetch(
+  path: string,
+  init?: RequestInit
+): Promise<Response> {
+  const response = await rawBackendFetch(path, init);
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
@@ -115,17 +185,90 @@ export function colorForSpeaker(speaker: string): string {
   return SPEAKER_COLORS[hash % SPEAKER_COLORS.length];
 }
 
+function toWords(
+  words: BackendWordInfo[] | null | undefined
+): Word[] | undefined {
+  if (!words || words.length === 0) return undefined;
+  return words.map((w) => ({
+    text: w.text,
+    startTime: w.start_time,
+    endTime: w.end_time,
+    confidence: w.confidence,
+  }));
+}
+
+function toWordCorrections(
+  corrections: BackendWordCorrection[] | null | undefined
+): WordCorrection[] | undefined {
+  if (!corrections || corrections.length === 0) return undefined;
+  return corrections.map((c) => ({
+    startWordIndex: c.start_word_index,
+    endWordIndex: c.end_word_index,
+    text: c.text,
+  }));
+}
+
+function toCorrectionHistory(
+  history: BackendCorrectionEntry[] | null | undefined
+): CorrectionEntry[] | undefined {
+  if (!history || history.length === 0) return undefined;
+  return history.map((h) => ({
+    timestamp: h.timestamp,
+    kind: h.kind as CorrectionEntry["kind"],
+    previousText: h.previous_text,
+    newText: h.new_text,
+    startWordIndex: h.start_word_index ?? undefined,
+    endWordIndex: h.end_word_index ?? undefined,
+    previousPhrase: h.previous_phrase ?? undefined,
+    newPhrase: h.new_phrase ?? undefined,
+  }));
+}
+
 function toSegments(
   entries: BackendDialogueEntry[] | null
 ): TranscriptSegment[] | undefined {
   if (!entries || entries.length === 0) return undefined;
   return entries.map((entry, index) => ({
     id: `seg-${index}`,
-    speaker: `Speaker ${entry.speaker}`,
+    // The backend already labels speakers (e.g. "Speaker 1") via
+    // add_speaker_labels — prefixing again here produced "Speaker Speaker 1".
+    speaker: entry.speaker,
     speakerColor: colorForSpeaker(entry.speaker),
     text: entry.text,
+    correctedText: entry.corrected_text ?? undefined,
+    wordCorrections: toWordCorrections(entry.word_corrections),
+    correctionHistory: toCorrectionHistory(entry.correction_history),
     startTime: entry.start_time,
     duration: Math.max(0, entry.end_time - entry.start_time),
+    confidence: entry.confidence ?? undefined,
+    words: toWords(entry.words),
+  }));
+}
+
+function toAccuracy(
+  accuracy: BackendAccuracy | null
+): TranscriptAccuracy | undefined {
+  if (!accuracy) return undefined;
+  return {
+    confidenceScore: accuracy.confidence_score,
+    wordsTranscribed: accuracy.words_transcribed,
+    lowConfidenceCount: accuracy.low_confidence_count,
+    confidenceThreshold: accuracy.confidence_threshold,
+    hasCorrections: accuracy.has_corrections,
+    wordErrorRate: accuracy.word_error_rate ?? undefined,
+    correctedPercent: accuracy.corrected_percent ?? undefined,
+  };
+}
+
+function toLowConfidenceSegments(
+  items: BackendNeedsReviewItem[] | null
+): LowConfidenceSegment[] | undefined {
+  if (!items || items.length === 0) return undefined;
+  return items.map((item) => ({
+    speaker: item.speaker,
+    speakerColor: colorForSpeaker(item.speaker),
+    confidence: item.confidence,
+    startTime: item.start_time,
   }));
 }
 
@@ -152,7 +295,10 @@ function toTranscriptionJob(job: BackendJob): TranscriptionJob {
         : undefined,
     status,
     progressPercent: PROGRESS_BY_STATUS[job.status] ?? 0,
+    errorMessage: job.error_message ?? undefined,
     segments: toSegments(job.dialogue_entries),
+    accuracy: toAccuracy(job.accuracy),
+    lowConfidenceSegments: toLowConfidenceSegments(job.needs_review),
   };
 }
 
@@ -181,6 +327,19 @@ export async function getJob(jobId: string): Promise<TranscriptionJob | null> {
   }
 }
 
+// Returns the backend's raw Response — including non-2xx ones (404 if the
+// job/blob doesn't exist, 416 for an unsatisfiable range, etc.) — so the
+// route handler can forward the real status, headers, and body straight to
+// the browser rather than every non-2xx collapsing into a generic error.
+export async function getJobAudio(
+  jobId: string,
+  rangeHeader?: string | null
+): Promise<Response> {
+  return rawBackendFetch(`/api/v1/jobs/${jobId}/audio`, {
+    headers: rangeHeader ? { Range: rangeHeader } : undefined,
+  });
+}
+
 export async function uploadAudio(
   file: Blob,
   filename: string
@@ -203,13 +362,15 @@ export interface SubmitJobMetadata {
 
 export async function submitJob(
   audioUrl: string,
-  metadata: SubmitJobMetadata
+  metadata: SubmitJobMetadata,
+  blobName?: string
 ): Promise<TranscriptionJob> {
   const response = await backendFetch("/api/v1/jobs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       audio_url: audioUrl,
+      blob_name: blobName,
       metadata: {
         case_reference: metadata.caseReference,
         tribunal: metadata.tribunal,
@@ -221,15 +382,84 @@ export async function submitJob(
   return toTranscriptionJob(body);
 }
 
+export async function correctSegment(
+  jobId: string,
+  index: number,
+  correctedText: string
+): Promise<TranscriptionJob> {
+  const response = await backendFetch(
+    `/api/v1/jobs/${jobId}/segments/${index}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ corrected_text: correctedText }),
+    }
+  );
+  const body: BackendJob = await response.json();
+  return toTranscriptionJob(body);
+}
+
+export async function correctWordRange(
+  jobId: string,
+  index: number,
+  startWordIndex: number,
+  endWordIndex: number,
+  correctedText: string
+): Promise<TranscriptionJob> {
+  const response = await backendFetch(
+    `/api/v1/jobs/${jobId}/segments/${index}/words`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        start_word_index: startWordIndex,
+        end_word_index: endWordIndex,
+        corrected_text: correctedText,
+      }),
+    }
+  );
+  const body: BackendJob = await response.json();
+  return toTranscriptionJob(body);
+}
+
+export async function rollbackSegment(
+  jobId: string,
+  index: number
+): Promise<TranscriptionJob> {
+  const response = await backendFetch(
+    `/api/v1/jobs/${jobId}/segments/${index}/rollback`,
+    { method: "POST" }
+  );
+  const body: BackendJob = await response.json();
+  return toTranscriptionJob(body);
+}
+
+export async function rollbackToHistoryEntry(
+  jobId: string,
+  index: number,
+  historyIndex: number
+): Promise<TranscriptionJob> {
+  const response = await backendFetch(
+    `/api/v1/jobs/${jobId}/segments/${index}/history/${historyIndex}/rollback`,
+    { method: "POST" }
+  );
+  const body: BackendJob = await response.json();
+  return toTranscriptionJob(body);
+}
+
 export async function uploadAndSubmit(
   file: Blob,
   filename: string
 ): Promise<TranscriptionJob> {
-  const { audio_url } = await uploadAudio(file, filename);
+  const { audio_url, blob_name } = await uploadAudio(file, filename);
   const caseReference = filename.replace(/\.[^.]+$/, "").replace(/_/g, "/");
-  return submitJob(audio_url, {
-    caseReference,
-    tribunal: "First-tier Tribunal — Immigration and Asylum Chamber",
-    audioFileName: filename,
-  });
+  return submitJob(
+    audio_url,
+    {
+      caseReference,
+      tribunal: "First-tier Tribunal — Immigration and Asylum Chamber",
+      audioFileName: filename,
+    },
+    blob_name
+  );
 }

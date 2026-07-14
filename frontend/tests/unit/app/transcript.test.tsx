@@ -95,12 +95,47 @@ describe("TranscriptPage", () => {
     ).rejects.toThrow("NEXT_NOT_FOUND");
   });
 
-  it("calls notFound when the job has no transcript segments yet", async () => {
+  it("shows a fallback message when a completed job has no transcript segments", async () => {
     mockGetJob.mockResolvedValue({ ...COMPLETED_JOB, segments: undefined });
-    await expect(
-      TranscriptPage({
+    render(
+      await TranscriptPage({
         params: Promise.resolve({ jobId: COMPLETED_JOB.id }),
       })
-    ).rejects.toThrow("NEXT_NOT_FOUND");
+    );
+    expect(screen.getByText(/no content to display/i)).toBeDefined();
+  });
+
+  it("shows an in-progress message and does not 404 for a processing job", async () => {
+    mockGetJob.mockResolvedValue({
+      ...COMPLETED_JOB,
+      status: "PROCESSING",
+      progressPercent: 60,
+      segments: undefined,
+    });
+    render(
+      await TranscriptPage({
+        params: Promise.resolve({ jobId: COMPLETED_JOB.id }),
+      })
+    );
+    expect(screen.getByText(/still in progress/i)).toBeDefined();
+    expect(screen.getByText("60%")).toBeDefined();
+  });
+
+  it("shows the error message and does not 404 for a failed job", async () => {
+    mockGetJob.mockResolvedValue({
+      ...COMPLETED_JOB,
+      status: "FAILED",
+      segments: undefined,
+      errorMessage: "Azure batch transcription submission failed",
+    });
+    render(
+      await TranscriptPage({
+        params: Promise.resolve({ jobId: COMPLETED_JOB.id }),
+      })
+    );
+    expect(screen.getByText(/transcription failed/i)).toBeDefined();
+    expect(
+      screen.getByText("Azure batch transcription submission failed")
+    ).toBeDefined();
   });
 });

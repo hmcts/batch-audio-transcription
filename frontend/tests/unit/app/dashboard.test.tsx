@@ -13,6 +13,10 @@ vi.mock("next/link", () => ({
   }) => <a href={href}>{children}</a>,
 }));
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
   Toaster: () => null,
@@ -66,9 +70,10 @@ describe("DashboardPage", () => {
     expect(screen.getByText(/drag and drop an audio file/i)).toBeDefined();
   });
 
-  it("renders recent transcripts section", () => {
+  it("renders exactly the transcripts and uploads sections", () => {
     render(<DashboardPage />);
-    expect(screen.getByText("Recent transcripts")).toBeDefined();
+    expect(screen.getByText(/^transcripts/i)).toBeDefined();
+    expect(screen.getByText(/^uploads/i)).toBeDefined();
   });
 
   it("shows jobs fetched from the API", async () => {

@@ -13,8 +13,6 @@ from transcription_svc.database.models import BatchJobStatus, JobStatus, Transcr
 
 logger = logging.getLogger(__name__)
 
-_BATCH_SAS_EXPIRY_HOURS: int = 72
-
 
 async def submit_and_queue_batch_job(
     session: Session,
@@ -26,6 +24,7 @@ async def submit_and_queue_batch_job(
     idempotency_key: str | None = None,
     metadata: dict | None = None,
     audio_duration_seconds: float | None = None,
+    audio_blob_path: str | None = None,
 ) -> TranscriptionJob:
     """Submit audio to Azure Batch Transcription and persist the initial job record.
 
@@ -41,6 +40,7 @@ async def submit_and_queue_batch_job(
         idempotency_key=idempotency_key,
         metadata_=metadata or {},
         audio_duration_seconds=audio_duration_seconds,
+        audio_blob_path=audio_blob_path,
         status=JobStatus.PENDING,
     )
     job = save_job(session, job)
