@@ -16,7 +16,12 @@ from transcription_svc.audio.speakers import (
 from transcription_svc.database.models import DialogueEntry, WordInfo
 
 
-def _entry(speaker: str, text: str, confidence: float | None = None, words=None) -> DialogueEntry:
+def _entry(
+    speaker: str,
+    text: str,
+    confidence: float | None = None,
+    words: list[WordInfo] | None = None,
+) -> DialogueEntry:
     return DialogueEntry(
         speaker=speaker,
         text=text,
@@ -87,6 +92,20 @@ class TestGroupDialogueEntriesBySpeaker:
         result = group_dialogue_entries_by_speaker(entries)
         assert len(result) == 1
         assert result[0].confidence is None
+        assert result[0].words is None
+
+    def test_drops_words_entirely_when_only_one_side_has_them(self):
+        # A partial words list (covering only one side of the merge) would
+        # no longer line up with the merged text's word indices, which
+        # would corrupt word-range corrections and playback-sync
+        # highlighting — so the merged entry must not have words at all
+        # rather than a misleading partial list.
+        entries = [
+            _entry("0", "the quick", confidence=0.9, words=_words("the", "quick")),
+            _entry("0", "brown fox", confidence=0.9, words=None),
+        ]
+        result = group_dialogue_entries_by_speaker(entries)
+        assert len(result) == 1
         assert result[0].words is None
 
 

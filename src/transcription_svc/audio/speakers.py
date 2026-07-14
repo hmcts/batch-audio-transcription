@@ -53,8 +53,15 @@ def group_dialogue_entries_by_speaker(
             current_entry.confidence = _merged_confidence(
                 current_entry.text, current_entry.confidence, entry.text, entry.confidence
             )
-            if current_entry.words is not None or entry.words is not None:
-                current_entry.words = (current_entry.words or []) + (entry.words or [])
+            # Only concatenate if BOTH sides have word-level data — a
+            # partial words list (covering just one side) would no longer
+            # line up with the merged text's word indices, corrupting
+            # word-range corrections and playback-sync highlighting.
+            current_entry.words = (
+                current_entry.words + entry.words
+                if current_entry.words is not None and entry.words is not None
+                else None
+            )
             current_entry.text += f" {entry.text}"
             current_entry.end_time = entry.end_time
 
