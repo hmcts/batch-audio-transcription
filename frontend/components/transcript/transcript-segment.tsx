@@ -88,7 +88,14 @@ interface CorrectionRange {
 function mergeOverlappingCorrectionRanges(
   ranges: CorrectionRange[]
 ): CorrectionRange[] {
-  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  // Secondary sort on wordStart: when multiple corrections map onto the
+  // same display-token start (coarse tokenisation), the backend's
+  // word_corrections array isn't guaranteed to already be in lexical
+  // order, so relying on array order alone could merge "Y X" instead of
+  // "X Y".
+  const sorted = [...ranges].sort(
+    (a, b) => a.start - b.start || a.wordStart - b.wordStart
+  );
   const merged: CorrectionRange[] = [];
   for (const r of sorted) {
     const last = merged[merged.length - 1];

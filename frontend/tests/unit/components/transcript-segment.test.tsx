@@ -434,9 +434,13 @@ describe("TranscriptSegment", () => {
             ...SEGMENT,
             text: "ABCD",
             words: denseWords,
+            // Deliberately out of lexical order — the backend's
+            // word_corrections array isn't guaranteed sorted, so the merge
+            // must still produce "X Y" (not "Y X") by ordering on
+            // wordStart rather than array/display order.
             wordCorrections: [
-              { startWordIndex: 0, endWordIndex: 0, text: "X" },
               { startWordIndex: 2, endWordIndex: 2, text: "Y" },
+              { startWordIndex: 0, endWordIndex: 0, text: "X" },
             ],
           }}
         />
