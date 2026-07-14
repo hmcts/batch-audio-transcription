@@ -7,6 +7,28 @@ from transcription_svc.database.models import DialogueEntry
 logger = logging.getLogger(__name__)
 
 
+def _merged_confidence(
+    existing_text: str,
+    existing_confidence: float | None,
+    new_text: str,
+    new_confidence: float | None,
+) -> float | None:
+    """Word-count-weighted average, matching how accuracy.py aggregates confidence.
+
+    Only entries that actually have a confidence value contribute their word
+    count to the weighting — an unscored entry must not drag the average
+    down as if it scored 0.0.
+    """
+    existing_words = len(existing_text.split()) if existing_confidence is not None else 0
+    new_words = len(new_text.split()) if new_confidence is not None else 0
+    total_scored_words = existing_words + new_words
+    if total_scored_words == 0:
+        return None
+    return (
+        (existing_confidence or 0.0) * existing_words + (new_confidence or 0.0) * new_words
+    ) / total_scored_words
+
+
 def group_dialogue_entries_by_speaker(
     entries: list[DialogueEntry],
 ) -> list[DialogueEntry]:
@@ -24,8 +46,22 @@ def group_dialogue_entries_by_speaker(
                 text=entry.text,
                 start_time=entry.start_time,
                 end_time=entry.end_time,
+                confidence=entry.confidence,
+                words=entry.words,
             )
         elif current_entry:
+            current_entry.confidence = _merged_confidence(
+                current_entry.text, current_entry.confidence, entry.text, entry.confidence
+            )
+            # Only concatenate if BOTH sides have word-level data — a
+            # partial words list (covering just one side) would no longer
+            # line up with the merged text's word indices, corrupting
+            # word-range corrections and playback-sync highlighting.
+            current_entry.words = (
+                current_entry.words + entry.words
+                if current_entry.words is not None and entry.words is not None
+                else None
+            )
             current_entry.text += f" {entry.text}"
             current_entry.end_time = entry.end_time
 
@@ -50,6 +86,8 @@ def normalize_speaker_labels(entries: list[DialogueEntry]) -> list[DialogueEntry
                 text=entry.text,
                 start_time=entry.start_time,
                 end_time=entry.end_time,
+                confidence=entry.confidence,
+                words=entry.words,
             )
         )
 
@@ -63,6 +101,8 @@ def add_speaker_labels(entries: list[DialogueEntry]) -> list[DialogueEntry]:
             text=entry.text,
             start_time=entry.start_time,
             end_time=entry.end_time,
+            confidence=entry.confidence,
+            words=entry.words,
         )
         for entry in entries
     ]
