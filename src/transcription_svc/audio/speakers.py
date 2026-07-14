@@ -13,17 +13,20 @@ def _merged_confidence(
     new_text: str,
     new_confidence: float | None,
 ) -> float | None:
-    """Word-count-weighted average, matching how accuracy.py aggregates confidence."""
-    if existing_confidence is None and new_confidence is None:
+    """Word-count-weighted average, matching how accuracy.py aggregates confidence.
+
+    Only entries that actually have a confidence value contribute their word
+    count to the weighting — an unscored entry must not drag the average
+    down as if it scored 0.0.
+    """
+    existing_words = len(existing_text.split()) if existing_confidence is not None else 0
+    new_words = len(new_text.split()) if new_confidence is not None else 0
+    total_scored_words = existing_words + new_words
+    if total_scored_words == 0:
         return None
-    existing_words = len(existing_text.split())
-    new_words = len(new_text.split())
-    total_words = existing_words + new_words
-    if total_words == 0:
-        return existing_confidence if existing_confidence is not None else new_confidence
     return (
         (existing_confidence or 0.0) * existing_words + (new_confidence or 0.0) * new_words
-    ) / total_words
+    ) / total_scored_words
 
 
 def group_dialogue_entries_by_speaker(

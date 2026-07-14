@@ -60,6 +60,18 @@ class TestGroupDialogueEntriesBySpeaker:
         # (1.0*2 + 0.0*1) / 3 = 0.666...
         assert abs(result[0].confidence - (2 / 3)) < 1e-9
 
+    def test_unscored_entry_does_not_drag_down_a_scored_merge(self):
+        # A merged-in phrase with no confidence at all must not count as a
+        # 0.0-confidence phrase — it should simply not contribute to the
+        # weighting, leaving the scored phrase's own confidence intact.
+        entries = [
+            _entry("0", "one two", confidence=0.8),  # 2 words, scored
+            _entry("0", "three four", confidence=None),  # 2 words, unscored
+        ]
+        result = group_dialogue_entries_by_speaker(entries)
+        assert len(result) == 1
+        assert result[0].confidence == 0.8
+
     def test_does_not_merge_across_different_speakers(self):
         entries = [
             _entry("0", "hello", confidence=0.9, words=_words("hello")),
