@@ -53,14 +53,14 @@ def compute_accuracy(
         else 0.0
     )
 
-    has_corrections = any(e.corrected_text is not None for e in entries)
+    has_corrections = any(e.has_corrections() for e in entries)
 
     needs_review = [
         NeedsReviewItem(speaker=e.speaker, start_time=e.start_time, confidence=e.confidence)
         for e in entries
         if e.confidence is not None
         and e.confidence < confidence_threshold
-        and e.corrected_text is None
+        and not e.has_corrections()
     ]
 
     wer = None
@@ -71,9 +71,10 @@ def compute_accuracy(
         # edit-distance computation cheap (short segments, not the whole
         # transcript) and the metric honest (uncorrected segments would
         # otherwise contribute zero error and dilute the result).
-        pairs = [(e.corrected_text, e.text) for e in entries if e.corrected_text is not None]
+        corrected = [e for e in entries if e.has_corrections()]
+        pairs = [(e.effective_text(), e.text) for e in corrected]
         wer = aggregate_word_error_rate(pairs) * 100
-        corrected_percent = (len(pairs) / len(entries)) * 100 if entries else 0.0
+        corrected_percent = (len(corrected) / len(entries)) * 100 if entries else 0.0
 
     return AccuracySummary(
         confidence_score=confidence_score * 100,

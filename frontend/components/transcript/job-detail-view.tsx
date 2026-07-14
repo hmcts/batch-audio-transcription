@@ -2,7 +2,7 @@
 
 import { ChevronLeft } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { JobStatusBadge } from "@/components/job-status/job-status-badge";
 import { AudioPlayerBar } from "@/components/transcript/audio-player-bar";
 import { NeedsReviewPanel } from "@/components/transcript/needs-review-panel";
@@ -34,7 +34,10 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
   // A callback ref (rather than an effect) so listeners attach exactly when
   // the <audio> element mounts — which happens on first render if the job is
   // already COMPLETED, or later, whenever polling flips it to COMPLETED.
-  const attachAudioRef = (el: HTMLAudioElement | null) => {
+  // Stabilised with useCallback (empty deps): this component re-renders
+  // frequently (timeupdate -> setPosition), and a ref callback recreated
+  // every render makes React detach/reattach these listeners on every one.
+  const attachAudioRef = useCallback((el: HTMLAudioElement | null) => {
     audioCleanupRef.current?.();
     audioCleanupRef.current = null;
     audioElRef.current = el;
@@ -59,13 +62,22 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
       el.removeEventListener("pause", onPause);
       el.removeEventListener("error", onError);
     };
-  };
+  }, []);
 
   const togglePlay = () => {
     const audio = audioElRef.current;
     if (!audio) return;
-    if (audio.paused) audio.play();
-    else audio.pause();
+    if (audio.paused) {
+      // play() returns a promise that can reject (e.g. a pause() interrupts
+      // it, or the browser blocks autoplay) — the "error" listener already
+      // handles genuine load failures, so this just avoids an unhandled
+      // rejection showing up in the console.
+      audio.play().catch((err) => {
+        console.warn("Audio playback failed to start", err);
+      });
+    } else {
+      audio.pause();
+    }
   };
 
   const seekTo = (time: number) => {
@@ -74,6 +86,15 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
     audio.currentTime = time;
     setPosition(time);
   };
+
+  // Stable reference (reads the ref, not React state) so the active
+  // segment's rAF-driven word-highlight loop can poll real playback
+  // position at animation-frame precision instead of waiting on the
+  // <audio> element's much coarser timeupdate event.
+  const getCurrentTime = useCallback(
+    () => audioElRef.current?.currentTime ?? 0,
+    []
+  );
 
   // "Needs review" items live in a separate sidebar list — jumping to one
   // should also bring its actual transcript segment into view, not just
@@ -101,6 +122,56 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
     );
     if (!response.ok) {
       throw new Error(`Failed to save correction: ${response.status}`);
+    }
+    const body = await response.json();
+    setJob(body.job as TranscriptionJob);
+  };
+
+  const correctWordRange = async (
+    index: number,
+    startWordIndex: number,
+    endWordIndex: number,
+    correctedText: string
+  ) => {
+    const response = await fetch(
+      apiPath(`/api/jobs/${jobId}/segments/${index}/words`),
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ startWordIndex, endWordIndex, correctedText }),
+      }
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to save correction: ${response.status}`);
+    }
+    const body = await response.json();
+    setJob(body.job as TranscriptionJob);
+  };
+
+  const rollbackSegment = async (index: number) => {
+    const response = await fetch(
+      apiPath(`/api/jobs/${jobId}/segments/${index}/rollback`),
+      { method: "POST" }
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to roll back segment: ${response.status}`);
+    }
+    const body = await response.json();
+    setJob(body.job as TranscriptionJob);
+  };
+
+  const rollbackToHistoryEntry = async (
+    index: number,
+    historyIndex: number
+  ) => {
+    const response = await fetch(
+      apiPath(
+        `/api/jobs/${jobId}/segments/${index}/history/${historyIndex}/rollback`
+      ),
+      { method: "POST" }
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to roll back: ${response.status}`);
     }
     const body = await response.json();
     setJob(body.job as TranscriptionJob);
@@ -198,8 +269,15 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
                       segment={segment}
                       onSeek={audioAvailable ? seekTo : undefined}
                       onCorrect={(text) => correctSegment(index, text)}
+                      onCorrectRange={(start, end, text) =>
+                        correctWordRange(index, start, end, text)
+                      }
+                      onRollback={() => rollbackSegment(index)}
+                      onRollbackToHistory={(historyIndex) =>
+                        rollbackToHistoryEntry(index, historyIndex)
+                      }
                       isActive={isActive}
-                      currentTime={isActive ? position : undefined}
+                      getCurrentTime={getCurrentTime}
                     />
                   );
                 })}

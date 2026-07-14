@@ -25,26 +25,29 @@ def _tokenize(text: str) -> list[str]:
 
 
 def _edit_distance(ref_words: list[str], hyp_words: list[str]) -> int:
+    # Rolling 2-row DP rather than a full (n+1)x(m+1) matrix — only the
+    # previous row is ever needed to compute the next one, so memory stays
+    # O(min(n, m)) instead of O(n*m). Iterating over the shorter list keeps
+    # each row as small as possible.
+    if len(ref_words) < len(hyp_words):
+        ref_words, hyp_words = hyp_words, ref_words
     n, m = len(ref_words), len(hyp_words)
-    # dp[i][j] = edit distance between ref_words[:i] and hyp_words[:j]
-    dp = [[0] * (m + 1) for _ in range(n + 1)]
-    for i in range(n + 1):
-        dp[i][0] = i
-    for j in range(m + 1):
-        dp[0][j] = j
 
+    previous_row = list(range(m + 1))
     for i in range(1, n + 1):
+        current_row = [i] + [0] * m
         for j in range(1, m + 1):
             if ref_words[i - 1] == hyp_words[j - 1]:
-                dp[i][j] = dp[i - 1][j - 1]
+                current_row[j] = previous_row[j - 1]
             else:
-                dp[i][j] = 1 + min(
-                    dp[i - 1][j],  # deletion
-                    dp[i][j - 1],  # insertion
-                    dp[i - 1][j - 1],  # substitution
+                current_row[j] = 1 + min(
+                    previous_row[j],  # deletion
+                    current_row[j - 1],  # insertion
+                    previous_row[j - 1],  # substitution
                 )
+        previous_row = current_row
 
-    return dp[n][m]
+    return previous_row[m]
 
 
 def word_error_rate(reference: str, hypothesis: str) -> float:

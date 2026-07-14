@@ -1,11 +1,13 @@
 import "server-only";
 import type {
+  CorrectionEntry,
   JobStatus,
   LowConfidenceSegment,
   TranscriptAccuracy,
   TranscriptionJob,
   TranscriptSegment,
   Word,
+  WordCorrection,
 } from "./types";
 
 // Server-only client for the transcription_svc backend. Never import this
@@ -20,6 +22,23 @@ interface BackendWordInfo {
   confidence: number;
 }
 
+interface BackendWordCorrection {
+  start_word_index: number;
+  end_word_index: number;
+  text: string;
+}
+
+interface BackendCorrectionEntry {
+  timestamp: string;
+  kind: string;
+  previous_text: string;
+  new_text: string;
+  start_word_index?: number | null;
+  end_word_index?: number | null;
+  previous_phrase?: string | null;
+  new_phrase?: string | null;
+}
+
 interface BackendDialogueEntry {
   speaker: string;
   text: string;
@@ -27,6 +46,8 @@ interface BackendDialogueEntry {
   end_time: number;
   confidence?: number | null;
   corrected_text?: string | null;
+  word_corrections?: BackendWordCorrection[] | null;
+  correction_history?: BackendCorrectionEntry[] | null;
   words?: BackendWordInfo[] | null;
 }
 
@@ -89,11 +110,18 @@ function apiKey(): string {
   return key;
 }
 
-async function backendFetch(
+// Raw fetch against the backend — returns the Response as-is regardless of
+// status, so a caller that needs to forward non-2xx statuses verbatim (e.g.
+// audio range requests, where 206/404/416 all need to reach the browser
+// with their real status and headers intact) can do so without them being
+// turned into a thrown error first. Most callers want backendFetch()
+// instead, which throws on non-2xx for the common "this should always
+// succeed" case.
+async function rawBackendFetch(
   path: string,
   init?: RequestInit
 ): Promise<Response> {
-  const response = await fetch(`${backendUrl()}${path}`, {
+  return fetch(`${backendUrl()}${path}`, {
     ...init,
     // Authorization is spread last so a caller-supplied header (present or
     // future) can never accidentally override the backend bearer token.
@@ -103,6 +131,13 @@ async function backendFetch(
     },
     cache: "no-store",
   });
+}
+
+async function backendFetch(
+  path: string,
+  init?: RequestInit
+): Promise<Response> {
+  const response = await rawBackendFetch(path, init);
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
@@ -162,6 +197,33 @@ function toWords(
   }));
 }
 
+function toWordCorrections(
+  corrections: BackendWordCorrection[] | null | undefined
+): WordCorrection[] | undefined {
+  if (!corrections || corrections.length === 0) return undefined;
+  return corrections.map((c) => ({
+    startWordIndex: c.start_word_index,
+    endWordIndex: c.end_word_index,
+    text: c.text,
+  }));
+}
+
+function toCorrectionHistory(
+  history: BackendCorrectionEntry[] | null | undefined
+): CorrectionEntry[] | undefined {
+  if (!history || history.length === 0) return undefined;
+  return history.map((h) => ({
+    timestamp: h.timestamp,
+    kind: h.kind as CorrectionEntry["kind"],
+    previousText: h.previous_text,
+    newText: h.new_text,
+    startWordIndex: h.start_word_index ?? undefined,
+    endWordIndex: h.end_word_index ?? undefined,
+    previousPhrase: h.previous_phrase ?? undefined,
+    newPhrase: h.new_phrase ?? undefined,
+  }));
+}
+
 function toSegments(
   entries: BackendDialogueEntry[] | null
 ): TranscriptSegment[] | undefined {
@@ -174,6 +236,8 @@ function toSegments(
     speakerColor: colorForSpeaker(entry.speaker),
     text: entry.text,
     correctedText: entry.corrected_text ?? undefined,
+    wordCorrections: toWordCorrections(entry.word_corrections),
+    correctionHistory: toCorrectionHistory(entry.correction_history),
     startTime: entry.start_time,
     duration: Math.max(0, entry.end_time - entry.start_time),
     confidence: entry.confidence ?? undefined,
@@ -263,20 +327,17 @@ export async function getJob(jobId: string): Promise<TranscriptionJob | null> {
   }
 }
 
+// Returns the backend's raw Response — including non-2xx ones (404 if the
+// job/blob doesn't exist, 416 for an unsatisfiable range, etc.) — so the
+// route handler can forward the real status, headers, and body straight to
+// the browser rather than every non-2xx collapsing into a generic error.
 export async function getJobAudio(
   jobId: string,
   rangeHeader?: string | null
-): Promise<Response | null> {
-  try {
-    return await backendFetch(`/api/v1/jobs/${jobId}/audio`, {
-      headers: rangeHeader ? { Range: rangeHeader } : undefined,
-    });
-  } catch (err) {
-    if (err instanceof BackendApiError && err.status === 404) {
-      return null;
-    }
-    throw err;
-  }
+): Promise<Response> {
+  return rawBackendFetch(`/api/v1/jobs/${jobId}/audio`, {
+    headers: rangeHeader ? { Range: rangeHeader } : undefined,
+  });
 }
 
 export async function uploadAudio(
@@ -333,6 +394,54 @@ export async function correctSegment(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ corrected_text: correctedText }),
     }
+  );
+  const body: BackendJob = await response.json();
+  return toTranscriptionJob(body);
+}
+
+export async function correctWordRange(
+  jobId: string,
+  index: number,
+  startWordIndex: number,
+  endWordIndex: number,
+  correctedText: string
+): Promise<TranscriptionJob> {
+  const response = await backendFetch(
+    `/api/v1/jobs/${jobId}/segments/${index}/words`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        start_word_index: startWordIndex,
+        end_word_index: endWordIndex,
+        corrected_text: correctedText,
+      }),
+    }
+  );
+  const body: BackendJob = await response.json();
+  return toTranscriptionJob(body);
+}
+
+export async function rollbackSegment(
+  jobId: string,
+  index: number
+): Promise<TranscriptionJob> {
+  const response = await backendFetch(
+    `/api/v1/jobs/${jobId}/segments/${index}/rollback`,
+    { method: "POST" }
+  );
+  const body: BackendJob = await response.json();
+  return toTranscriptionJob(body);
+}
+
+export async function rollbackToHistoryEntry(
+  jobId: string,
+  index: number,
+  historyIndex: number
+): Promise<TranscriptionJob> {
+  const response = await backendFetch(
+    `/api/v1/jobs/${jobId}/segments/${index}/history/${historyIndex}/rollback`,
+    { method: "POST" }
   );
   const body: BackendJob = await response.json();
   return toTranscriptionJob(body);

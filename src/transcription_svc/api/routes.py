@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -30,13 +31,20 @@ from transcription_svc.database.interface import (
     get_job_by_idempotency_key,
     list_jobs_by_caller,
 )
-from transcription_svc.database.models import Caller, DialogueEntry, JobStatus, TranscriptionJob
+from transcription_svc.database.models import (
+    Caller,
+    CorrectionEntry,
+    DialogueEntry,
+    JobStatus,
+    TranscriptionJob,
+    WordCorrection,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
 
 _LOCALE_RE = re.compile(r"^[a-z]{2}-[A-Z]{2}$")
-_RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
+_RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 _METADATA_MAX_BYTES = 4096
 # ~200MB comfortably covers a multi-hour hearing at typical speech bitrates
 # while bounding worst-case memory use for a single upload.
@@ -90,6 +98,47 @@ def _reject_private_url(url: str, field: str = "url") -> None:
         ip = ipaddress.ip_address(sockaddr[0])
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
             raise ValueError(f"{field} resolves to a private/internal address: {ip}")
+
+
+def _parse_range(range_header: str | None, total_size: int) -> tuple[int, int, bool]:
+    """Parse a single-range HTTP Range header per RFC 9110.
+
+    Returns (start, end, is_partial). Only a single "bytes=start-end" range
+    is supported (including the suffix form "bytes=-N" for the last N
+    bytes) — anything else we can't safely satisfy (malformed syntax,
+    multi-range requests, an out-of-bounds range) is rejected with a 416
+    rather than silently guessed at, since guessing wrong can otherwise
+    produce a 206 with an empty or misaligned body that breaks <audio>
+    seeking.
+    """
+    if not range_header:
+        return 0, total_size - 1, False
+
+    match = _RANGE_RE.match(range_header)
+    if not match or not (match.group(1) or match.group(2)):
+        raise HTTPException(
+            status_code=416,
+            detail="Invalid Range header",
+            headers={"Content-Range": f"bytes */{total_size}"},
+        )
+
+    range_start, range_end = match.group(1), match.group(2)
+    if range_start:
+        start = int(range_start)
+        end = int(range_end) if range_end else total_size - 1
+    else:
+        # Suffix range, e.g. "bytes=-500" means "the last 500 bytes".
+        start = max(0, total_size - int(range_end))
+        end = total_size - 1
+
+    end = min(end, total_size - 1)
+    if start < 0 or start > end or start >= total_size:
+        raise HTTPException(
+            status_code=416,
+            detail="Range not satisfiable",
+            headers={"Content-Range": f"bytes */{total_size}"},
+        )
+    return start, end, True
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +203,23 @@ class WordInfoResponse(BaseModel):
     confidence: float
 
 
+class WordCorrectionResponse(BaseModel):
+    start_word_index: int
+    end_word_index: int
+    text: str
+
+
+class CorrectionEntryResponse(BaseModel):
+    timestamp: str
+    kind: str
+    previous_text: str
+    new_text: str
+    start_word_index: int | None = None
+    end_word_index: int | None = None
+    previous_phrase: str | None = None
+    new_phrase: str | None = None
+
+
 class DialogueEntryResponse(BaseModel):
     speaker: str
     text: str
@@ -161,6 +227,8 @@ class DialogueEntryResponse(BaseModel):
     end_time: float
     confidence: float | None = None
     corrected_text: str | None = None
+    word_corrections: list[WordCorrectionResponse] | None = None
+    correction_history: list[CorrectionEntryResponse] | None = None
     words: list[WordInfoResponse] | None = None
 
 
@@ -205,6 +273,16 @@ class CorrectSegmentRequest(BaseModel):
     corrected_text: str = Field(min_length=1, max_length=10_000)
 
 
+class CorrectWordRangeRequest(BaseModel):
+    start_word_index: int = Field(ge=0)
+    end_word_index: int = Field(ge=0)
+    corrected_text: str = Field(min_length=1, max_length=10_000)
+
+
+class RollbackHistoryRequest(BaseModel):
+    history_index: int = Field(ge=0)
+
+
 def _entry_field(entry, field: str, default=None):
     return entry.get(field, default) if isinstance(entry, dict) else getattr(entry, field, default)
 
@@ -220,6 +298,8 @@ def _to_dialogue_entries(job: TranscriptionJob) -> list[DialogueEntry] | None:
             end_time=_entry_field(e, "end_time", 0.0),
             confidence=_entry_field(e, "confidence"),
             corrected_text=_entry_field(e, "corrected_text"),
+            word_corrections=_entry_field(e, "word_corrections"),
+            correction_history=_entry_field(e, "correction_history"),
             words=_entry_field(e, "words"),
         )
         for e in job.dialogue_entries
@@ -261,6 +341,31 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
                 end_time=e.end_time,
                 confidence=e.confidence,
                 corrected_text=e.corrected_text,
+                word_corrections=[
+                    WordCorrectionResponse(
+                        start_word_index=wc.start_word_index,
+                        end_word_index=wc.end_word_index,
+                        text=wc.text,
+                    )
+                    for wc in e.word_corrections
+                ]
+                if e.word_corrections
+                else None,
+                correction_history=[
+                    CorrectionEntryResponse(
+                        timestamp=h.timestamp,
+                        kind=h.kind,
+                        previous_text=h.previous_text,
+                        new_text=h.new_text,
+                        start_word_index=h.start_word_index,
+                        end_word_index=h.end_word_index,
+                        previous_phrase=h.previous_phrase,
+                        new_phrase=h.new_phrase,
+                    )
+                    for h in e.correction_history
+                ]
+                if e.correction_history
+                else None,
                 words=[
                     WordInfoResponse(
                         text=w.text,
@@ -384,6 +489,13 @@ async def submit_job(
         if existing:
             return _to_response(existing)
 
+    # blob_name is later trusted by GET /jobs/{id}/audio to read straight from
+    # storage — without this check a caller could point it at another
+    # caller's blob (upload_audio always issues names under
+    # uploads/{caller.id}/...) and read their audio back through this job.
+    if body.blob_name is not None and not body.blob_name.startswith(f"uploads/{caller.id}/"):
+        raise HTTPException(status_code=422, detail="blob_name does not belong to this caller")
+
     try:
         job = await submit_and_queue_batch_job(
             session=session,
@@ -433,20 +545,9 @@ async def get_job(
     return _to_response(job)
 
 
-@router.patch("/jobs/{job_id}/segments/{index}", response_model=JobResponse)
-async def correct_segment(
-    job_id: UUID,
-    index: int,
-    body: CorrectSegmentRequest,
-    session: Session = Depends(get_session),
-    caller: Caller = Depends(get_caller),
-) -> JobResponse:
-    """Record a clerk's correction for one transcript segment.
-
-    The original text is never overwritten — corrected_text is stored
-    alongside it so a real word error rate can be computed against what
-    Speech Batch actually produced (see audio/accuracy.py).
-    """
+def _load_entry_for_correction(
+    session: Session, job_id: UUID, index: int, caller: Caller
+) -> tuple[TranscriptionJob, DialogueEntry]:
     job = get_job_by_id(session, job_id)
     if not job or job.caller_id != caller.id:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -455,19 +556,277 @@ async def correct_segment(
     if index < 0 or index >= len(job.dialogue_entries):
         raise HTTPException(status_code=404, detail="Segment not found")
 
+    raw = job.dialogue_entries[index]
+    entry = DialogueEntry(
+        speaker=_entry_field(raw, "speaker", ""),
+        text=_entry_field(raw, "text", ""),
+        start_time=_entry_field(raw, "start_time", 0.0),
+        end_time=_entry_field(raw, "end_time", 0.0),
+        confidence=_entry_field(raw, "confidence"),
+        corrected_text=_entry_field(raw, "corrected_text"),
+        word_corrections=_entry_field(raw, "word_corrections"),
+        correction_history=_entry_field(raw, "correction_history"),
+        words=_entry_field(raw, "words"),
+    )
+    return job, entry
+
+
+def _save_corrected_entry(
+    session: Session, job: TranscriptionJob, index: int, entry: DialogueEntry
+) -> None:
     # Reassign the whole list (rather than mutating in place) since the
     # dialogue_entries column isn't wrapped in sqlalchemy.ext.mutable —
     # in-place changes wouldn't be detected as dirty by the ORM.
     entries = list(job.dialogue_entries)
-    entry = dict(entries[index])
-    entry["corrected_text"] = body.corrected_text
-    entries[index] = entry
+    entries[index] = entry.model_dump()
     job.dialogue_entries = entries
     job.updated_datetime = datetime.now(UTC)
     session.add(job)
     session.commit()
     session.refresh(job)
 
+
+@router.patch("/jobs/{job_id}/segments/{index}", response_model=JobResponse)
+async def correct_segment(
+    job_id: UUID,
+    index: int,
+    body: CorrectSegmentRequest,
+    session: Session = Depends(get_session),
+    caller: Caller = Depends(get_caller),
+) -> JobResponse:
+    """Record a clerk's whole-segment correction.
+
+    The original text is never overwritten — corrected_text/history is
+    stored alongside it so a real word error rate can be computed against
+    what Speech Batch actually produced (see audio/accuracy.py). A
+    whole-segment override takes full precedence over any prior word-range
+    corrections, so those are cleared.
+    """
+    job, entry = _load_entry_for_correction(session, job_id, index, caller)
+
+    previous_text = entry.effective_text()
+    entry.corrected_text = body.corrected_text
+    entry.word_corrections = None
+    entry.correction_history = [
+        *(entry.correction_history or []),
+        CorrectionEntry(
+            timestamp=datetime.now(UTC).isoformat(),
+            kind="segment",
+            previous_text=previous_text,
+            new_text=body.corrected_text,
+        ),
+    ]
+
+    _save_corrected_entry(session, job, index, entry)
+    return _to_response(job)
+
+
+@router.patch("/jobs/{job_id}/segments/{index}/words", response_model=JobResponse)
+async def correct_word_range(
+    job_id: UUID,
+    index: int,
+    body: CorrectWordRangeRequest,
+    session: Session = Depends(get_session),
+    caller: Caller = Depends(get_caller),
+) -> JobResponse:
+    """Record a clerk's correction for just a run of words within a segment.
+
+    Unlike a whole-segment correction, this keeps confidence highlighting
+    and playback-sync intact for every word outside the corrected range.
+    """
+    job, entry = _load_entry_for_correction(session, job_id, index, caller)
+
+    if not entry.words:
+        raise HTTPException(status_code=422, detail="Segment has no word-level data to correct")
+    if body.start_word_index > body.end_word_index or body.end_word_index >= len(entry.words):
+        raise HTTPException(status_code=422, detail="Invalid word range")
+    if entry.corrected_text is not None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Segment has a whole-segment correction; roll it back before "
+                "correcting an individual phrase"
+            ),
+        )
+
+    previous_text = entry.effective_text()
+
+    # What currently occupies exactly this range — an existing correction
+    # over the identical range if the clerk is re-editing it, otherwise the
+    # original words — captured before it's superseded below so the history
+    # entry can show a concise "what changed" phrase instead of replaying
+    # the whole (possibly very long) segment.
+    existing_match = next(
+        (
+            wc
+            for wc in (entry.word_corrections or [])
+            if wc.start_word_index == body.start_word_index
+            and wc.end_word_index == body.end_word_index
+        ),
+        None,
+    )
+    previous_phrase = (
+        existing_match.text
+        if existing_match
+        else " ".join(w.text for w in entry.words[body.start_word_index : body.end_word_index + 1])
+    )
+
+    # Any existing correction overlapping the new range is superseded by it.
+    non_overlapping = [
+        wc
+        for wc in (entry.word_corrections or [])
+        if wc.end_word_index < body.start_word_index or wc.start_word_index > body.end_word_index
+    ]
+    non_overlapping.append(
+        WordCorrection(
+            start_word_index=body.start_word_index,
+            end_word_index=body.end_word_index,
+            text=body.corrected_text,
+        )
+    )
+    entry.word_corrections = non_overlapping
+
+    entry.correction_history = [
+        *(entry.correction_history or []),
+        CorrectionEntry(
+            timestamp=datetime.now(UTC).isoformat(),
+            kind="word_range",
+            previous_text=previous_text,
+            new_text=entry.effective_text(),
+            start_word_index=body.start_word_index,
+            end_word_index=body.end_word_index,
+            previous_phrase=previous_phrase,
+            new_phrase=body.corrected_text,
+        ),
+    ]
+
+    _save_corrected_entry(session, job, index, entry)
+    return _to_response(job)
+
+
+@router.post("/jobs/{job_id}/segments/{index}/rollback", response_model=JobResponse)
+async def rollback_segment(
+    job_id: UUID,
+    index: int,
+    session: Session = Depends(get_session),
+    caller: Caller = Depends(get_caller),
+) -> JobResponse:
+    """Revert a segment entirely back to its original Speech Batch output."""
+    job, entry = _load_entry_for_correction(session, job_id, index, caller)
+
+    previous_text = entry.effective_text()
+    if previous_text == entry.text:
+        raise HTTPException(status_code=422, detail="Segment has no corrections to roll back")
+
+    entry.corrected_text = None
+    entry.word_corrections = None
+    entry.correction_history = [
+        *(entry.correction_history or []),
+        CorrectionEntry(
+            timestamp=datetime.now(UTC).isoformat(),
+            kind="rollback",
+            previous_text=previous_text,
+            new_text=entry.text,
+        ),
+    ]
+
+    _save_corrected_entry(session, job, index, entry)
+    return _to_response(job)
+
+
+@router.post(
+    "/jobs/{job_id}/segments/{index}/history/{history_index}/rollback",
+    response_model=JobResponse,
+)
+async def rollback_to_history_entry(
+    job_id: UUID,
+    index: int,
+    history_index: int,
+    session: Session = Depends(get_session),
+    caller: Caller = Depends(get_caller),
+) -> JobResponse:
+    """Revert a segment to how it looked immediately before one specific past edit.
+
+    If the targeted entry was scoped to a specific word range (and nothing
+    since has replaced that exact range or overridden the whole segment),
+    this surgically undoes just that one correction — leaving every other
+    correction and the per-word rendering for untouched words intact, and
+    keeping this rollback's own history entry a concise phrase-level diff
+    rather than a whole-segment wall of text. Anything less clean-cut
+    (a later edit already touched this range, or a whole-segment freeform
+    override is in effect) falls back to restoring a flat text snapshot,
+    since reverting to an arbitrary point in time no longer has a clean
+    correspondence to the original word positions in that case.
+    """
+    job, entry = _load_entry_for_correction(session, job_id, index, caller)
+
+    history = entry.correction_history or []
+    if history_index < 0 or history_index >= len(history):
+        raise HTTPException(status_code=404, detail="History entry not found")
+
+    target = history[history_index]
+    previous_text = entry.effective_text()
+
+    matching_correction = next(
+        (
+            wc
+            for wc in (entry.word_corrections or [])
+            if wc.start_word_index == target.start_word_index
+            and wc.end_word_index == target.end_word_index
+        ),
+        None,
+    )
+    can_revert_surgically = (
+        target.start_word_index is not None
+        and target.end_word_index is not None
+        and entry.corrected_text is None
+        and matching_correction is not None
+    )
+
+    if can_revert_surgically:
+        assert target.start_word_index is not None
+        assert target.end_word_index is not None
+        original_phrase = " ".join(
+            w.text for w in entry.words[target.start_word_index : target.end_word_index + 1]
+        )
+        remaining = [wc for wc in entry.word_corrections if wc is not matching_correction]
+        if target.previous_phrase != original_phrase:
+            remaining.append(
+                WordCorrection(
+                    start_word_index=target.start_word_index,
+                    end_word_index=target.end_word_index,
+                    text=target.previous_phrase,
+                )
+            )
+        entry.word_corrections = remaining or None
+        entry.correction_history = [
+            *history,
+            CorrectionEntry(
+                timestamp=datetime.now(UTC).isoformat(),
+                kind="rollback",
+                previous_text=previous_text,
+                new_text=entry.effective_text(),
+                start_word_index=target.start_word_index,
+                end_word_index=target.end_word_index,
+                previous_phrase=matching_correction.text,
+                new_phrase=target.previous_phrase,
+            ),
+        ]
+    else:
+        restored_text = target.previous_text
+        entry.corrected_text = None if restored_text == entry.text else restored_text
+        entry.word_corrections = None
+        entry.correction_history = [
+            *history,
+            CorrectionEntry(
+                timestamp=datetime.now(UTC).isoformat(),
+                kind="rollback",
+                previous_text=previous_text,
+                new_text=restored_text,
+            ),
+        ]
+
+    _save_corrected_entry(session, job, index, entry)
     return _to_response(job)
 
 
@@ -506,35 +865,53 @@ async def get_job_audio(
         if total_size is None:
             raise HTTPException(status_code=404, detail="Audio file not found")
 
-    start, end = 0, total_size - 1
-    status_code = 200
-    range_match = _RANGE_RE.match(request.headers.get("range") or "")
-    if range_match:
-        start = int(range_match.group(1)) if range_match.group(1) else 0
-        end = (
-            min(int(range_match.group(2)), total_size - 1)
-            if range_match.group(2)
-            else total_size - 1
-        )
-        status_code = 206
-    length = max(0, end - start + 1)
-
-    if is_local:
-        content = local_storage.read_range(job.audio_blob_path, start, length)
-    else:
-        async with AsyncAzureBlobManager() as blob_manager:
-            content = await blob_manager.download_blob_range(job.audio_blob_path, start, length)
-        if content is None:
-            raise HTTPException(status_code=404, detail="Audio file not found")
+    start, end, is_partial = _parse_range(request.headers.get("range"), total_size)
+    length = end - start + 1
+    status_code = 206 if is_partial else 200
 
     media_type = mimetypes.guess_type(job.audio_blob_path)[0] or "application/octet-stream"
     headers = {"Accept-Ranges": "bytes", "Content-Length": str(length)}
-    if status_code == 206:
+    if is_partial:
         headers["Content-Range"] = f"bytes {start}-{end}/{total_size}"
 
-    return Response(
-        content=content, media_type=media_type, status_code=status_code, headers=headers
+    if is_local:
+        # Dev-only backend (see local_storage.py) — buffering the requested
+        # range here is an accepted trade-off since it's never used with
+        # production-sized recordings, unlike the Azure path below.
+        try:
+            content = local_storage.read_range(job.audio_blob_path, start, length)
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(status_code=404, detail="Audio file not found") from None
+        return Response(
+            content=content, media_type=media_type, status_code=status_code, headers=headers
+        )
+
+    # Streamed rather than buffered whole — a multi-hour recording served
+    # via download_blob_range()'s readall() would otherwise spike memory
+    # per concurrent playback request. Existence was already confirmed via
+    # get_blob_size() above; a not-found error surfacing after this point
+    # can no longer be turned into a clean 404 (headers are already sent),
+    # same limitation any streaming file server has.
+    #
+    # The blob manager can't be closed via `async with` in this function —
+    # its credential must stay alive for as long as the response is still
+    # streaming, which outlives this handler returning. _stream_and_close
+    # keeps it open across the whole generator and closes it once done.
+    blob_manager = AsyncAzureBlobManager()
+    chunk_iter = _stream_and_close(blob_manager, job.audio_blob_path, start, length)
+    return StreamingResponse(
+        chunk_iter, media_type=media_type, status_code=status_code, headers=headers
     )
+
+
+async def _stream_and_close(
+    blob_manager: AsyncAzureBlobManager, blob_name: str, start: int, length: int
+):
+    try:
+        async for chunk in blob_manager.stream_blob_range(blob_name, start, length):
+            yield chunk
+    finally:
+        await blob_manager.close()
 
 
 @router.delete("/jobs/{job_id}", status_code=204)
