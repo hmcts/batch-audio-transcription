@@ -3,6 +3,20 @@
 - Implement work in subagents; keep the main agent for coordination only.
 - Work in git worktrees, so subagents don't step on each other's changes.
 
+# PR title format
+
+The `pr-title-check` CI job enforces this format on every PR title:
+
+```
+type(scope): description [PROJ-123]
+```
+
+- `type` is one of: `feat`, `fix`, `chore`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `revert`.
+- `(scope)` is optional.
+- The Jira ticket key in square brackets is required, e.g. `[DIAAT-123]`.
+- Example: `feat(auth): add login endpoint [DIAAT-123]`
+- Example: `fix: resolve null pointer exception [DIAAT-456]`
+
 # Definition of done
 
 A change to this project is not done when tests pass locally. It's done when:
