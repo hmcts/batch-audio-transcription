@@ -9,9 +9,9 @@ A change to this project is not done when tests pass locally. It's done when:
 
 1. The code is implemented and fully tested, both in an automated way and manually.
 2. The code builds and all tests pass locally.
-3. The app is started locally and tested with Playwright.
+3. The app is started locally and tested with Playwright (`cd frontend && pnpm run test:e2e`, which defaults to `http://localhost:3000`).
 4. A PR is created and driven to green — all CI checks are green (tests, lint/format, CodeQL, Alembic migration check, etc.), and all GitHub Copilot review comments have been addressed or explicitly rejected with a reason.
-5. Once the PR is merged to `main`, the change is deployed to dev via the existing pipeline (push a `deploy-dev-*` tag from the app repo), tested using Playwright, and the affected App Service(s) are confirmed running (`GET /health` on the API, the frontend's `/batch` route).
+5. Once the PR is merged to `main`, the change is deployed to dev via the existing pipeline (push a `deploy-dev-*` tag from the app repo), tested using Playwright against dev (`PLAYWRIGHT_BASE_URL=<dev-url> pnpm run test:e2e`), and the affected App Service(s) are confirmed running (`GET /health` on the API, the frontend's `/batch` route).
 6. If there are failures on the dev build or deploy, iterate until green.
 7. Details of all manual testing performed are added as a comment on the relevant Jira ticket(s).
 8. Worktrees used for the work are deleted.
