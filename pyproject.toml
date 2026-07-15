@@ -21,6 +21,12 @@ dependencies = [
     "sentry-sdk[fastapi]>=2.0",
     "azure-storage-blob>=12.20",
     "azure-identity>=1.17",
+    # Required async transport for azure.identity.aio / azure.storage.blob.aio —
+    # DefaultAzureCredential's async pipeline raises ImportError without it
+    # whenever no AZURE_STORAGE_CONNECTION_STRING is set (i.e. everywhere
+    # except local dev), which silently breaks blob access including the
+    # retention-policy cleanup in polling_service.py.
+    "aiohttp>=3.9",
     "uwotm8>=0.1",
     "slowapi>=0.1.9",
     "python-multipart>=0.0.9",

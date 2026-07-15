@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,7 +27,7 @@ class Settings(BaseSettings):
     AZURE_STORAGE_CONNECTION_STRING: str | None = None
 
     # Local audio storage (dev only — never set in deployed envs)
-    AUDIO_STORAGE_BACKEND: str = "azure"  # "azure" | "local"
+    AUDIO_STORAGE_BACKEND: Literal["azure", "local"] = "azure"
     LOCAL_AUDIO_STORAGE_DIR: str = "/tmp/local-audio"  # noqa: S108  # nosec B108
     LOCAL_AUDIO_BASE_URL: str = ""
 

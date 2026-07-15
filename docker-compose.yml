@@ -64,6 +64,12 @@ services:
       - /app/node_modules
     environment:
       - PORT=3001
+      - BACKEND_INTERNAL_URL=http://api:8001
+      - TRANSCRIPTION_API_KEY=${LOCAL_API_KEY:-local-dev-key-change-me}
+    depends_on:
+      - api
+    networks:
+      - app-network
     profiles:
       - frontend-dev
 
