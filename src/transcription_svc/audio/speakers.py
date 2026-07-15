@@ -93,7 +93,11 @@ def group_dialogue_entries_by_speaker(
                 else None
             )
             current_entry.text += f" {entry.text}"
-            current_entry.end_time = entry.end_time
+            # The small negative gap tolerated by the mid-sentence heuristic
+            # means `entry` can occasionally overlap and end slightly
+            # earlier than the current segment already does — never let a
+            # merge shrink the segment's time range.
+            current_entry.end_time = max(current_entry.end_time, entry.end_time)
         else:
             if current_entry:
                 grouped.append(current_entry)

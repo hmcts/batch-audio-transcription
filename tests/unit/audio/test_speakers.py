@@ -218,6 +218,26 @@ class TestMidSentenceMisattribution:
         result = group_dialogue_entries_by_speaker(entries)
         assert len(result) == 2
 
+    def test_merge_never_shrinks_the_segment_end_time(self):
+        # The small negative gap tolerated for jitter means a merged-in
+        # fragment can end slightly before the current segment already
+        # does — the merge must not let that pull end_time backwards.
+        entries = [
+            _entry(
+                "0", "I think we should go to the", confidence=0.9, start_time=0.0, end_time=2.5
+            ),
+            _entry(
+                "1",
+                "shop now.",
+                confidence=0.8,
+                start_time=2.4,  # overlaps, but within the tolerated jitter window
+                end_time=2.45,  # ends *before* the current segment's end_time
+            ),
+        ]
+        result = group_dialogue_entries_by_speaker(entries)
+        assert len(result) == 1
+        assert result[0].end_time == 2.5
+
 
 class TestNormalizeSpeakerLabels:
     def test_preserves_confidence_and_words(self):
