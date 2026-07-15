@@ -53,6 +53,21 @@ class Settings(BaseSettings):
     # Low-confidence word tracking (optional)
     LOW_CONFIDENCE_THRESHOLD: float | None = None
 
+    # Corrections dataset export (DIAAT-231)
+    # Gates whether clerk corrections (word-range and whole-segment) are
+    # additionally persisted into the correction_dataset_entry table, a
+    # durable store separate from per-job transcript data meant for later
+    # export to fine-tune/evaluate transcription models.
+    #
+    # Defaults to False: this table can capture real court-hearing content,
+    # and retention/anonymisation policy for it has NOT yet been defined or
+    # signed off by legal/compliance (see DIAAT-231 acceptance criteria #3,
+    # and the docstring on CorrectionDatasetEntry). Do not set this to True
+    # in any environment handling real hearing content until that sign-off
+    # has happened — until then, the write path exists and is testable, but
+    # stays off so no real transcript content is silently captured.
+    CORRECTIONS_DATASET_EXPORT_ENABLED: bool = False
+
     # Observability
     SENTRY_DSN: str | None = None
 
