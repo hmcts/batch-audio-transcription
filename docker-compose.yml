@@ -46,6 +46,7 @@ services:
       - "3000:3000"
     environment:
       - BACKEND_INTERNAL_URL=http://api:8001
+      - TRANSCRIPTION_API_KEY=${LOCAL_API_KEY:-local-dev-key-change-me}
     depends_on:
       - api
     networks:
