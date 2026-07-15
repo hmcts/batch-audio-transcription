@@ -11,7 +11,10 @@ const JOB_ID = process.env.E2E_JOB_ID;
 const JOB_AVAILABLE = !!JOB_ID;
 
 test.describe("Transcript page — known job", () => {
-  test.skip(!JOB_AVAILABLE, "Set E2E_JOB_ID to a real job id to run these tests");
+  test.skip(
+    !JOB_AVAILABLE,
+    "Set E2E_JOB_ID to a real job id to run these tests"
+  );
 
   test.beforeEach(async ({ page }) => {
     await page.goto(`/batch/jobs/${JOB_ID}`);
@@ -22,7 +25,9 @@ test.describe("Transcript page — known job", () => {
   });
 
   test("shows transcript segments", async ({ page }) => {
-    await expect(page.locator("[data-testid='transcript-segment']").first()).toBeVisible();
+    await expect(
+      page.locator("[data-testid='transcript-segment']").first()
+    ).toBeVisible();
   });
 
   test("shows accuracy sidebar", async ({ page }) => {
