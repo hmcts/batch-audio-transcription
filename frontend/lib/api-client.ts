@@ -319,8 +319,8 @@ export async function listJobs(params?: {
   if (params?.status) query.set("status", params.status);
   if (params?.limit !== undefined) query.set("limit", String(params.limit));
   if (params?.offset !== undefined) query.set("offset", String(params.offset));
-  const qs = query.size ? `?${query}` : "";
-  const response = await backendFetch(`/api/v1/jobs${qs}`);
+  const qs = query.toString();
+  const response = await backendFetch(`/api/v1/jobs${qs ? `?${qs}` : ""}`);
   const body: BackendJobList = await response.json();
   return {
     jobs: body.jobs.map(toTranscriptionJob),
