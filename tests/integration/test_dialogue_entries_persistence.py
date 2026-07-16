@@ -52,9 +52,19 @@ def _db_available(url: str) -> bool:
 
 
 _DB_URL = get_settings().DATABASE_CONNECTION_STRING
+_ENVIRONMENT = get_settings().ENVIRONMENT
+# The session fixture TRUNCATEs tables on teardown, so this test must never
+# run against anything but a throwaway/scratch database. Gate it on
+# ENVIRONMENT in {test, local} *as well as* DB reachability, so pointing
+# DATABASE_CONNECTION_STRING at a real (staging/prod) database can't wipe it
+# even by accident — a non-test environment simply skips before any truncate.
+_IS_SCRATCH_ENV = _ENVIRONMENT in ("test", "local")
 pytestmark = pytest.mark.skipif(
-    not _db_available(_DB_URL),
-    reason="No reachable Postgres at DATABASE_CONNECTION_STRING; skipping live-DB round-trip test",
+    not _IS_SCRATCH_ENV or not _db_available(_DB_URL),
+    reason=(
+        "Live-DB round-trip test only runs against a scratch database "
+        "(ENVIRONMENT in {test, local}) with a reachable Postgres"
+    ),
 )
 
 
