@@ -1037,6 +1037,30 @@ describe("TranscriptSegment", () => {
       expect(onCorrectRange).toHaveBeenCalledTimes(1);
     });
 
+    it("focuses the first option on open and moves focus with arrow keys", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      await user.click(lowConfidenceRun(container));
+      const editItem = screen.getByRole("menuitem", { name: /edit/i });
+      const suggestedItem = screen.getByRole("menuitem", {
+        name: /suggested/i,
+      });
+      // Focus lands inside the menu on the first option, not the trigger word.
+      expect(document.activeElement).toBe(editItem);
+      await user.keyboard("{ArrowDown}");
+      expect(document.activeElement).toBe(suggestedItem);
+      // ArrowDown wraps back to the first item from the last.
+      await user.keyboard("{ArrowDown}");
+      expect(document.activeElement).toBe(editItem);
+      await user.keyboard("{ArrowUp}");
+      expect(document.activeElement).toBe(suggestedItem);
+    });
+
     it("dismisses the menu on Escape without taking any action", async () => {
       const onCorrectRange = vi.fn();
       const user = userEvent.setup();

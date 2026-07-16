@@ -67,6 +67,39 @@ export function LowConfidenceResolveMenu({
     };
   }, [onClose]);
 
+  // Move focus into the menu on open so keyboard users land on the first
+  // option instead of being stranded on the trigger word.
+  useEffect(() => {
+    menuRef.current
+      ?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')
+      ?.focus();
+  }, []);
+
+  // Roving Arrow/Home/End navigation across whichever options are currently
+  // visible (Edit, Suggested, and — when expanded — the candidate items).
+  const onMenuKeyDown = (e: React.KeyboardEvent<HTMLSpanElement>) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    const items = Array.from(
+      menuRef.current?.querySelectorAll<HTMLElement>(
+        '[role="menuitem"]:not([disabled])'
+      ) ?? []
+    );
+    if (items.length === 0) return;
+    e.preventDefault();
+    const current = items.indexOf(document.activeElement as HTMLElement);
+    let next: number;
+    if (e.key === "Home") {
+      next = 0;
+    } else if (e.key === "End") {
+      next = items.length - 1;
+    } else if (e.key === "ArrowDown") {
+      next = current < items.length - 1 ? current + 1 : 0;
+    } else {
+      next = current > 0 ? current - 1 : items.length - 1;
+    }
+    items[next]?.focus();
+  };
+
   const suggestionsId = `${id}-suggestions`;
 
   return (
@@ -78,6 +111,7 @@ export function LowConfidenceResolveMenu({
       // Stop clicks inside the menu from bubbling back up to the trigger
       // word's own click handler (which would re-open the menu).
       onClick={(e) => e.stopPropagation()}
+      onKeyDown={onMenuKeyDown}
       className="absolute left-0 top-full z-30 mt-1 flex items-start whitespace-normal text-left text-xs font-normal normal-case"
     >
       <span className="block w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
