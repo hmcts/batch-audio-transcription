@@ -81,9 +81,9 @@ describe("listJobs", () => {
   });
 
   it("maps run metadata (audio duration, transcription duration, model)", async () => {
-    mockFetchOnce({ jobs: [BACKEND_JOB] });
+    mockFetchOnce({ jobs: [BACKEND_JOB], total: 1, limit: 20, offset: 0 });
 
-    const jobs = await listJobs();
+    const { jobs } = await listJobs();
 
     expect(jobs[0].audioDurationSeconds).toBe(754.2);
     expect(jobs[0].transcriptionDurationSeconds).toBe(41.8);
@@ -99,9 +99,9 @@ describe("listJobs", () => {
       transcription_duration_seconds: null,
       model_identifier: null,
     };
-    mockFetchOnce({ jobs: [pendingJob] });
+    mockFetchOnce({ jobs: [pendingJob], total: 1, limit: 20, offset: 0 });
 
-    const jobs = await listJobs();
+    const { jobs } = await listJobs();
 
     expect(jobs[0].audioDurationSeconds).toBe(754.2);
     expect(jobs[0].transcriptionDurationSeconds).toBeUndefined();
