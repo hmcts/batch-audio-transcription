@@ -30,12 +30,10 @@ describe("DashboardPage", () => {
   beforeEach(() => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue({
-          ok: true,
-          json: () => Promise.resolve({ jobs: [] }),
-        })
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ jobs: [] }),
+      })
     );
   });
   it("renders page heading", () => {
