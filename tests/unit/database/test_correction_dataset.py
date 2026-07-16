@@ -8,6 +8,7 @@ original/corrected text, confidence, job/segment context, and a timestamp.
 import uuid
 from unittest.mock import MagicMock
 
+from transcription_svc.config.settings import get_settings
 from transcription_svc.database.interface import record_correction_dataset_entry
 from transcription_svc.database.models import CorrectionDatasetEntry, JobStatus, TranscriptionJob
 
@@ -25,6 +26,7 @@ def _make_job() -> TranscriptionJob:
 class TestRecordCorrectionDatasetEntry:
     def test_does_nothing_when_flag_disabled(self, monkeypatch):
         monkeypatch.setenv("CORRECTIONS_DATASET_EXPORT_ENABLED", "false")
+        get_settings.cache_clear()
         session = MagicMock()
         job = _make_job()
 
@@ -43,6 +45,7 @@ class TestRecordCorrectionDatasetEntry:
 
     def test_stages_a_row_when_flag_enabled(self, monkeypatch):
         monkeypatch.setenv("CORRECTIONS_DATASET_EXPORT_ENABLED", "true")
+        get_settings.cache_clear()
         session = MagicMock()
         job = _make_job()
 
@@ -80,6 +83,7 @@ class TestRecordCorrectionDatasetEntry:
     def test_does_not_commit_itself(self, monkeypatch):
         """Staging is add-only; the caller commits alongside the job update."""
         monkeypatch.setenv("CORRECTIONS_DATASET_EXPORT_ENABLED", "true")
+        get_settings.cache_clear()
         session = MagicMock()
         job = _make_job()
 
