@@ -117,12 +117,12 @@ test.describe("Real transcription pipeline", () => {
     await expect(submitBtn).toBeEnabled();
     await submitBtn.click();
 
-    // Job appears in the "All uploads" list, initially PENDING/PROCESSING.
+    // Job appears in the "Uploads (N)" list, initially PENDING/PROCESSING.
     // Generous timeout: the upload request is synchronous end-to-end (file
     // bytes -> blob storage -> Speech Batch submission) before the button
     // re-enables, so a real multi-MB file over a real network can take a
     // couple of minutes here, not just a local-only round trip.
-    const allUploads = page.locator("section", { hasText: "All uploads" });
+    const allUploads = page.locator("section").filter({ hasText: /^Uploads/ });
     await expect(allUploads.getByText(fileName)).toBeVisible({
       timeout: 180_000,
     });
