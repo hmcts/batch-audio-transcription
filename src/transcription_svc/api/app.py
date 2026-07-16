@@ -39,7 +39,12 @@ def _json_safe(obj: Any) -> Any:
 async def _validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    return JSONResponse(status_code=422, content=_json_safe(jsonable_encoder(exc.errors())))
+    # Preserve FastAPI's default {"detail": [...]} response shape — only the
+    # non-finite-float sanitisation differs from the built-in handler.
+    return JSONResponse(
+        status_code=422,
+        content={"detail": _json_safe(jsonable_encoder(exc.errors()))},
+    )
 
 
 @asynccontextmanager

@@ -1,10 +1,14 @@
 import { act, render } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useNow } from "@/lib/use-now";
 
 function Clock() {
+  // A client render (Testing Library uses createRoot, not hydration) always
+  // gets a real Date from getSnapshot; the null branch is only hit on the
+  // server / during hydration.
   const now = useNow();
-  return <span>{now.toISOString()}</span>;
+  return <span>{now ? now.toISOString() : "server"}</span>;
 }
 
 describe("useNow", () => {
@@ -64,5 +68,12 @@ describe("useNow", () => {
     });
 
     expect(container.textContent).toContain("2026-07-15T09:00:05");
+  });
+
+  it("returns a stable null on the server so SSR output is time-independent", () => {
+    // getServerSnapshot must not depend on wall-clock time, otherwise SSR and
+    // client hydration would disagree. renderToStaticMarkup exercises the
+    // server path.
+    expect(renderToStaticMarkup(<Clock />)).toBe("<span>server</span>");
   });
 });

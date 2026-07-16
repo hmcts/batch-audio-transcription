@@ -41,12 +41,21 @@ function getSnapshot(): Date {
   return now;
 }
 
+// The server (and the first client render during hydration) must produce
+// identical markup, so we can't feed it a live timestamp — that would make
+// server output depend on server wall-clock time and cause hydration
+// mismatches. Returning null here is a stable sentinel: callers render their
+// static content on the server and only add time-based readouts once the
+// client takes over and getSnapshot supplies a real Date.
+function getServerSnapshot(): Date | null {
+  return null;
+}
+
 /**
- * Returns the current time, re-rendering the caller roughly once a second.
- * All callers share a single underlying interval (see module comment).
+ * Returns the current time, re-rendering the caller roughly once a second,
+ * or null during SSR / the first hydration render. All callers share a single
+ * underlying interval (see module comment).
  */
-export function useNow(): Date {
-  // getServerSnapshot mirrors getSnapshot so this is SSR-safe; the value is
-  // stable per render on the server (no interval runs there).
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+export function useNow(): Date | null {
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
