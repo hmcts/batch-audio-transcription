@@ -965,10 +965,76 @@ describe("TranscriptSegment", () => {
         />
       );
       await user.click(lowConfidenceRun(container));
-      // No menu — straight to the inline editor, preserving today's behaviour.
-      expect(screen.queryByRole("menu")).toBeNull();
+      // No resolve menu — straight to the inline editor, preserving today's
+      // behaviour (scoped by name so it's specific to the resolve menu).
+      expect(screen.queryByRole("menu", { name: /resolve/i })).toBeNull();
       const input = screen.getByRole("textbox") as HTMLInputElement;
       expect(input.value).toBe("morning.");
+    });
+
+    it("does not open a resolve menu on another word while a correction is being applied", async () => {
+      const user = userEvent.setup();
+      // Two non-adjacent low-confidence words ("bravo" idx 1, "delta" idx 3),
+      // both covered by one alternatives group, so each is its own clickable
+      // low-confidence run with a Suggested option.
+      const twoLowConf: SegmentType = {
+        ...SEGMENT,
+        text: "alpha bravo charlie delta echo",
+        words: [
+          { text: "alpha", startTime: 0, endTime: 0.5, confidence: 0.95 },
+          { text: "bravo", startTime: 0.5, endTime: 1.0, confidence: 0.3 },
+          { text: "charlie", startTime: 1.0, endTime: 1.5, confidence: 0.95 },
+          { text: "delta", startTime: 1.5, endTime: 2.0, confidence: 0.3 },
+          { text: "echo", startTime: 2.0, endTime: 2.5, confidence: 0.95 },
+        ],
+        alternatives: [
+          {
+            startWordIndex: 0,
+            endWordIndex: 4,
+            candidates: [
+              { text: "alpha bravo charlie delta echo" },
+              { text: "alpha bravo charlie delta ECHO", confidence: 0.4 },
+            ],
+          },
+        ],
+      };
+      // A correction that never settles, so applyingCandidate stays true.
+      const onCorrectRange = vi.fn(
+        () =>
+          new Promise<void>(() => {
+            // intentionally never resolves
+          })
+      );
+      const { container } = render(
+        <TranscriptSegment
+          segment={twoLowConf}
+          onCorrectRange={onCorrectRange}
+        />
+      );
+      const runFor = (word: string) => {
+        const run = Array.from(container.querySelectorAll("span")).find(
+          (el) =>
+            el.className.includes("bg-orange-100") &&
+            el.textContent?.trim() === word
+        );
+        if (!run) throw new Error(`run for ${word} not found`);
+        return run;
+      };
+
+      await user.click(runFor("bravo"));
+      await user.click(screen.getByRole("menuitem", { name: /suggested/i }));
+      await user.click(
+        screen.getByRole("menuitem", {
+          name: /alpha bravo charlie delta ECHO/i,
+        })
+      );
+      expect(onCorrectRange).toHaveBeenCalledTimes(1);
+
+      // Correction still in flight — clicking a different low-confidence word
+      // must not open a second resolve menu (concurrent PATCHes unsupported).
+      await user.click(runFor("delta"));
+      expect(screen.queryByRole("menu", { name: /resolve/i })).toBeNull();
+      expect(onCorrectRange).toHaveBeenCalledTimes(1);
     });
 
     it("dismisses the menu on Escape without taking any action", async () => {

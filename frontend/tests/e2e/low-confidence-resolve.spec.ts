@@ -113,8 +113,10 @@ test.describe("Low-confidence click-to-resolve menu", () => {
     await expect(lowConfidenceWord).toBeVisible();
     await lowConfidenceWord.click();
 
-    // No menu — straight to the inline editor, preserving today's behaviour.
-    await expect(page.getByRole("menu")).toHaveCount(0);
+    // No resolve menu — straight to the inline editor, preserving today's
+    // behaviour. Scoped by name so unrelated menus elsewhere on the page
+    // (e.g. header dropdowns) can't make this flaky.
+    await expect(page.getByRole("menu", { name: /resolve/i })).toHaveCount(0);
     await expect(page.getByRole("textbox")).toBeVisible();
   });
 });

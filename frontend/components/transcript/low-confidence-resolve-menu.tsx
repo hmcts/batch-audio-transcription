@@ -52,16 +52,18 @@ export function LowConfidenceResolveMenu({
         onClose();
       }
     };
-    const onPointerDown = (e: MouseEvent) => {
+    // pointerdown (not mousedown) so the menu also dismisses on touch/pen
+    // input, which never emits mouse events.
+    const onPointerDown = (e: PointerEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         onClose();
       }
     };
     document.addEventListener("keydown", onKeyDown, true);
-    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("pointerdown", onPointerDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
-      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("pointerdown", onPointerDown);
     };
   }, [onClose]);
 

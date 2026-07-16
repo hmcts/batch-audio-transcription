@@ -491,6 +491,10 @@ function Words({
         const menuId = `${popupBaseId}-resolve-${run.start}`;
 
         const openResolve = () => {
+          // Don't start a second correction while one is mid-flight — the
+          // menu buttons disable themselves, but the underlying words stay
+          // clickable, and concurrent PATCHes aren't supported.
+          if (applyingCandidate) return;
           if (hasAlternatives) {
             setMenuRun(run.start);
           } else {
@@ -564,6 +568,11 @@ function Words({
             }
             aria-expanded={
               onCorrectRange && hasAlternatives ? isMenuOpen : undefined
+            }
+            aria-controls={
+              onCorrectRange && hasAlternatives && isMenuOpen
+                ? menuId
+                : undefined
             }
             aria-describedby={isPopupOpen ? popupId : undefined}
             className={cn(
