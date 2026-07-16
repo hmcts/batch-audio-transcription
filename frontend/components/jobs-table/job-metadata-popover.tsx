@@ -15,6 +15,38 @@ interface JobMetadataPopoverProps {
 const SPEECH_MODELS_DOCS_URL =
   "https://learn.microsoft.com/azure/ai-services/speech-service/how-to-custom-speech-choose-model";
 
+// Neutral label shown when the only thing we have is a raw authenticated
+// model.self URL (historical jobs / failed resolution). The raw URL is an
+// auth-only endpoint ending in a GUID and must never be rendered — as visible
+// text or in a tooltip — which is the whole point of DIAAT-243.
+const UNRESOLVED_MODEL_LABEL = "Azure Speech model";
+
+/** True when the identifier is a raw URL (the auth-only model.self endpoint). */
+function isUrlIdentifier(identifier: string | undefined): boolean {
+  return (
+    identifier !== undefined &&
+    (identifier.startsWith("http://") || identifier.startsWith("https://"))
+  );
+}
+
+/**
+ * The safe model label to display: the server-resolved friendly name when
+ * present, else the raw model_identifier only if it's a non-URL fallback
+ * label, else a neutral label (never the raw self URL), else `undefined` so
+ * the caller can show a progress/terminal placeholder.
+ */
+export function safeModelLabel(job: TranscriptionJob): string | undefined {
+  if (job.modelDisplayName !== undefined) {
+    return job.modelDisplayName;
+  }
+  if (job.modelIdentifier === undefined) {
+    return undefined;
+  }
+  return isUrlIdentifier(job.modelIdentifier)
+    ? UNRESOLVED_MODEL_LABEL
+    : job.modelIdentifier;
+}
+
 /** True once there's at least one piece of run metadata worth showing. */
 export function hasRunMetadata(job: TranscriptionJob): boolean {
   return (
@@ -41,10 +73,11 @@ export function JobMetadataPopover({ job }: JobMetadataPopoverProps) {
   const missingPlaceholder = isTerminal ? "—" : "In progress…";
 
   // Prefer the server-resolved human-readable name (e.g. "Base model —
-  // en-GB"); fall back to the raw model_identifier for historical jobs or
-  // when resolution failed, and finally to the progress/terminal placeholder.
-  const modelLabel =
-    job.modelDisplayName ?? job.modelIdentifier ?? missingPlaceholder;
+  // en-GB"); fall back to a safe label for historical jobs or when resolution
+  // failed (never the raw self URL), and finally to the progress/terminal
+  // placeholder.
+  const safeLabel = safeModelLabel(job);
+  const modelLabel = safeLabel ?? missingPlaceholder;
 
   return (
     <HoverPopover
@@ -73,10 +106,7 @@ export function JobMetadataPopover({ job }: JobMetadataPopoverProps) {
         </div>
         <div className="flex items-baseline justify-between gap-3">
           <dt className="text-muted-foreground shrink-0">Model</dt>
-          <dd
-            className="truncate font-medium"
-            title={job.modelDisplayName ?? job.modelIdentifier ?? undefined}
-          >
+          <dd className="truncate font-medium" title={safeLabel ?? undefined}>
             {modelLabel}
           </dd>
         </div>

@@ -171,6 +171,18 @@ class TestComposeModelDisplayName:
 
 
 class TestResolveModelDisplayName:
+    @pytest.fixture(autouse=True)
+    def _pin_speech_endpoint(self, monkeypatch):
+        # The SSRF guard compares the model URL host against
+        # AZURE_SPEECH_ENDPOINT; pin it so these tests don't depend on global
+        # env state that other test modules may have mutated.
+        from transcription_svc.config.settings import get_settings
+
+        monkeypatch.setenv("AZURE_SPEECH_ENDPOINT", "https://test.cognitiveservices.azure.com")
+        get_settings.cache_clear()
+        yield
+        get_settings.cache_clear()
+
     @pytest.mark.asyncio
     async def test_resolves_via_speech_api_when_identifier_is_url(self):
         from transcription_svc.audio.polling_service import _resolve_model_display_name
@@ -181,7 +193,7 @@ class TestResolveModelDisplayName:
             return_value={"displayName": "20240614 Base", "locale": "en-GB"},
         ) as mock_get:
             result = await _resolve_model_display_name(
-                "https://eastus.cognitiveservices.azure.com/speechtotext/v3.2/models/base/abc"
+                "https://test.cognitiveservices.azure.com/speechtotext/v3.2/models/base/abc"
             )
 
         assert result == "20240614 Base — en-GB"
@@ -201,6 +213,40 @@ class TestResolveModelDisplayName:
         mock_get.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_skips_resolution_for_untrusted_host(self):
+        """The subscription key must never be sent off our Speech host: a URL
+        on any other host is rejected without dereferencing (SSRF guard)."""
+        from transcription_svc.audio.polling_service import _resolve_model_display_name
+
+        with patch(
+            "transcription_svc.audio.polling_service.get_model_details",
+            new_callable=AsyncMock,
+        ) as mock_get:
+            result = await _resolve_model_display_name(
+                "https://attacker.example.com/speechtotext/v3.2/models/base/abc"
+            )
+
+        assert result is None
+        mock_get.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_skips_resolution_for_non_https_url(self):
+        """Plain http is rejected even on the right host — the key only travels
+        over TLS."""
+        from transcription_svc.audio.polling_service import _resolve_model_display_name
+
+        with patch(
+            "transcription_svc.audio.polling_service.get_model_details",
+            new_callable=AsyncMock,
+        ) as mock_get:
+            result = await _resolve_model_display_name(
+                "http://test.cognitiveservices.azure.com/speechtotext/v3.2/models/base/abc"
+            )
+
+        assert result is None
+        mock_get.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_is_best_effort_when_speech_api_fails(self, caplog):
         import logging
 
@@ -215,7 +261,7 @@ class TestResolveModelDisplayName:
             caplog.at_level(logging.WARNING),
         ):
             result = await _resolve_model_display_name(
-                "https://eastus.cognitiveservices.azure.com/speechtotext/v3.2/models/base/abc"
+                "https://test.cognitiveservices.azure.com/speechtotext/v3.2/models/base/abc"
             )
 
         assert result is None
@@ -278,6 +324,18 @@ class TestProcessJob:
 
 
 class TestHandleSucceeded:
+    @pytest.fixture(autouse=True)
+    def _pin_speech_endpoint(self, monkeypatch):
+        # Model-name resolution's SSRF guard compares the model.self host
+        # against AZURE_SPEECH_ENDPOINT; pin it so these tests are robust to
+        # global env state mutated by other test modules.
+        from transcription_svc.config.settings import get_settings
+
+        monkeypatch.setenv("AZURE_SPEECH_ENDPOINT", "https://test.cognitiveservices.azure.com")
+        get_settings.cache_clear()
+        yield
+        get_settings.cache_clear()
+
     @pytest.mark.asyncio
     async def test_dispatches_webhook_on_success(self, service):
         job = _make_pending_job()
@@ -310,7 +368,7 @@ class TestHandleSucceeded:
         mock_entries = [MagicMock()]
         status_data = {
             "status": "Succeeded",
-            "model": {"self": "https://eastus.api.cognitive.microsoft.com/models/base/abc123"},
+            "model": {"self": "https://test.cognitiveservices.azure.com/models/base/abc123"},
             "createdDateTime": "2026-07-15T09:00:00Z",
             "lastActionDateTime": "2026-07-15T09:00:42Z",
         }
@@ -346,7 +404,7 @@ class TestHandleSucceeded:
             mock_entries,
             BatchJobStatus.SUCCEEDED,
             42.0,
-            "https://eastus.api.cognitive.microsoft.com/models/base/abc123",
+            "https://test.cognitiveservices.azure.com/models/base/abc123",
             "20240614 Base — en-GB",
         )
 
@@ -385,7 +443,7 @@ class TestHandleSucceeded:
         mock_entries = [MagicMock()]
         status_data = {
             "status": "Succeeded",
-            "model": {"self": "https://eastus.api.cognitive.microsoft.com/models/base/abc123"},
+            "model": {"self": "https://test.cognitiveservices.azure.com/models/base/abc123"},
         }
 
         with (
@@ -415,7 +473,7 @@ class TestHandleSucceeded:
         # model_display_name (6th positional arg) is None, but the raw
         # identifier (5th) is still persisted and the webhook still fires.
         assert mock_save.call_args[0][4] == (
-            "https://eastus.api.cognitive.microsoft.com/models/base/abc123"
+            "https://test.cognitiveservices.azure.com/models/base/abc123"
         )
         assert mock_save.call_args[0][5] is None
         mock_dispatch.assert_awaited_once()

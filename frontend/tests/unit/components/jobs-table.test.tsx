@@ -131,6 +131,32 @@ describe("JobsTable run metadata popover", () => {
     ).toBeNull();
   });
 
+  it("never renders the raw self URL when resolution failed on a URL identifier", async () => {
+    const rawSelfUrl =
+      "https://uksouth.cognitiveservices.azure.com/speechtotext/v3.2/models/base/guid";
+    const job = {
+      ...MOCK_JOBS[0],
+      modelIdentifier: rawSelfUrl,
+      modelDisplayName: undefined,
+    };
+    const user = userEvent.setup();
+    render(<JobsTable jobs={[job]} />);
+
+    await user.click(
+      screen.getByRole("button", { name: /transcription run details/i })
+    );
+
+    // A neutral label is shown; the raw authenticated URL never appears as
+    // visible text nor in the tooltip (title attribute).
+    expect(screen.getByText("Azure Speech model")).toBeDefined();
+    expect(screen.queryByText(rawSelfUrl)).toBeNull();
+    expect(screen.queryByTitle(rawSelfUrl)).toBeNull();
+    // No public-docs link without a resolved friendly name.
+    expect(
+      screen.queryByRole("link", { name: /about speech models/i })
+    ).toBeNull();
+  });
+
   it("does not navigate to the transcript when the file name is clicked", async () => {
     const user = userEvent.setup();
     render(<JobsTable jobs={[jobWithMetadata]} />);
