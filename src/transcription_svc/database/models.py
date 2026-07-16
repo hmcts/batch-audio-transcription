@@ -37,6 +37,43 @@ class WordInfo(SQLModel):
     confidence: float
 
 
+class NBestCandidate(SQLModel):
+    """One Azure nBest candidate reading for a phrase.
+
+    `text` is the candidate's display form (punctuated/capitalised);
+    `lexical` is its raw recognised form. See DIAAT-232 spike
+    (docs/spikes/DIAAT-232-nbest-alternatives.md) — Azure Speech Batch
+    v3.2 never returns per-word alternatives, only whole alternate
+    phrasings like this one.
+    """
+
+    text: str
+    confidence: float | None = None
+    lexical: str | None = None
+
+
+class PhraseAlternatives(SQLModel):
+    """The full nBest array Azure returned for one original recognised phrase.
+
+    `candidates[0]` is Azure's own top choice — the same reading already
+    surfaced as DialogueEntry.text/confidence/words — kept here too so the
+    whole array round-trips untouched rather than being reconstructed from
+    two different fields.
+
+    start_word_index/end_word_index (inclusive, into the *merged* entry's
+    `words` list) locate which words this phrase's alternatives apply to,
+    the same convention WordCorrection uses. Both are None when no
+    per-word alignment is available for this phrase (e.g. Azure returned
+    no word-level detail, or a later speaker-grouping merge broke
+    alignment) — the candidates still describe a whole alternative for
+    *some* part of the segment even without a precise word range.
+    """
+
+    start_word_index: int | None = None
+    end_word_index: int | None = None
+    candidates: list[NBestCandidate]
+
+
 class WordCorrection(SQLModel):
     """An active replacement for a contiguous run of the *original* words.
 
@@ -102,6 +139,13 @@ class DialogueEntry(SQLModel):
     # highlighting to live playback position. None if Azure didn't return
     # word-level detail for this phrase.
     words: list[WordInfo] | None = None
+    # Azure's other nBest readings for the phrase(s) making up this entry —
+    # e.g. for a hover/click UI to offer as alternatives to a low-confidence
+    # word or segment (see DIAAT-233/DIAAT-234). Grouped per original phrase
+    # since alternatives are only ever whole alternate phrasings, never
+    # per-word swaps (see docs/spikes/DIAAT-232-nbest-alternatives.md).
+    # None if Azure returned no nBest data at all for this entry.
+    alternatives: list[PhraseAlternatives] | None = None
     # Set by the "accept all" action — a clerk confirming a low-confidence
     # segment is correct as transcribed, without editing its text. Deliberately
     # independent of has_corrections()/corrected_text: accepting must not make
@@ -222,6 +266,12 @@ class TranscriptionJob(BaseTable, table=True):
     batch_job_url: str | None = Field(default=None)
     audio_duration_seconds: float | None = Field(default=None)
     audio_blob_path: str | None = Field(default=None)
+
+    # Run metadata (DIAAT-227) — populated once the job reaches a terminal
+    # state so the dashboard can surface "how long did this take and which
+    # model produced it" without opening the transcript.
+    transcription_duration_seconds: float | None = Field(default=None)
+    model_identifier: str | None = Field(default=None)
 
     # Cleanup
     needs_cleanup: bool = Field(default=False)

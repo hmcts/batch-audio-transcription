@@ -2,9 +2,51 @@ from __future__ import annotations
 
 import logging
 
-from transcription_svc.database.models import DialogueEntry
+from transcription_svc.database.models import DialogueEntry, PhraseAlternatives
 
 logger = logging.getLogger(__name__)
+
+
+def _merged_alternatives(
+    existing: list[PhraseAlternatives] | None,
+    existing_word_count: int,
+    new: list[PhraseAlternatives] | None,
+    words_aligned: bool,
+) -> list[PhraseAlternatives] | None:
+    """Combine two entries' per-phrase nBest groups when merging speaker turns.
+
+    When both sides still have an intact `words` list (see the words-merge
+    rule below), `new`'s word-index ranges are offset by how many words
+    already precede it so they keep pointing at the right words in the
+    merged list. When alignment breaks (either side lacks `words`), the
+    candidates are still kept — just with their index range cleared to
+    None — rather than silently dropped, matching how words/confidence
+    were previously (and wrongly) dropped entirely in this same module.
+    """
+    combined = (existing or []) + (new or [])
+    if not combined:
+        return None
+    if words_aligned:
+        return (existing or []) + [
+            PhraseAlternatives(
+                start_word_index=(
+                    pa.start_word_index + existing_word_count
+                    if pa.start_word_index is not None
+                    else None
+                ),
+                end_word_index=(
+                    pa.end_word_index + existing_word_count
+                    if pa.end_word_index is not None
+                    else None
+                ),
+                candidates=pa.candidates,
+            )
+            for pa in (new or [])
+        ]
+    return [
+        PhraseAlternatives(start_word_index=None, end_word_index=None, candidates=pa.candidates)
+        for pa in combined
+    ]
 
 
 def _merged_confidence(
@@ -87,11 +129,12 @@ def group_dialogue_entries_by_speaker(
             # partial words list (covering just one side) would no longer
             # line up with the merged text's word indices, corrupting
             # word-range corrections and playback-sync highlighting.
-            current_entry.words = (
-                current_entry.words + entry.words
-                if current_entry.words is not None and entry.words is not None
-                else None
+            words_aligned = current_entry.words is not None and entry.words is not None
+            existing_word_count = len(current_entry.words) if current_entry.words else 0
+            current_entry.alternatives = _merged_alternatives(
+                current_entry.alternatives, existing_word_count, entry.alternatives, words_aligned
             )
+            current_entry.words = current_entry.words + entry.words if words_aligned else None
             current_entry.text += f" {entry.text}"
             # The small negative gap tolerated by the mid-sentence heuristic
             # means `entry` can occasionally overlap and end slightly
@@ -112,6 +155,7 @@ def group_dialogue_entries_by_speaker(
                 end_time=entry.end_time,
                 confidence=entry.confidence,
                 words=entry.words,
+                alternatives=entry.alternatives,
             )
 
     if current_entry:
@@ -137,6 +181,7 @@ def normalize_speaker_labels(entries: list[DialogueEntry]) -> list[DialogueEntry
                 end_time=entry.end_time,
                 confidence=entry.confidence,
                 words=entry.words,
+                alternatives=entry.alternatives,
             )
         )
 
@@ -152,6 +197,7 @@ def add_speaker_labels(entries: list[DialogueEntry]) -> list[DialogueEntry]:
             end_time=entry.end_time,
             confidence=entry.confidence,
             words=entry.words,
+            alternatives=entry.alternatives,
         )
         for entry in entries
     ]

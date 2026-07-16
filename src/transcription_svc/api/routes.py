@@ -238,6 +238,18 @@ class WordCorrectionResponse(BaseModel):
     text: str
 
 
+class NBestCandidateResponse(BaseModel):
+    text: str
+    confidence: float | None = None
+    lexical: str | None = None
+
+
+class PhraseAlternativesResponse(BaseModel):
+    start_word_index: int | None = None
+    end_word_index: int | None = None
+    candidates: list[NBestCandidateResponse]
+
+
 class CorrectionEntryResponse(BaseModel):
     timestamp: str
     kind: str
@@ -259,6 +271,7 @@ class DialogueEntryResponse(BaseModel):
     word_corrections: list[WordCorrectionResponse] | None = None
     correction_history: list[CorrectionEntryResponse] | None = None
     words: list[WordInfoResponse] | None = None
+    alternatives: list[PhraseAlternativesResponse] | None = None
     accepted: bool = False
 
 
@@ -289,6 +302,20 @@ class JobResponse(BaseModel):
     needs_review: list[NeedsReviewItemResponse] | None = None
     error_message: str | None = None
     metadata: dict = Field(default_factory=dict)
+    # The caller (API client / clerk identity) that owns this job. Every
+    # correction endpoint enforces job.caller_id == caller.id, so all
+    # modification-history entries on the job were made by this caller — it's
+    # the best available "who made the change" attribution. Note this is
+    # job-level, not per-action: CorrectionEntry does not record a separate
+    # identity per correction, so it cannot distinguish two people editing
+    # under the same caller. In local dev this is always "local-dev".
+    caller_name: str | None = None
+    # Run metadata (DIAAT-227): audio length, how long the transcription
+    # itself took, and which model/engine produced it. audio_duration is
+    # known from submission; the other two only once the job succeeds.
+    audio_duration_seconds: float | None = None
+    transcription_duration_seconds: float | None = None
+    model_identifier: str | None = None
 
 
 class JobListResponse(BaseModel):
@@ -348,13 +375,14 @@ def _to_dialogue_entries(job: TranscriptionJob) -> list[DialogueEntry] | None:
             word_corrections=_entry_field(e, "word_corrections"),
             correction_history=_entry_field(e, "correction_history"),
             words=_entry_field(e, "words"),
+            alternatives=_entry_field(e, "alternatives"),
             accepted=_entry_field(e, "accepted", False),
         )
         for e in job.dialogue_entries
     ]
 
 
-def _to_response(job: TranscriptionJob) -> JobResponse:
+def _to_response(job: TranscriptionJob, caller_name: str | None = None) -> JobResponse:
     entries = _to_dialogue_entries(job)
     accuracy = None
     needs_review = None
@@ -433,6 +461,21 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
                 ]
                 if e.words
                 else None,
+                alternatives=[
+                    PhraseAlternativesResponse(
+                        start_word_index=pa.start_word_index,
+                        end_word_index=pa.end_word_index,
+                        candidates=[
+                            NBestCandidateResponse(
+                                text=c.text, confidence=c.confidence, lexical=c.lexical
+                            )
+                            for c in pa.candidates
+                        ],
+                    )
+                    for pa in e.alternatives
+                ]
+                if e.alternatives
+                else None,
                 accepted=e.accepted,
             )
             for e in entries
@@ -443,6 +486,10 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
         needs_review=needs_review,
         error_message=job.error_message,
         metadata=job.metadata_,
+        caller_name=caller_name,
+        audio_duration_seconds=job.audio_duration_seconds,
+        transcription_duration_seconds=job.transcription_duration_seconds,
+        model_identifier=job.model_identifier,
     )
 
 
@@ -544,7 +591,7 @@ async def submit_job(
     if body.idempotency_key:
         existing = get_job_by_idempotency_key(session, body.idempotency_key, caller.id)
         if existing:
-            return _to_response(existing)
+            return _to_response(existing, caller.name)
 
     # blob_name is later trusted by GET /jobs/{id}/audio to read straight from
     # storage — without this check a caller could point it at another
@@ -574,12 +621,12 @@ async def submit_job(
         if body.idempotency_key:
             existing = get_job_by_idempotency_key(session, body.idempotency_key, caller.id)
             if existing:
-                return _to_response(existing)
+                return _to_response(existing, caller.name)
         raise HTTPException(
             status_code=409, detail="Concurrent submission conflict; retry"
         ) from None
 
-    return _to_response(job)
+    return _to_response(job, caller.name)
 
 
 @router.get("/jobs", response_model=JobListResponse)
@@ -588,7 +635,7 @@ async def list_jobs(
     caller: Caller = Depends(get_caller),
 ) -> JobListResponse:
     jobs = list_jobs_by_caller(session, caller.id)
-    return JobListResponse(jobs=[_to_response(job) for job in jobs])
+    return JobListResponse(jobs=[_to_response(job, caller.name) for job in jobs])
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
@@ -600,7 +647,7 @@ async def get_job(
     job = get_job_by_id(session, job_id)
     if not job or job.caller_id != caller.id:
         raise HTTPException(status_code=404, detail="Job not found")
-    return _to_response(job)
+    return _to_response(job, caller.name)
 
 
 def _load_entry_for_correction(
@@ -625,6 +672,7 @@ def _load_entry_for_correction(
         word_corrections=_entry_field(raw, "word_corrections"),
         correction_history=_entry_field(raw, "correction_history"),
         words=_entry_field(raw, "words"),
+        alternatives=_entry_field(raw, "alternatives"),
         accepted=_entry_field(raw, "accepted", False),
     )
     return job, entry
@@ -693,7 +741,7 @@ async def correct_segment(
     )
 
     _save_corrected_entry(session, job, index, entry)
-    return _to_response(job)
+    return _to_response(job, caller.name)
 
 
 @router.patch("/jobs/{job_id}/segments/{index}/words", response_model=JobResponse)
@@ -806,7 +854,7 @@ async def correct_word_range(
     )
 
     _save_corrected_entry(session, job, index, entry)
-    return _to_response(job)
+    return _to_response(job, caller.name)
 
 
 @router.post("/jobs/{job_id}/segments/{index}/rollback", response_model=JobResponse)
@@ -836,7 +884,7 @@ async def rollback_segment(
     entry.accepted = False
 
     _save_corrected_entry(session, job, index, entry)
-    return _to_response(job)
+    return _to_response(job, caller.name)
 
 
 @router.post("/jobs/{job_id}/segments/{index}/accept", response_model=JobResponse)
@@ -880,7 +928,7 @@ async def accept_segment(
     ]
 
     _save_corrected_entry(session, job, index, entry)
-    return _to_response(job)
+    return _to_response(job, caller.name)
 
 
 @router.post(
@@ -997,7 +1045,7 @@ async def rollback_to_history_entry(
         ]
 
     _save_corrected_entry(session, job, index, entry)
-    return _to_response(job)
+    return _to_response(job, caller.name)
 
 
 @router.get("/jobs/{job_id}/audio")

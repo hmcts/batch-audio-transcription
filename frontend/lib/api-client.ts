@@ -79,6 +79,10 @@ interface BackendJob {
   needs_review: BackendNeedsReviewItem[] | null;
   error_message: string | null;
   metadata: Record<string, unknown>;
+  caller_name?: string | null;
+  audio_duration_seconds: number | null;
+  transcription_duration_seconds: number | null;
+  model_identifier: string | null;
 }
 
 interface BackendJobList {
@@ -306,6 +310,11 @@ function toTranscriptionJob(job: BackendJob): TranscriptionJob {
     segments: toSegments(job.dialogue_entries),
     accuracy: toAccuracy(job.accuracy),
     lowConfidenceSegments: toLowConfidenceSegments(job.needs_review),
+    caller: job.caller_name ?? undefined,
+    audioDurationSeconds: job.audio_duration_seconds ?? undefined,
+    transcriptionDurationSeconds:
+      job.transcription_duration_seconds ?? undefined,
+    modelIdentifier: job.model_identifier ?? undefined,
   };
 }
 

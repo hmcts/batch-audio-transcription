@@ -35,10 +35,60 @@ test.describe("Dashboard", () => {
   });
 
   test("shows an empty state when there are no jobs yet", async ({ page }) => {
-    const jobsSections = page.locator("section", { hasText: "All uploads" });
+    // The full-history list is the "Uploads (N)" section (see app/page.tsx);
+    // an earlier "All uploads" locator matched no markup and always failed.
+    const uploadsSection = page
+      .locator("section")
+      .filter({ hasText: /^Uploads/ });
     await expect(
-      jobsSections.getByText(/no transcription jobs yet/i)
+      uploadsSection.getByText(/no transcription jobs yet/i)
     ).toBeVisible();
+  });
+});
+
+// Run metadata popover (DIAAT-227). Requires a real backend behind the
+// frontend with at least one completed job whose run metadata has been
+// populated — skips otherwise (e.g. CI's backend-less e2e run) rather than
+// failing, mirroring the "Real transcription pipeline" test below.
+test.describe("Transcription run metadata popover", () => {
+  test("surfaces audio length, transcription time and model on the file name", async ({
+    page,
+  }) => {
+    await page.goto("/batch");
+
+    // The file name becomes an info trigger only once run metadata exists.
+    // Jobs load via a client-side fetch after mount, so wait for the trigger
+    // to appear; skip (rather than fail) if this backend has no such job —
+    // e.g. CI's backend-less e2e run.
+    const trigger = page
+      .getByRole("button", { name: /transcription run details for/i })
+      .first();
+
+    try {
+      await trigger.waitFor({ state: "visible", timeout: 10_000 });
+    } catch {
+      test.skip(
+        true,
+        "No completed job with run metadata available on this backend"
+      );
+    }
+
+    // Metadata is not shown until the clerk interacts — no need to open the
+    // transcript for it.
+    await expect(page.getByText(/audio length/i)).toHaveCount(0);
+
+    await trigger.click();
+
+    // Popover reveals all three pieces of run metadata.
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(/audio length/i)).toBeVisible();
+    await expect(dialog.getByText(/transcription time/i)).toBeVisible();
+    await expect(dialog.getByText(/^model$/i)).toBeVisible();
+
+    // Clicking the file name shows metadata rather than navigating to the
+    // transcript view.
+    await expect(page).toHaveURL(/\/batch\/?$/);
   });
 });
 

@@ -9,7 +9,12 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from uwotm8 import convert_american_to_british_spelling
 
 from transcription_svc.config.settings import get_settings
-from transcription_svc.database.models import DialogueEntry, WordInfo
+from transcription_svc.database.models import (
+    DialogueEntry,
+    NBestCandidate,
+    PhraseAlternatives,
+    WordInfo,
+)
 
 _TICKS_PER_SECOND: int = 10_000_000
 _HTTP_TIMEOUT: float = 30.0
@@ -157,6 +162,27 @@ async def get_batch_results(
             for w in best.get("words", [])
         ] or None
 
+        # Azure only ever offers alternatives as whole alternate phrasings of
+        # the entire phrase (nBest[]) — there's no per-word nBest/alternatives
+        # array anywhere in the v3.2 response (see DIAAT-232 spike writeup).
+        # Persist the full array, not just the top choice already captured
+        # above as text/confidence/words, so it isn't silently discarded.
+        candidates = [
+            NBestCandidate(
+                text=convert_american_to_british_spelling(candidate.get("display", "")),
+                confidence=candidate.get("confidence"),
+                lexical=candidate.get("lexical"),
+            )
+            for candidate in n_best
+        ]
+        alternatives = [
+            PhraseAlternatives(
+                start_word_index=0 if words else None,
+                end_word_index=len(words) - 1 if words else None,
+                candidates=candidates,
+            )
+        ]
+
         dialogue_entries.append(
             DialogueEntry(
                 speaker=speaker,
@@ -165,6 +191,7 @@ async def get_batch_results(
                 end_time=end_time,
                 confidence=confidence,
                 words=words,
+                alternatives=alternatives,
             )
         )
 

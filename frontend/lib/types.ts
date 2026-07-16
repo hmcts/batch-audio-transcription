@@ -104,4 +104,17 @@ export interface TranscriptionJob {
   segments?: TranscriptSegment[];
   accuracy?: TranscriptAccuracy;
   lowConfidenceSegments?: LowConfidenceSegment[];
+  // The caller (API client / clerk identity) that owns this job. Every
+  // correction is made under this caller, so it's the "who made the change"
+  // attribution for the modification-history table. Job-level, not
+  // per-action: the audit trail records no separate identity per correction.
+  // In local dev this is always "local-dev".
+  caller?: string;
+  // Run metadata (DIAAT-227) — surfaced on the dashboard via the file name,
+  // on hover/click, without needing to open the transcript. audioDuration is
+  // known as soon as the file is submitted; the other two are only known
+  // once the job has actually completed.
+  audioDurationSeconds?: number;
+  transcriptionDurationSeconds?: number;
+  modelIdentifier?: string;
 }
