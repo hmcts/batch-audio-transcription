@@ -538,51 +538,56 @@ function Words({
         };
 
         return (
-          <span
-            key={run.start}
-            onClick={onCorrectRange ? openResolve : undefined}
-            onKeyDown={
-              onCorrectRange
-                ? (e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      openResolve();
+          // Non-interactive positioning wrapper: the popup and resolve menu
+          // are siblings of the interactive trigger, never nested inside it,
+          // so interactive controls (the menu's buttons) don't live inside a
+          // role="button" element.
+          <span key={run.start} className="relative">
+            <span
+              onClick={onCorrectRange ? openResolve : undefined}
+              onKeyDown={
+                onCorrectRange
+                  ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openResolve();
+                      }
                     }
-                  }
-                : undefined
-            }
-            onMouseEnter={() => setHoveredRun(run.start)}
-            onMouseLeave={() =>
-              setHoveredRun((current) =>
-                current === run.start ? null : current
-              )
-            }
-            onFocus={() => setHoveredRun(run.start)}
-            onBlur={() =>
-              setHoveredRun((current) =>
-                current === run.start ? null : current
-              )
-            }
-            role={onCorrectRange ? "button" : undefined}
-            tabIndex={onCorrectRange ? 0 : undefined}
-            aria-haspopup={
-              onCorrectRange && hasAlternatives ? "menu" : undefined
-            }
-            aria-expanded={
-              onCorrectRange && hasAlternatives ? isMenuOpen : undefined
-            }
-            aria-controls={
-              onCorrectRange && hasAlternatives && isMenuOpen
-                ? menuId
-                : undefined
-            }
-            aria-describedby={isPopupOpen ? popupId : undefined}
-            className={cn(
-              "relative rounded bg-orange-100 text-orange-900",
-              onCorrectRange && "cursor-pointer hover:bg-orange-200"
-            )}
-          >
-            {runTokens}
+                  : undefined
+              }
+              onMouseEnter={() => setHoveredRun(run.start)}
+              onMouseLeave={() =>
+                setHoveredRun((current) =>
+                  current === run.start ? null : current
+                )
+              }
+              onFocus={() => setHoveredRun(run.start)}
+              onBlur={() =>
+                setHoveredRun((current) =>
+                  current === run.start ? null : current
+                )
+              }
+              role={onCorrectRange ? "button" : undefined}
+              tabIndex={onCorrectRange ? 0 : undefined}
+              aria-haspopup={
+                onCorrectRange && hasAlternatives ? "menu" : undefined
+              }
+              aria-expanded={
+                onCorrectRange && hasAlternatives ? isMenuOpen : undefined
+              }
+              aria-controls={
+                onCorrectRange && hasAlternatives && isMenuOpen
+                  ? menuId
+                  : undefined
+              }
+              aria-describedby={isPopupOpen ? popupId : undefined}
+              className={cn(
+                "rounded bg-orange-100 text-orange-900",
+                onCorrectRange && "cursor-pointer hover:bg-orange-200"
+              )}
+            >
+              {runTokens}
+            </span>
             {isPopupOpen && (
               <LowConfidencePopup
                 id={popupId}

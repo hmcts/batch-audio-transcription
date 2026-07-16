@@ -188,8 +188,12 @@ describe("TranscriptSegment", () => {
     );
     const lowConfWord = Array.from(
       wordsParagraph(container).querySelectorAll("span")
-    ).find((el) => el.textContent?.trim() === "morning.");
-    expect(lowConfWord?.className).toContain("bg-orange-100");
+    ).find(
+      (el) =>
+        el.textContent?.trim() === "morning." &&
+        el.className.includes("bg-orange-100")
+    );
+    expect(lowConfWord).toBeDefined();
   });
 
   it("does not flag a high-confidence word as low-confidence", () => {
@@ -231,8 +235,12 @@ describe("TranscriptSegment", () => {
     );
     const word = Array.from(
       wordsParagraph(container).querySelectorAll("span")
-    ).find((el) => el.textContent?.trim() === "morning.");
-    expect(word?.className).toContain("bg-orange-100");
+    ).find(
+      (el) =>
+        el.textContent?.trim() === "morning." &&
+        el.className.includes("bg-orange-100")
+    );
+    expect(word).toBeDefined();
   });
 
   // DIAAT-235: the per-word highlight cutoff follows the backend-derived
@@ -581,11 +589,16 @@ describe("TranscriptSegment", () => {
       );
       await user.click(screen.getByLabelText(/show change history/i));
 
-      // "morning." is low-confidence, so it's nested inside an outer orange
-      // wrapper span — query the inner (leaf) word span specifically.
+      // "morning." is low-confidence, so it sits inside a positioning wrapper
+      // and an orange trigger span — the ring highlight lands on the innermost
+      // (leaf) token span, so target the one with no nested spans.
       const morningWord = Array.from(
-        wordsParagraph(container).querySelectorAll("span span")
-      ).find((el) => el.textContent?.trim() === "morning.");
+        wordsParagraph(container).querySelectorAll("span")
+      ).find(
+        (el) =>
+          el.textContent?.trim() === "morning." &&
+          el.querySelector("span") === null
+      );
       expect(morningWord?.className).not.toContain("ring-amber-500");
 
       const historyItem = screen.getByText(/phrase correction/i).closest("li");
@@ -677,8 +690,12 @@ describe("TranscriptSegment", () => {
       );
       const morningWord = Array.from(
         wordsParagraph(container).querySelectorAll("span")
-      ).find((el) => el.textContent?.trim() === "morning.");
-      expect(morningWord?.className).toContain("bg-orange-100");
+      ).find(
+        (el) =>
+          el.textContent?.trim() === "morning." &&
+          el.className.includes("bg-orange-100")
+      );
+      expect(morningWord).toBeDefined();
     });
   });
 

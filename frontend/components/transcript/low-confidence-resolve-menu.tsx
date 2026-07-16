@@ -46,27 +46,33 @@ export function LowConfidenceResolveMenu({
   // click re-opens it (the parent owns that state), so this only needs to
   // handle "clerk moved on" — not toggling.
   useEffect(() => {
+    // The trigger word is the menu's sibling (both live in the run's
+    // positioning wrapper), so find it via the shared parent rather than an
+    // ancestor lookup.
+    const triggerEl = () =>
+      menuRef.current?.parentElement?.querySelector<HTMLElement>(
+        '[role="button"]'
+      ) ?? null;
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
         // Return focus to the trigger word before the menu unmounts, so a
         // keyboard user keeps their place in the transcript.
-        menuRef.current?.closest<HTMLElement>('[role="button"]')?.focus();
+        triggerEl()?.focus();
         onClose();
       }
     };
     // pointerdown (not mousedown) so the menu also dismisses on touch/pen
-    // input, which never emits mouse events. The menu is rendered *inside* the
-    // trigger word's span, so treat a click anywhere within that trigger
-    // (the highlighted word or the menu itself) as "inside" — otherwise
-    // clicking the word to toggle the menu would be seen as an outside click
-    // and fight the trigger's own toggle handler.
+    // input, which never emits mouse events. Treat a click on either the menu
+    // or the trigger word as "inside" — clicking the word toggles the menu via
+    // the trigger's own handler, so it must not also count as an outside click.
     const onPointerDown = (e: PointerEvent) => {
       const menuEl = menuRef.current;
       if (!menuEl) return;
-      const trigger = menuEl.closest('[role="button"]');
       const target = e.target as Node;
-      if ((trigger ?? menuEl).contains(target)) return;
+      if (menuEl.contains(target)) return;
+      if (triggerEl()?.contains(target)) return;
       onClose();
     };
     document.addEventListener("keydown", onKeyDown, true);
