@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   confidencePercent,
-  formatDuration,
   formatTime,
   getMockJobById,
   MOCK_JOBS,
@@ -50,30 +49,4 @@ describe("formatTime", () => {
 describe("confidencePercent", () => {
   it("converts 0.98 to 98", () => expect(confidencePercent(0.98)).toBe(98));
   it("converts 0.73 to 73", () => expect(confidencePercent(0.73)).toBe(73));
-});
-
-describe("formatDuration", () => {
-  it("formats seconds only when under a minute", () => {
-    expect(formatDuration(8)).toBe("8s");
-  });
-
-  it("formats minutes and seconds", () => {
-    expect(formatDuration(754)).toBe("12m 34s");
-  });
-
-  it("formats hours, minutes and seconds", () => {
-    expect(formatDuration(3723)).toBe("1h 2m 3s");
-  });
-
-  it("rounds fractional seconds", () => {
-    expect(formatDuration(41.8)).toBe("42s");
-  });
-
-  it("returns an em dash placeholder when undefined", () => {
-    expect(formatDuration(undefined)).toBe("—");
-  });
-
-  it("formats zero as 0s", () => {
-    expect(formatDuration(0)).toBe("0s");
-  });
 });

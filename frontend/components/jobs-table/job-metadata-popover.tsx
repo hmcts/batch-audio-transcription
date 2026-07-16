@@ -2,8 +2,8 @@
 
 import { Info } from "lucide-react";
 import { HoverPopover } from "@/components/ui/hover-popover";
-import { formatDuration } from "@/lib/mock-data";
 import type { TranscriptionJob } from "@/lib/types";
+import { formatDuration } from "@/lib/utils";
 
 interface JobMetadataPopoverProps {
   job: TranscriptionJob;
