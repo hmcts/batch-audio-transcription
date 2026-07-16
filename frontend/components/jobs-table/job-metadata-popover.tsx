@@ -9,11 +9,18 @@ interface JobMetadataPopoverProps {
   job: TranscriptionJob;
 }
 
+// Microsoft's PUBLIC Speech-to-Text docs (safe, unauthenticated) — NOT the
+// authenticated model.self endpoint. Linked only when we're showing a
+// resolved friendly name so a clerk can read what a base model is.
+const SPEECH_MODELS_DOCS_URL =
+  "https://learn.microsoft.com/azure/ai-services/speech-service/how-to-custom-speech-choose-model";
+
 /** True once there's at least one piece of run metadata worth showing. */
 export function hasRunMetadata(job: TranscriptionJob): boolean {
   return (
     job.audioDurationSeconds !== undefined ||
     job.transcriptionDurationSeconds !== undefined ||
+    job.modelDisplayName !== undefined ||
     job.modelIdentifier !== undefined
   );
 }
@@ -32,6 +39,12 @@ export function JobMetadataPopover({ job }: JobMetadataPopoverProps) {
   // value that will never arrive.
   const isTerminal = job.status === "COMPLETED" || job.status === "FAILED";
   const missingPlaceholder = isTerminal ? "—" : "In progress…";
+
+  // Prefer the server-resolved human-readable name (e.g. "Base model —
+  // en-GB"); fall back to the raw model_identifier for historical jobs or
+  // when resolution failed, and finally to the progress/terminal placeholder.
+  const modelLabel =
+    job.modelDisplayName ?? job.modelIdentifier ?? missingPlaceholder;
 
   return (
     <HoverPopover
@@ -62,11 +75,23 @@ export function JobMetadataPopover({ job }: JobMetadataPopoverProps) {
           <dt className="text-muted-foreground shrink-0">Model</dt>
           <dd
             className="truncate font-medium"
-            title={job.modelIdentifier ?? undefined}
+            title={job.modelDisplayName ?? job.modelIdentifier ?? undefined}
           >
-            {job.modelIdentifier ?? missingPlaceholder}
+            {modelLabel}
           </dd>
         </div>
+        {job.modelDisplayName !== undefined ? (
+          <div className="flex justify-end">
+            <a
+              href={SPEECH_MODELS_DOCS_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            >
+              About Speech models
+            </a>
+          </div>
+        ) : null}
       </dl>
     </HoverPopover>
   );

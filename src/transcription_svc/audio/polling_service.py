@@ -27,6 +27,7 @@ from transcription_svc.audio.batch_client import (
     delete_batch_job,
     get_batch_job_status,
     get_batch_results,
+    get_model_details,
 )
 from transcription_svc.audio.speakers import process_speakers
 from transcription_svc.config.settings import get_settings
@@ -77,6 +78,45 @@ def _extract_model_identifier(status_data: dict, locale: str) -> str:
         if isinstance(model_self, str) and model_self:
             return model_self
     return f"azure-speech-batch-transcription ({locale})"
+
+
+def _compose_model_display_name(model_details: dict) -> str | None:
+    """Build a human-readable model label from a Speech model resource.
+
+    Prefers Azure's `displayName`, qualifying it with `locale` when present
+    (e.g. "20240614 Base — en-GB"). Returns None when there's no usable
+    `displayName` so callers fall back to the raw model_identifier. Parses
+    defensively: every field may be absent on older API versions or partial
+    responses.
+    """
+    display_name = model_details.get("displayName")
+    if not isinstance(display_name, str) or not display_name.strip():
+        return None
+    display_name = display_name.strip()
+
+    locale = model_details.get("locale")
+    if isinstance(locale, str) and locale.strip():
+        return f"{display_name} — {locale.strip()}"
+    return display_name
+
+
+async def _resolve_model_display_name(model_identifier: str) -> str | None:
+    """Best-effort resolution of a model's friendly name from its self URL.
+
+    model_identifier is Azure's `model.self` URL when the batch response
+    carried one, otherwise a non-URL fallback label (which can't be
+    dereferenced). Any failure — non-URL identifier, network error, 401,
+    deleted model — is caught and logged and yields None so job completion
+    and the metadata display are never broken (DIAAT-243 AC5).
+    """
+    if not model_identifier.startswith("http"):
+        return None
+    try:
+        model_details = await get_model_details(model_identifier)
+    except Exception as exc:
+        logger.warning("Could not resolve model display name from %s: %s", model_identifier, exc)
+        return None
+    return _compose_model_display_name(model_details)
 
 
 def _extract_transcription_duration_seconds(
@@ -231,6 +271,7 @@ class BatchPollingService:
         processed_entries = process_speakers(dialogue_entries)
 
         model_identifier = _extract_model_identifier(status_data, job.locale)
+        model_display_name = await _resolve_model_display_name(model_identifier)
         transcription_duration_seconds = _extract_transcription_duration_seconds(
             status_data, job.created_datetime
         )
@@ -242,6 +283,7 @@ class BatchPollingService:
             BatchJobStatus.SUCCEEDED,
             transcription_duration_seconds,
             model_identifier,
+            model_display_name,
         )
 
         await self._dispatch_success(job, processed_entries)
@@ -291,6 +333,7 @@ class BatchPollingService:
         batch_status,
         transcription_duration_seconds=None,
         model_identifier=None,
+        model_display_name=None,
     ) -> None:
         with Session(get_engine()) as session:
             save_job_results(
@@ -300,6 +343,7 @@ class BatchPollingService:
                 batch_status,
                 transcription_duration_seconds=transcription_duration_seconds,
                 model_identifier=model_identifier,
+                model_display_name=model_display_name,
             )
 
     def _record_error(self, job_id, error_msg) -> None:

@@ -137,6 +137,91 @@ class TestExtractTranscriptionDurationSeconds:
         assert _extract_transcription_duration_seconds(status_data, None) is None
 
 
+class TestComposeModelDisplayName:
+    def test_combines_display_name_and_locale(self):
+        from transcription_svc.audio.polling_service import _compose_model_display_name
+
+        result = _compose_model_display_name({"displayName": "20240614 Base", "locale": "en-GB"})
+        assert result == "20240614 Base — en-GB"
+
+    def test_uses_display_name_only_when_locale_absent(self):
+        from transcription_svc.audio.polling_service import _compose_model_display_name
+
+        assert _compose_model_display_name({"displayName": "Base Model"}) == "Base Model"
+
+    def test_returns_none_when_display_name_missing(self):
+        from transcription_svc.audio.polling_service import _compose_model_display_name
+
+        assert _compose_model_display_name({"locale": "en-GB"}) is None
+
+    def test_returns_none_when_display_name_blank(self):
+        from transcription_svc.audio.polling_service import _compose_model_display_name
+
+        assert _compose_model_display_name({"displayName": "   "}) is None
+
+    def test_returns_none_when_display_name_not_a_string(self):
+        from transcription_svc.audio.polling_service import _compose_model_display_name
+
+        assert _compose_model_display_name({"displayName": 123}) is None
+
+    def test_ignores_non_string_locale(self):
+        from transcription_svc.audio.polling_service import _compose_model_display_name
+
+        assert _compose_model_display_name({"displayName": "Base", "locale": 5}) == "Base"
+
+
+class TestResolveModelDisplayName:
+    @pytest.mark.asyncio
+    async def test_resolves_via_speech_api_when_identifier_is_url(self):
+        from transcription_svc.audio.polling_service import _resolve_model_display_name
+
+        with patch(
+            "transcription_svc.audio.polling_service.get_model_details",
+            new_callable=AsyncMock,
+            return_value={"displayName": "20240614 Base", "locale": "en-GB"},
+        ) as mock_get:
+            result = await _resolve_model_display_name(
+                "https://eastus.cognitiveservices.azure.com/speechtotext/v3.2/models/base/abc"
+            )
+
+        assert result == "20240614 Base — en-GB"
+        mock_get.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_skips_resolution_for_non_url_identifier(self):
+        from transcription_svc.audio.polling_service import _resolve_model_display_name
+
+        with patch(
+            "transcription_svc.audio.polling_service.get_model_details",
+            new_callable=AsyncMock,
+        ) as mock_get:
+            result = await _resolve_model_display_name("azure-speech-batch-transcription (en-GB)")
+
+        assert result is None
+        mock_get.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_is_best_effort_when_speech_api_fails(self, caplog):
+        import logging
+
+        from transcription_svc.audio.polling_service import _resolve_model_display_name
+
+        with (
+            patch(
+                "transcription_svc.audio.polling_service.get_model_details",
+                new_callable=AsyncMock,
+                side_effect=Exception("401 Unauthorized"),
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = await _resolve_model_display_name(
+                "https://eastus.cognitiveservices.azure.com/speechtotext/v3.2/models/base/abc"
+            )
+
+        assert result is None
+        assert "Could not resolve model display name" in caplog.text
+
+
 class TestProcessJob:
     @pytest.mark.asyncio
     async def test_updates_status_to_running_when_azure_reports_running(self, service):
@@ -240,6 +325,11 @@ class TestHandleSucceeded:
                 "transcription_svc.audio.polling_service.process_speakers",
                 return_value=mock_entries,
             ),
+            patch(
+                "transcription_svc.audio.polling_service.get_model_details",
+                new_callable=AsyncMock,
+                return_value={"displayName": "20240614 Base", "locale": "en-GB"},
+            ),
             patch.object(service, "_save_results") as mock_save,
             patch.object(service, "_dispatch_success", new_callable=AsyncMock),
             patch(
@@ -257,6 +347,7 @@ class TestHandleSucceeded:
             BatchJobStatus.SUCCEEDED,
             42.0,
             "https://eastus.api.cognitive.microsoft.com/models/base/abc123",
+            "20240614 Base — en-GB",
         )
 
     @pytest.mark.asyncio
@@ -285,6 +376,49 @@ class TestHandleSucceeded:
 
         model_identifier = mock_save.call_args[0][4]
         assert model_identifier == "azure-speech-batch-transcription (en-GB)"
+
+    @pytest.mark.asyncio
+    async def test_model_resolution_failure_does_not_break_completion(self, service):
+        """A failed model-name resolution is best-effort: the job still saves
+        (with model_display_name=None) and the success webhook still fires."""
+        job = _make_pending_job()
+        mock_entries = [MagicMock()]
+        status_data = {
+            "status": "Succeeded",
+            "model": {"self": "https://eastus.api.cognitive.microsoft.com/models/base/abc123"},
+        }
+
+        with (
+            patch(
+                "transcription_svc.audio.polling_service.get_batch_results",
+                new_callable=AsyncMock,
+                return_value=mock_entries,
+            ),
+            patch(
+                "transcription_svc.audio.polling_service.process_speakers",
+                return_value=mock_entries,
+            ),
+            patch(
+                "transcription_svc.audio.polling_service.get_model_details",
+                new_callable=AsyncMock,
+                side_effect=Exception("network error"),
+            ),
+            patch.object(service, "_save_results") as mock_save,
+            patch.object(service, "_dispatch_success", new_callable=AsyncMock) as mock_dispatch,
+            patch(
+                "transcription_svc.audio.polling_service.delete_batch_job",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await service._handle_succeeded(job, status_data)
+
+        # model_display_name (6th positional arg) is None, but the raw
+        # identifier (5th) is still persisted and the webhook still fires.
+        assert mock_save.call_args[0][4] == (
+            "https://eastus.api.cognitive.microsoft.com/models/base/abc123"
+        )
+        assert mock_save.call_args[0][5] is None
+        mock_dispatch.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_marks_needs_cleanup_when_delete_fails(self, service):

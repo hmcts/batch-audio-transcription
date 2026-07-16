@@ -81,10 +81,54 @@ describe("JobsTable run metadata popover", () => {
 
     expect(screen.getByText(/audio length/i)).toBeDefined();
     expect(screen.getByText(/transcription time/i)).toBeDefined();
-    expect(screen.getByText(/model/i)).toBeDefined();
+    expect(screen.getByText(/^model$/i)).toBeDefined();
+    // Prefers the server-resolved friendly name over the raw self URL.
     expect(
-      screen.getByText(jobWithMetadata.modelIdentifier as string)
+      screen.getByText(jobWithMetadata.modelDisplayName as string)
     ).toBeDefined();
+  });
+
+  it("prefers the resolved friendly name and links to public Speech docs", async () => {
+    const job = {
+      ...MOCK_JOBS[0],
+      modelIdentifier:
+        "https://uksouth.cognitiveservices.azure.com/speechtotext/v3.2/models/base/guid",
+      modelDisplayName: "Base model — en-GB",
+    };
+    const user = userEvent.setup();
+    render(<JobsTable jobs={[job]} />);
+
+    await user.click(
+      screen.getByRole("button", { name: /transcription run details/i })
+    );
+
+    expect(screen.getByText("Base model — en-GB")).toBeDefined();
+    // The raw self URL is never rendered as visible text.
+    expect(screen.queryByText(job.modelIdentifier as string)).toBeNull();
+    const docsLink = screen.getByRole("link", { name: /about speech models/i });
+    expect(docsLink.getAttribute("href")).toContain("learn.microsoft.com");
+  });
+
+  it("falls back to the raw model identifier when no friendly name is resolved", async () => {
+    const job = {
+      ...MOCK_JOBS[0],
+      modelIdentifier: "azure-speech-batch-transcription (en-GB)",
+      modelDisplayName: undefined,
+    };
+    const user = userEvent.setup();
+    render(<JobsTable jobs={[job]} />);
+
+    await user.click(
+      screen.getByRole("button", { name: /transcription run details/i })
+    );
+
+    expect(
+      screen.getByText("azure-speech-batch-transcription (en-GB)")
+    ).toBeDefined();
+    // No public-docs link when we only have the raw identifier.
+    expect(
+      screen.queryByRole("link", { name: /about speech models/i })
+    ).toBeNull();
   });
 
   it("does not navigate to the transcript when the file name is clicked", async () => {
@@ -145,6 +189,7 @@ describe("JobsTable run metadata popover", () => {
       audioDurationSeconds: 2401,
       transcriptionDurationSeconds: undefined,
       modelIdentifier: undefined,
+      modelDisplayName: undefined,
     };
     const user = userEvent.setup();
     render(<JobsTable jobs={[failedJob]} />);
@@ -165,6 +210,7 @@ describe("JobsTable run metadata popover", () => {
       audioDurationSeconds: 1200,
       transcriptionDurationSeconds: undefined,
       modelIdentifier: undefined,
+      modelDisplayName: undefined,
     };
     const user = userEvent.setup();
     render(<JobsTable jobs={[processingJob]} />);

@@ -108,6 +108,28 @@ async def get_batch_job_status(job_url: str) -> dict:
     return response.json()
 
 
+async def get_model_details(model_url: str) -> dict:
+    """Dereference a Speech model resource (`model.self`) and return its JSON.
+
+    The `model.self` URL Azure returns on a completed batch job is an
+    authenticated REST endpoint ending in an opaque GUID. Fetching it yields
+    the model's human-readable details (`displayName`, `locale`,
+    `createdDateTime`, ...). The call reuses the backend's existing Speech
+    subscription key via the same `Ocp-Apim-Subscription-Key` header as every
+    other batch call — the key stays server-side and never leaves this
+    process; only the parsed, non-sensitive display fields are surfaced to
+    callers.
+
+    Deliberately un-retried: resolution is best-effort and runs inline on the
+    job-completion path (the caller catches failures), so a single fast
+    attempt is preferred over the batch retry policy's multi-second backoff.
+    """
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        response = await client.get(model_url, headers=_auth_headers())
+        response.raise_for_status()
+    return response.json()
+
+
 @_RETRY_POLICY
 async def get_batch_results(
     job_url: str,

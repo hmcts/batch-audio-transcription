@@ -86,6 +86,7 @@ def save_job_results(
     batch_status: BatchJobStatus,
     transcription_duration_seconds: float | None = None,
     model_identifier: str | None = None,
+    model_display_name: str | None = None,
 ) -> None:
     job = session.get(TranscriptionJob, job_id)
     if job:
@@ -96,6 +97,7 @@ def save_job_results(
         )
         job.transcription_duration_seconds = transcription_duration_seconds
         job.model_identifier = model_identifier
+        job.model_display_name = model_display_name
         job.updated_datetime = datetime.now(UTC)
         session.add(job)
         session.commit()

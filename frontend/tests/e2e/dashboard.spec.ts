@@ -100,6 +100,57 @@ test.describe("Transcription run metadata popover", () => {
     // transcript view.
     await expect(page).toHaveURL(/\/batch\/?$/);
   });
+
+  // DIAAT-243: the Model row must show the server-resolved friendly name, and
+  // must never leak the raw authenticated `model.self` URL (region host +
+  // /models/base/<guid>) as visible text. Robust to whatever completed jobs
+  // this backend has: it asserts invariants over the first popover rather
+  // than a specific seeded job, and skips on a backend-less run.
+  test("shows the friendly model name and never the raw self URL", async ({
+    page,
+  }) => {
+    await page.goto("/batch");
+
+    const trigger = page
+      .getByRole("button", { name: /transcription run details for/i })
+      .first();
+
+    try {
+      await trigger.waitFor({ state: "visible", timeout: 10_000 });
+    } catch {
+      test.skip(
+        true,
+        "No completed job with run metadata available on this backend"
+      );
+    }
+
+    await trigger.click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+
+    // The raw Azure model.self URL (an auth-only endpoint ending in a GUID)
+    // must never be rendered — only a friendly name or a non-URL fallback
+    // label. This is the core of the ticket.
+    await expect(
+      dialog.getByText(/cognitiveservices\.azure\.com\/speechtotext/i)
+    ).toHaveCount(0);
+
+    // The Model value is present and non-empty (friendly name or fallback).
+    const modelValue = dialog.locator("dd").filter({ hasText: /\S/ }).last();
+    await expect(modelValue).toBeVisible();
+
+    // When a friendly name was resolved the popover offers a link to the
+    // PUBLIC Speech docs — never to the authenticated endpoint.
+    const docsLink = dialog.getByRole("link", {
+      name: /about speech models/i,
+    });
+    if ((await docsLink.count()) > 0) {
+      await expect(docsLink).toHaveAttribute(
+        "href",
+        /learn\.microsoft\.com/
+      );
+    }
+  });
 });
 
 // Full round trip against the real backend and real Azure Speech Batch —

@@ -811,6 +811,7 @@ class TestGetJob:
         job.audio_duration_seconds = 754.2
         job.transcription_duration_seconds = 41.8
         job.model_identifier = "https://eastus.example.com/models/base/xyz"
+        job.model_display_name = "20240614 Base — en-GB"
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
 
         response = client.get(f"/api/v1/jobs/{job.id}")
@@ -819,6 +820,7 @@ class TestGetJob:
         assert body["audio_duration_seconds"] == 754.2
         assert body["transcription_duration_seconds"] == 41.8
         assert body["model_identifier"] == "https://eastus.example.com/models/base/xyz"
+        assert body["model_display_name"] == "20240614 Base — en-GB"
 
     def test_run_metadata_defaults_to_null_before_completion(self, client, as_caller, mocker):
         job = _make_job(status=JobStatus.SUBMITTED)
@@ -831,6 +833,7 @@ class TestGetJob:
         assert body["audio_duration_seconds"] is None
         assert body["transcription_duration_seconds"] is None
         assert body["model_identifier"] is None
+        assert body["model_display_name"] is None
 
 
 class TestUploadBaselineTranscript:
