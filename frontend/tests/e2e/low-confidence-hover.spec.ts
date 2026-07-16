@@ -51,8 +51,15 @@ test.describe("Low-confidence hover popup", () => {
       .hover();
     await expect(page.getByRole("tooltip")).toHaveCount(0);
 
-    // Click-to-edit is still intact after hovering.
+    // Click-to-resolve is still intact after hovering. DIAAT-234 changed the
+    // click to open a resolve menu when the word has alternatives (Edit is one
+    // step in), while a word with none opens the inline editor directly — so
+    // accept either outcome here.
     await lowConfidenceWord.click();
+    const resolveMenu = page.getByRole("menu", { name: /resolve/i });
+    if (await resolveMenu.isVisible().catch(() => false)) {
+      await page.getByRole("menuitem", { name: /edit/i }).click();
+    }
     await expect(page.getByRole("textbox")).toBeVisible();
   });
 });

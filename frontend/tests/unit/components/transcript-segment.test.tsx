@@ -798,7 +798,7 @@ describe("TranscriptSegment", () => {
       expect(onCorrectRange).not.toHaveBeenCalled();
     });
 
-    it("still opens the inline editor on click (click-to-edit intact)", async () => {
+    it("opens the resolve menu on click (DIAAT-234), from which Edit is reachable", async () => {
       const user = userEvent.setup();
       const { container } = render(
         <TranscriptSegment
@@ -808,7 +808,11 @@ describe("TranscriptSegment", () => {
       );
       const run = lowConfidenceRun(container);
       await user.hover(run);
+      // With alternatives present, click now opens the resolve menu rather
+      // than the inline editor directly. The editor is one step away via Edit.
       await user.click(run);
+      expect(screen.queryByRole("textbox")).toBeNull();
+      await user.click(screen.getByRole("menuitem", { name: /edit/i }));
       expect(screen.getByRole("textbox")).toBeDefined();
     });
 
@@ -827,6 +831,175 @@ describe("TranscriptSegment", () => {
       expect(run.getAttribute("aria-describedby")).toBe(popup.id);
       expect(popup.querySelector("[tabindex]")).toBeNull();
       fireEvent.blur(run);
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
+
+  describe("click-to-resolve menu (DIAAT-234)", () => {
+    // "morning" (index 1, confidence 0.6) is the low-confidence word. The
+    // alternatives group covers the whole phrase (words 0-6) and offers one
+    // alternate reading beyond the top choice.
+    const WITH_ALTERNATIVES: SegmentType = {
+      ...SEGMENT,
+      words: WORDS,
+      alternatives: [
+        {
+          startWordIndex: 0,
+          endWordIndex: 6,
+          candidates: [
+            { text: "Good morning. We are on the record." },
+            { text: "Good mourning. We are on the record.", confidence: 0.48 },
+          ],
+        },
+      ],
+    };
+
+    function lowConfidenceRun(container: HTMLElement) {
+      const run = Array.from(
+        wordsParagraph(container).querySelectorAll("span")
+      ).find(
+        (el) =>
+          el.className.includes("bg-orange-100") &&
+          el.textContent?.includes("morning")
+      );
+      if (!run) throw new Error("low-confidence run not found");
+      return run;
+    }
+
+    it("opens a menu with Edit and Suggested options on click", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      await user.click(lowConfidenceRun(container));
+      expect(screen.getByRole("menu", { name: /resolve/i })).toBeDefined();
+      expect(screen.getByRole("menuitem", { name: /edit/i })).toBeDefined();
+      expect(screen.getByRole("menuitem", { name: /suggested/i })).toBeDefined();
+    });
+
+    it("Edit from the menu opens the inline editor pre-filled with the run's text", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      await user.click(lowConfidenceRun(container));
+      await user.click(screen.getByRole("menuitem", { name: /edit/i }));
+      const input = screen.getByRole("textbox") as HTMLInputElement;
+      expect(input.value).toBe("morning.");
+    });
+
+    it("lists suggested candidates in Azure's order, never re-sorted by confidence", async () => {
+      const user = userEvent.setup();
+      // candidates[1:] are, in Azure order, a lower-confidence reading first
+      // then a higher-confidence one — a re-sort would flip them.
+      const segment: SegmentType = {
+        ...SEGMENT,
+        words: WORDS,
+        alternatives: [
+          {
+            startWordIndex: 0,
+            endWordIndex: 6,
+            candidates: [
+              { text: "top reading" },
+              { text: "first alternate", confidence: 0.3 },
+              { text: "second alternate", confidence: 0.7 },
+            ],
+          },
+        ],
+      };
+      const { container } = render(
+        <TranscriptSegment segment={segment} onCorrectRange={vi.fn()} />
+      );
+      await user.click(lowConfidenceRun(container));
+      await user.click(screen.getByRole("menuitem", { name: /suggested/i }));
+
+      const suggestions = screen
+        .getByRole("menu", { name: /suggested alternatives/i })
+        .querySelectorAll('[role="menuitem"]');
+      const texts = Array.from(suggestions).map((el) => el.textContent ?? "");
+      expect(texts[0]).toContain("first alternate");
+      expect(texts[1]).toContain("second alternate");
+      // The current top reading (candidates[0]) is never offered as an option.
+      expect(texts.some((t) => t.includes("top reading"))).toBe(false);
+    });
+
+    it("applies a chosen candidate as a word-range correction over the phrase range", async () => {
+      const onCorrectRange = vi.fn().mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={onCorrectRange}
+        />
+      );
+      await user.click(lowConfidenceRun(container));
+      await user.click(screen.getByRole("menuitem", { name: /suggested/i }));
+      await user.click(
+        screen.getByRole("menuitem", { name: /good mourning/i })
+      );
+
+      // The phrase group covers words 0-6, and the whole alternate reading is
+      // applied over that range — exactly as typing it into the editor would.
+      expect(onCorrectRange).toHaveBeenCalledWith(
+        0,
+        6,
+        "Good mourning. We are on the record."
+      );
+    });
+
+    it("skips the menu and opens Edit directly when the word has no alternatives", async () => {
+      const user = userEvent.setup();
+      // WORDS has per-word confidence but no alternatives at all.
+      const { container } = render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, words: WORDS }}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      await user.click(lowConfidenceRun(container));
+      // No menu — straight to the inline editor, preserving today's behaviour.
+      expect(screen.queryByRole("menu")).toBeNull();
+      const input = screen.getByRole("textbox") as HTMLInputElement;
+      expect(input.value).toBe("morning.");
+    });
+
+    it("dismisses the menu on Escape without taking any action", async () => {
+      const onCorrectRange = vi.fn();
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={onCorrectRange}
+        />
+      );
+      await user.click(lowConfidenceRun(container));
+      expect(screen.getByRole("menu", { name: /resolve/i })).toBeDefined();
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(onCorrectRange).not.toHaveBeenCalled();
+      expect(screen.queryByRole("textbox")).toBeNull();
+    });
+
+    it("suppresses the informational hover popup while the resolve menu is open", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      const run = lowConfidenceRun(container);
+      await user.hover(run);
+      expect(screen.getByRole("tooltip")).toBeDefined();
+      await user.click(run);
+      // Menu takes over; the tooltip must not linger overlapping it.
+      expect(screen.getByRole("menu", { name: /resolve/i })).toBeDefined();
       expect(screen.queryByRole("tooltip")).toBeNull();
     });
   });
