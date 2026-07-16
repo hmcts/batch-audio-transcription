@@ -484,9 +484,9 @@ function Words({
         const hasAlternatives = diagnosis.alternativeCandidates.length > 0;
         const isMenuOpen = menuRun === run.start;
         // Hover popup (informational) and the resolve menu coexist, but never
-        // both at once for the same run — suppress the popup while the menu is
-        // open so they don't overlap.
-        const isPopupOpen = hoveredRun === run.start && !isMenuOpen;
+        // both on screen at once — suppress every hover popup while *any*
+        // resolve menu is open, so hovering another run can't overlap it.
+        const isPopupOpen = hoveredRun === run.start && menuRun === null;
         const popupId = `${popupBaseId}-lowconf-${run.start}`;
         const menuId = `${popupBaseId}-resolve-${run.start}`;
 

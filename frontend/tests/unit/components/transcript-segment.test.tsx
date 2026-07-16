@@ -1094,5 +1094,50 @@ describe("TranscriptSegment", () => {
       expect(screen.getByRole("menu", { name: /resolve/i })).toBeDefined();
       expect(screen.queryByRole("tooltip")).toBeNull();
     });
+
+    it("suppresses the hover popup on other runs while a resolve menu is open", async () => {
+      const user = userEvent.setup();
+      // Two low-confidence runs ("bravo", "delta") both covered by alternatives.
+      const twoLowConf: SegmentType = {
+        ...SEGMENT,
+        text: "alpha bravo charlie delta echo",
+        words: [
+          { text: "alpha", startTime: 0, endTime: 0.5, confidence: 0.95 },
+          { text: "bravo", startTime: 0.5, endTime: 1.0, confidence: 0.3 },
+          { text: "charlie", startTime: 1.0, endTime: 1.5, confidence: 0.95 },
+          { text: "delta", startTime: 1.5, endTime: 2.0, confidence: 0.3 },
+          { text: "echo", startTime: 2.0, endTime: 2.5, confidence: 0.95 },
+        ],
+        alternatives: [
+          {
+            startWordIndex: 0,
+            endWordIndex: 4,
+            candidates: [
+              { text: "alpha bravo charlie delta echo" },
+              { text: "alpha bravo charlie delta ECHO", confidence: 0.4 },
+            ],
+          },
+        ],
+      };
+      const { container } = render(
+        <TranscriptSegment segment={twoLowConf} onCorrectRange={vi.fn()} />
+      );
+      const runFor = (word: string) => {
+        const run = Array.from(container.querySelectorAll("span")).find(
+          (el) =>
+            el.className.includes("bg-orange-100") &&
+            el.textContent?.trim() === word
+        );
+        if (!run) throw new Error(`run for ${word} not found`);
+        return run;
+      };
+
+      await user.click(runFor("bravo"));
+      expect(screen.getByRole("menu", { name: /resolve/i })).toBeDefined();
+      // Hovering a different low-confidence run must not open a tooltip that
+      // would overlap the open menu.
+      await user.hover(runFor("delta"));
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
   });
 });
