@@ -51,6 +51,7 @@ repos:
         exclude: |
           (?x)^(
             uv\.lock|
+            frontend/pnpm-lock\.yaml|
             \.env\.example|
             \.gitleaks\.toml|
             \.github/workflows/.*|
