@@ -23,33 +23,44 @@ export function readAudioDurationSeconds(
       return;
     }
 
-    const objectUrl = URL.createObjectURL(file);
-    const audio = document.createElement("audio");
-    audio.preload = "metadata";
+    // Guard the whole setup: URL.createObjectURL / createElement (and the
+    // listener wiring) can throw in constrained environments, and an
+    // uncaught throw in this executor would reject the Promise — defeating
+    // the best-effort contract and breaking the upload flow. Any failure
+    // degrades to undefined instead.
+    try {
+      const objectUrl = URL.createObjectURL(file);
+      const audio = document.createElement("audio");
+      audio.preload = "metadata";
 
-    let settled = false;
-    const finish = (value: number | undefined) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      audio.removeEventListener("loadedmetadata", onLoaded);
-      audio.removeEventListener("error", onError);
-      URL.revokeObjectURL(objectUrl);
-      resolve(value);
-    };
+      let settled = false;
+      const finish = (value: number | undefined) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        audio.removeEventListener("loadedmetadata", onLoaded);
+        audio.removeEventListener("error", onError);
+        URL.revokeObjectURL(objectUrl);
+        resolve(value);
+      };
 
-    const onLoaded = () => {
-      const { duration } = audio;
-      // Some containers report Infinity/NaN until fully buffered — treat
-      // those as "unknown" rather than sending a bogus number.
-      finish(Number.isFinite(duration) && duration > 0 ? duration : undefined);
-    };
-    const onError = () => finish(undefined);
+      const onLoaded = () => {
+        const { duration } = audio;
+        // Some containers report Infinity/NaN until fully buffered — treat
+        // those as "unknown" rather than sending a bogus number.
+        finish(
+          Number.isFinite(duration) && duration > 0 ? duration : undefined
+        );
+      };
+      const onError = () => finish(undefined);
 
-    const timer = setTimeout(() => finish(undefined), METADATA_TIMEOUT_MS);
+      const timer = setTimeout(() => finish(undefined), METADATA_TIMEOUT_MS);
 
-    audio.addEventListener("loadedmetadata", onLoaded);
-    audio.addEventListener("error", onError);
-    audio.src = objectUrl;
+      audio.addEventListener("loadedmetadata", onLoaded);
+      audio.addEventListener("error", onError);
+      audio.src = objectUrl;
+    } catch {
+      resolve(undefined);
+    }
   });
 }

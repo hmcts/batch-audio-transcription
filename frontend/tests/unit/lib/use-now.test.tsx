@@ -15,6 +15,10 @@ describe("useNow", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    // Restore any vi.spyOn patches (setInterval/clearInterval) — the shared
+    // test setup only clears mocks, which wouldn't un-wrap the globals and
+    // would leak the spies into later tests.
+    vi.restoreAllMocks();
   });
 
   it("shares a single interval across many subscribers", () => {

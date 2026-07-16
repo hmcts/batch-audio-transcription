@@ -20,7 +20,7 @@ describe("formatDuration", () => {
   });
 
   it("rounds to the nearest minute", () => {
-    expect(formatDuration(89)).toBe("1m"); // 89s = 1.48m, rounds down to 1m
+    expect(formatDuration(89)).toBe("1m"); // 89s = 1.48m, rounds to nearest -> 1m
   });
 
   it("shows a friendly message for very short durations", () => {
