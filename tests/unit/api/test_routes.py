@@ -596,6 +596,65 @@ class TestGetJob:
         assert body["accuracy"] is None
         assert body["needs_review"] is None
 
+    def test_round_trips_nbest_alternatives(self, client, as_caller, mocker):
+        # DIAAT-232: the full nBest array persisted per phrase (not just
+        # Azure's top choice, already covered by text/confidence/words)
+        # must survive storage and come back out through the API untouched.
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "Hello world.",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.56,
+                "words": _words_payload("hello", "world"),
+                "alternatives": [
+                    {
+                        "start_word_index": 0,
+                        "end_word_index": 1,
+                        "candidates": [
+                            {"text": "Hello world.", "confidence": 0.56, "lexical": "hello world"},
+                            {"text": "helloworld", "confidence": 0.18, "lexical": "helloworld"},
+                            {
+                                "text": "hello worlds",
+                                "confidence": 0.5,
+                                "lexical": "hello worlds",
+                            },
+                        ],
+                    }
+                ],
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        entry = response.json()["dialogue_entries"][0]
+
+        assert entry["alternatives"] == [
+            {
+                "start_word_index": 0,
+                "end_word_index": 1,
+                "candidates": [
+                    {"text": "Hello world.", "confidence": 0.56, "lexical": "hello world"},
+                    {"text": "helloworld", "confidence": 0.18, "lexical": "helloworld"},
+                    {"text": "hello worlds", "confidence": 0.5, "lexical": "hello worlds"},
+                ],
+            }
+        ]
+
+    def test_alternatives_is_none_when_not_present(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        entry = response.json()["dialogue_entries"][0]
+
+        assert entry["alternatives"] is None
+
     # DIAAT-235: LOW_CONFIDENCE_THRESHOLD lets ops override the review
     # threshold per environment without a code change; previously declared
     # in Settings but never actually wired into the accuracy computation.

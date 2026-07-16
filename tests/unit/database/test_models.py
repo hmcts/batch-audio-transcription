@@ -1,6 +1,12 @@
 """Unit tests for DialogueEntry's correction/effective-text logic."""
 
-from transcription_svc.database.models import DialogueEntry, WordCorrection, WordInfo
+from transcription_svc.database.models import (
+    DialogueEntry,
+    NBestCandidate,
+    PhraseAlternatives,
+    WordCorrection,
+    WordInfo,
+)
 
 
 def _words(*texts: str) -> list[WordInfo]:
@@ -126,3 +132,42 @@ class TestEffectiveText:
             word_corrections=[WordCorrection(start_word_index=0, end_word_index=0, text="hi")],
         )
         assert entry.effective_text() == "hello world"
+
+
+class TestAlternatives:
+    """DIAAT-232: Azure's full nBest array, persisted per phrase."""
+
+    def test_defaults_to_none(self):
+        entry = DialogueEntry(speaker="0", text="hello world", start_time=0, end_time=1)
+        assert entry.alternatives is None
+
+    def test_round_trips_through_model_dump_and_reconstruction(self):
+        entry = DialogueEntry(
+            speaker="0",
+            text="Hello world.",
+            start_time=0,
+            end_time=1,
+            confidence=0.56,
+            words=_words("hello", "world"),
+            alternatives=[
+                PhraseAlternatives(
+                    start_word_index=0,
+                    end_word_index=1,
+                    candidates=[
+                        NBestCandidate(text="Hello world.", confidence=0.56, lexical="hello world"),
+                        NBestCandidate(text="helloworld", confidence=0.18, lexical="helloworld"),
+                    ],
+                )
+            ],
+        )
+
+        dumped = entry.model_dump()
+        rebuilt = DialogueEntry(**dumped)
+
+        assert rebuilt.alternatives is not None
+        assert len(rebuilt.alternatives) == 1
+        group = rebuilt.alternatives[0]
+        assert group.start_word_index == 0
+        assert group.end_word_index == 1
+        assert [c.text for c in group.candidates] == ["Hello world.", "helloworld"]
+        assert group.candidates[1].confidence == 0.18

@@ -222,6 +222,18 @@ class WordCorrectionResponse(BaseModel):
     text: str
 
 
+class NBestCandidateResponse(BaseModel):
+    text: str
+    confidence: float | None = None
+    lexical: str | None = None
+
+
+class PhraseAlternativesResponse(BaseModel):
+    start_word_index: int | None = None
+    end_word_index: int | None = None
+    candidates: list[NBestCandidateResponse]
+
+
 class CorrectionEntryResponse(BaseModel):
     timestamp: str
     kind: str
@@ -243,6 +255,7 @@ class DialogueEntryResponse(BaseModel):
     word_corrections: list[WordCorrectionResponse] | None = None
     correction_history: list[CorrectionEntryResponse] | None = None
     words: list[WordInfoResponse] | None = None
+    alternatives: list[PhraseAlternativesResponse] | None = None
     accepted: bool = False
 
 
@@ -339,6 +352,7 @@ def _to_dialogue_entries(job: TranscriptionJob) -> list[DialogueEntry] | None:
             word_corrections=_entry_field(e, "word_corrections"),
             correction_history=_entry_field(e, "correction_history"),
             words=_entry_field(e, "words"),
+            alternatives=_entry_field(e, "alternatives"),
             accepted=_entry_field(e, "accepted", False),
         )
         for e in job.dialogue_entries
@@ -422,6 +436,21 @@ def _to_response(job: TranscriptionJob, caller_name: str | None = None) -> JobRe
                     for w in e.words
                 ]
                 if e.words
+                else None,
+                alternatives=[
+                    PhraseAlternativesResponse(
+                        start_word_index=pa.start_word_index,
+                        end_word_index=pa.end_word_index,
+                        candidates=[
+                            NBestCandidateResponse(
+                                text=c.text, confidence=c.confidence, lexical=c.lexical
+                            )
+                            for c in pa.candidates
+                        ],
+                    )
+                    for pa in e.alternatives
+                ]
+                if e.alternatives
                 else None,
                 accepted=e.accepted,
             )
@@ -615,6 +644,7 @@ def _load_entry_for_correction(
         word_corrections=_entry_field(raw, "word_corrections"),
         correction_history=_entry_field(raw, "correction_history"),
         words=_entry_field(raw, "words"),
+        alternatives=_entry_field(raw, "alternatives"),
         accepted=_entry_field(raw, "accepted", False),
     )
     return job, entry

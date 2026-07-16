@@ -13,7 +13,12 @@ from transcription_svc.audio.speakers import (
     normalize_speaker_labels,
     process_speakers,
 )
-from transcription_svc.database.models import DialogueEntry, WordInfo
+from transcription_svc.database.models import (
+    DialogueEntry,
+    NBestCandidate,
+    PhraseAlternatives,
+    WordInfo,
+)
 
 
 def _entry(
@@ -21,6 +26,7 @@ def _entry(
     text: str,
     confidence: float | None = None,
     words: list[WordInfo] | None = None,
+    alternatives: list[PhraseAlternatives] | None = None,
     start_time: float = 0.0,
     end_time: float = 1.0,
 ) -> DialogueEntry:
@@ -31,7 +37,20 @@ def _entry(
         end_time=end_time,
         confidence=confidence,
         words=words,
+        alternatives=alternatives,
     )
+
+
+def _alternatives(
+    *texts: str, start_word_index: int | None = None, end_word_index: int | None = None
+) -> list[PhraseAlternatives]:
+    return [
+        PhraseAlternatives(
+            start_word_index=start_word_index,
+            end_word_index=end_word_index,
+            candidates=[NBestCandidate(text=t) for t in texts],
+        )
+    ]
 
 
 def _words(*texts: str) -> list[WordInfo]:
@@ -95,6 +114,90 @@ class TestGroupDialogueEntriesBySpeaker:
         assert len(result) == 1
         assert result[0].confidence is None
         assert result[0].words is None
+
+    def test_preserves_alternatives_for_a_single_entry(self):
+        entries = [
+            _entry(
+                "0",
+                "hello",
+                confidence=0.8,
+                words=_words("hello"),
+                alternatives=_alternatives("hello", "yellow", start_word_index=0, end_word_index=0),
+            )
+        ]
+        result = group_dialogue_entries_by_speaker(entries)
+        assert result[0].alternatives is not None
+        assert [c.text for c in result[0].alternatives[0].candidates] == ["hello", "yellow"]
+        assert result[0].alternatives[0].start_word_index == 0
+        assert result[0].alternatives[0].end_word_index == 0
+
+    def test_offsets_alternatives_word_indices_when_merging_aligned_entries(self):
+        entries = [
+            _entry(
+                "0",
+                "the quick",
+                confidence=0.9,
+                words=_words("the", "quick"),
+                alternatives=_alternatives("the quick", start_word_index=0, end_word_index=1),
+            ),
+            _entry(
+                "0",
+                "brown fox",
+                confidence=0.9,
+                words=_words("brown", "fox"),
+                alternatives=_alternatives(
+                    "brown fox", "brown fax", start_word_index=0, end_word_index=1
+                ),
+            ),
+        ]
+        result = group_dialogue_entries_by_speaker(entries)
+        assert len(result) == 1
+        assert len(result[0].alternatives) == 2
+        first, second = result[0].alternatives
+        assert (first.start_word_index, first.end_word_index) == (0, 1)
+        # Offset by 2 (the first phrase's word count) so indices still point
+        # into the merged 4-word list ("the", "quick", "brown", "fox").
+        assert (second.start_word_index, second.end_word_index) == (2, 3)
+        assert [c.text for c in second.candidates] == ["brown fox", "brown fax"]
+
+    def test_alternatives_degrade_to_unindexed_when_words_alignment_breaks(self):
+        # Mirrors the words-merge rule: when only one side has word-level
+        # detail, the merged entry's words become None. The alternatives
+        # must not be silently dropped in that case — they're kept, just
+        # without a word-index range that no longer has anything to point at.
+        entries = [
+            _entry(
+                "0",
+                "the quick",
+                confidence=0.9,
+                words=_words("the", "quick"),
+                alternatives=_alternatives("the quick", start_word_index=0, end_word_index=1),
+            ),
+            _entry(
+                "0",
+                "brown fox",
+                confidence=0.9,
+                words=None,
+                alternatives=_alternatives("brown fox"),
+            ),
+        ]
+        result = group_dialogue_entries_by_speaker(entries)
+        assert len(result) == 1
+        assert result[0].words is None
+        assert len(result[0].alternatives) == 2
+        for group in result[0].alternatives:
+            assert group.start_word_index is None
+            assert group.end_word_index is None
+        assert {c.text for group in result[0].alternatives for c in group.candidates} == {
+            "the quick",
+            "brown fox",
+        }
+
+    def test_handles_missing_alternatives_gracefully(self):
+        entries = [_entry("0", "hello"), _entry("0", "world")]
+        result = group_dialogue_entries_by_speaker(entries)
+        assert len(result) == 1
+        assert result[0].alternatives is None
 
     def test_drops_words_entirely_when_only_one_side_has_them(self):
         # A partial words list (covering only one side of the merge) would
@@ -246,6 +349,11 @@ class TestNormalizeSpeakerLabels:
         assert result[0].confidence == 0.75
         assert result[0].words == _words("hello")
 
+    def test_preserves_alternatives(self):
+        entries = [_entry("2", "hello", alternatives=_alternatives("hello", "yellow"))]
+        result = normalize_speaker_labels(entries)
+        assert [c.text for c in result[0].alternatives[0].candidates] == ["hello", "yellow"]
+
     def test_relabels_speakers_to_sequential_ids(self):
         entries = [_entry("guid-b", "hi"), _entry("guid-a", "there")]
         result = normalize_speaker_labels(entries)
@@ -259,6 +367,11 @@ class TestAddSpeakerLabels:
         result = add_speaker_labels(entries)
         assert result[0].confidence == 0.65
         assert result[0].words == _words("hello")
+
+    def test_preserves_alternatives(self):
+        entries = [_entry("0", "hello", alternatives=_alternatives("hello", "yellow"))]
+        result = add_speaker_labels(entries)
+        assert [c.text for c in result[0].alternatives[0].candidates] == ["hello", "yellow"]
 
     def test_prefixes_speaker_label(self):
         entries = [_entry("0", "hello")]
@@ -277,3 +390,33 @@ class TestProcessSpeakers:
         assert result[0].speaker == "Speaker 0"
         assert result[0].confidence is not None
         assert [w.text for w in result[0].words] == ["the", "quick", "brown", "fox"]
+
+    def test_alternatives_survive_the_full_pipeline(self):
+        entries = [
+            _entry(
+                "0",
+                "the quick",
+                confidence=0.9,
+                words=_words("the", "quick"),
+                alternatives=_alternatives("the quick", start_word_index=0, end_word_index=1),
+            ),
+            _entry(
+                "0",
+                "brown fox",
+                confidence=0.7,
+                words=_words("brown", "fox"),
+                alternatives=_alternatives(
+                    "brown fox", "brown fax", start_word_index=0, end_word_index=1
+                ),
+            ),
+        ]
+        result = process_speakers(entries)
+        assert len(result) == 1
+        assert len(result[0].alternatives) == 2
+        assert (
+            result[0].alternatives[1].start_word_index,
+            result[0].alternatives[1].end_word_index,
+        ) == (
+            2,
+            3,
+        )

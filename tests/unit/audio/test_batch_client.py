@@ -270,6 +270,154 @@ class TestGetBatchResults:
         assert entries[0].words[1].confidence == pytest.approx(0.6)
 
     @pytest.mark.asyncio
+    async def test_captures_full_nbest_array_as_alternatives(self):
+        from transcription_svc.audio.batch_client import get_batch_results
+
+        files_data = {
+            "values": [{"kind": "Transcription", "links": {"contentUrl": "https://results-url"}}]
+        }
+        result_data = {
+            "recognizedPhrases": [
+                {
+                    "offsetInTicks": 0,
+                    "durationInTicks": 20_000_000,
+                    "speaker": 0,
+                    "nBest": [
+                        {
+                            "display": "Hello world.",
+                            "lexical": "hello world",
+                            "confidence": 0.5643338,
+                            "words": [
+                                {
+                                    "word": "hello",
+                                    "offsetInTicks": 0,
+                                    "durationInTicks": 5_000_000,
+                                    "confidence": 0.95,
+                                },
+                                {
+                                    "word": "world",
+                                    "offsetInTicks": 5_000_000,
+                                    "durationInTicks": 5_000_000,
+                                    "confidence": 0.6,
+                                },
+                            ],
+                        },
+                        {
+                            "display": "helloworld",
+                            "lexical": "helloworld",
+                            "confidence": 0.1769063,
+                        },
+                        {
+                            "display": "hello worlds",
+                            "lexical": "hello worlds",
+                            "confidence": 0.49964225,
+                        },
+                    ],
+                }
+            ]
+        }
+
+        def make_response_for(url, **kwargs):
+            if "files" in url:
+                return _make_response(body=files_data)
+            return _make_response(body=result_data)
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(side_effect=make_response_for)
+
+            entries = await get_batch_results("https://job-url")
+
+        assert entries[0].alternatives is not None
+        assert len(entries[0].alternatives) == 1
+        group = entries[0].alternatives[0]
+        # Word-level detail was present, so the group is anchored to the
+        # full range of the (2-word) `words` list.
+        assert group.start_word_index == 0
+        assert group.end_word_index == 1
+        assert len(group.candidates) == 3
+        assert group.candidates[0].text == "Hello world."
+        assert group.candidates[0].confidence == pytest.approx(0.5643338)
+        assert group.candidates[0].lexical == "hello world"
+        assert group.candidates[1].text == "helloworld"
+        assert group.candidates[2].confidence == pytest.approx(0.49964225)
+
+    @pytest.mark.asyncio
+    async def test_alternatives_have_no_word_index_when_no_word_detail(self):
+        from transcription_svc.audio.batch_client import get_batch_results
+
+        files_data = {
+            "values": [{"kind": "Transcription", "links": {"contentUrl": "https://results-url"}}]
+        }
+        result_data = {
+            "recognizedPhrases": [
+                {
+                    "offsetInTicks": 0,
+                    "durationInTicks": 10_000_000,
+                    "speaker": 0,
+                    "nBest": [
+                        {"display": "Hello", "confidence": 0.9},
+                        {"display": "Yellow", "confidence": 0.3},
+                    ],
+                }
+            ]
+        }
+
+        def make_response_for(url, **kwargs):
+            if "files" in url:
+                return _make_response(body=files_data)
+            return _make_response(body=result_data)
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(side_effect=make_response_for)
+
+            entries = await get_batch_results("https://job-url")
+
+        assert entries[0].words is None
+        group = entries[0].alternatives[0]
+        assert group.start_word_index is None
+        assert group.end_word_index is None
+        assert [c.text for c in group.candidates] == ["Hello", "Yellow"]
+
+    @pytest.mark.asyncio
+    async def test_single_candidate_nbest_still_recorded_as_one_alternative(self):
+        from transcription_svc.audio.batch_client import get_batch_results
+
+        files_data = {
+            "values": [{"kind": "Transcription", "links": {"contentUrl": "https://results-url"}}]
+        }
+        result_data = {
+            "recognizedPhrases": [
+                {
+                    "offsetInTicks": 0,
+                    "durationInTicks": 10_000_000,
+                    "speaker": 0,
+                    "nBest": [{"display": "Hello", "confidence": 0.99}],
+                }
+            ]
+        }
+
+        def make_response_for(url, **kwargs):
+            if "files" in url:
+                return _make_response(body=files_data)
+            return _make_response(body=result_data)
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(side_effect=make_response_for)
+
+            entries = await get_batch_results("https://job-url")
+
+        assert len(entries[0].alternatives[0].candidates) == 1
+
+    @pytest.mark.asyncio
     async def test_words_is_none_when_azure_returns_no_word_detail(self):
         from transcription_svc.audio.batch_client import get_batch_results
 
