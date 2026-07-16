@@ -23,16 +23,16 @@ export function AudioPlayerBar({
 }: AudioPlayerBarProps) {
   return (
     <div className="sticky top-0 z-10 bg-white border-b border-border px-4 py-3 flex items-center gap-3">
-      {/* Skip back */}
+      {/* Skip back 10s */}
       <Button
         variant="ghost"
-        size="icon"
-        className="size-8 text-xs"
+        size="sm"
+        className="h-8 gap-1 px-2 text-xs font-medium"
         onClick={() => onSeek(Math.max(0, position - 10))}
         aria-label="Skip back 10 seconds"
       >
         <SkipBack className="size-4" />
-        <span className="sr-only">−10s</span>
+        <span>10s</span>
       </Button>
 
       {/* Play/pause */}
@@ -49,16 +49,16 @@ export function AudioPlayerBar({
         )}
       </Button>
 
-      {/* Skip forward */}
+      {/* Skip forward 10s */}
       <Button
         variant="ghost"
-        size="icon"
-        className="size-8"
+        size="sm"
+        className="h-8 gap-1 px-2 text-xs font-medium"
         onClick={() => onSeek(Math.min(duration, position + 10))}
         aria-label="Skip forward 10 seconds"
       >
+        <span>10s</span>
         <SkipForward className="size-4" />
-        <span className="sr-only">+10s</span>
       </Button>
 
       {/* Time */}
