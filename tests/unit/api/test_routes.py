@@ -552,6 +552,29 @@ class TestSubmitJob:
         )
         assert response.status_code == 422
 
+    @pytest.mark.parametrize("bad_value", ["NaN", "Infinity", "-Infinity"])
+    def test_rejects_non_finite_audio_duration_seconds(self, client, as_caller, mocker, bad_value):
+        # Python's json module accepts these tokens and Pydantic coerces them to
+        # float, so they must be rejected explicitly — they can't be serialised
+        # back in a JSON response.
+        mocker.patch(
+            "transcription_svc.api.routes.submit_and_queue_batch_job",
+            return_value=_make_job(),
+        )
+        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+
+        response = client.post(
+            "/api/v1/jobs",
+            # Sent as a raw JSON body so the non-finite literals reach Pydantic
+            # exactly as a permissive client would send them.
+            content=(
+                '{"audio_url": "https://storage.example.com/audio.wav?sig=token", '
+                f'"audio_duration_seconds": {bad_value}}}'
+            ),
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 422
+
 
 class TestListJobs:
     def test_returns_jobs_for_caller(self, client, as_caller, mocker):
