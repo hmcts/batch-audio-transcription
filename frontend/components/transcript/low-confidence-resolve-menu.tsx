@@ -1,7 +1,12 @@
 "use client";
 
 import { ChevronRight, ListChecks, Pencil } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { confidencePercent } from "@/lib/mock-data";
 import type { NBestCandidate } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -93,7 +98,7 @@ export function LowConfidenceResolveMenu({
 
   // Roving Arrow/Home/End navigation across whichever options are currently
   // visible (Edit, Suggested, and — when expanded — the candidate items).
-  const onMenuKeyDown = (e: React.KeyboardEvent<HTMLSpanElement>) => {
+  const onMenuKeyDown = (e: ReactKeyboardEvent<HTMLSpanElement>) => {
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
     const items = Array.from(
       menuRef.current?.querySelectorAll<HTMLElement>(
