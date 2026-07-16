@@ -130,7 +130,9 @@ export function LowConfidenceResolveMenu({
           role="menuitem"
           aria-haspopup="menu"
           aria-expanded={showSuggestions}
-          aria-controls={suggestionsId}
+          // Only reference the submenu while it's actually rendered — it's
+          // conditionally mounted, so a permanent aria-controls would dangle.
+          aria-controls={showSuggestions ? suggestionsId : undefined}
           disabled={applying}
           onClick={() => setShowSuggestions((v) => !v)}
           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-foreground hover:bg-muted disabled:opacity-50"

@@ -84,12 +84,15 @@ test.describe("Low-confidence click-to-resolve menu", () => {
     });
     await expect(suggestions).toBeVisible();
 
-    // Pick the first offered alternate reading and remember its text.
+    // Pick the first offered alternate reading and remember its phrase. The
+    // phrase and the confidence % are separate spans, so read just the phrase
+    // span rather than parsing the combined text with a regex.
     const firstCandidate = suggestions.getByRole("menuitem").first();
-    const candidateText = ((await firstCandidate.textContent()) ?? "").replace(
-      /\s+\d+%\s*$/,
-      ""
-    );
+    const phrase = (
+      (await firstCandidate.locator("span").first().textContent()) ?? ""
+    )
+      .replace(/[“”"]/g, "")
+      .trim();
     await firstCandidate.click();
 
     // The correction is saved exactly like a typed one: the segment now shows
@@ -101,10 +104,13 @@ test.describe("Low-confidence click-to-resolve menu", () => {
       .first()
       .click();
     await expect(page.getByText(/change history/i).first()).toBeVisible();
-    // The applied phrase (quotes/percent stripped) shows as the new value.
-    const cleaned = candidateText.replace(/[“”"]/g, "").trim().slice(0, 12);
-    if (cleaned) {
-      await expect(page.getByText(new RegExp(cleaned)).first()).toBeVisible();
+    // The applied phrase shows as the new value. Match it as a plain-string
+    // substring (exact: false) so transcript text containing regex
+    // metacharacters can't break or destabilise the assertion.
+    if (phrase) {
+      await expect(
+        page.getByText(phrase, { exact: false }).first()
+      ).toBeVisible();
     }
   });
 
