@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Progress } from "@/components/ui/progress";
 import {
   audioDurationMessage,
@@ -9,11 +8,7 @@ import {
   formatDuration,
 } from "@/lib/progress";
 import type { TranscriptionJob } from "@/lib/types";
-
-// Ticks independently of the job-status polling interval (which is 5s and
-// only refetches from the network) so the elapsed-time readout keeps moving
-// smoothly between polls rather than jumping in 5s steps.
-const TICK_INTERVAL_MS = 1000;
+import { useNow } from "@/lib/use-now";
 
 interface JobProgressProps {
   job: TranscriptionJob;
@@ -22,12 +17,10 @@ interface JobProgressProps {
 }
 
 export function JobProgress({ job, compact = false }: JobProgressProps) {
-  const [now, setNow] = useState(() => new Date());
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), TICK_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, []);
+  // A shared clock (see lib/use-now.ts) advances the elapsed-time readout
+  // roughly once a second — smoother than the 5s status polling — while every
+  // JobProgress on the page reuses a single interval rather than one each.
+  const now = useNow();
 
   const elapsedSeconds = computeElapsedSeconds(job.uploadedAt, now);
   const remainingSeconds = estimateRemainingSeconds({

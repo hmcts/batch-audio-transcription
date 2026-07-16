@@ -11,10 +11,13 @@ export async function POST(request: Request) {
 
   const filename = file instanceof File ? file.name : "audio";
 
+  // Number() (unlike parseFloat) rejects partially-numeric strings like
+  // "123abc" as NaN, so only a fully-numeric, positive value is accepted;
+  // anything else is dropped and the duration is simply omitted.
   const rawDuration = form.get("audio_duration_seconds");
   const parsedDuration =
-    typeof rawDuration === "string"
-      ? Number.parseFloat(rawDuration)
+    typeof rawDuration === "string" && rawDuration.trim() !== ""
+      ? Number(rawDuration)
       : Number.NaN;
   const audioDurationSeconds =
     Number.isFinite(parsedDuration) && parsedDuration > 0

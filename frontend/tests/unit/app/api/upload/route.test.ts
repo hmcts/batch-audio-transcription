@@ -70,6 +70,20 @@ describe("POST /api/upload", () => {
     );
   });
 
+  it("rejects partially-numeric values rather than truncating them", async () => {
+    mockUploadAndSubmit.mockResolvedValue({ id: "job-1", status: "PENDING" });
+    const { POST } = await import("@/app/api/upload/route");
+
+    // parseFloat would have accepted "123abc" as 123; Number() rejects it.
+    await POST(requestWithFile(audioBlob(), "123abc"));
+
+    expect(mockUploadAndSubmit).toHaveBeenCalledWith(
+      expect.any(Blob),
+      "audio",
+      undefined
+    );
+  });
+
   it("returns 400 when no file is provided", async () => {
     const { POST } = await import("@/app/api/upload/route");
     const response = await POST(requestWithFile(null));
