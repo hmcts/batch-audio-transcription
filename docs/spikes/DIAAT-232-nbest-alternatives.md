@@ -2,6 +2,7 @@
 
 **Status:** complete — implementation landed alongside this write-up.
 **Epic:** DIAAT-225. **Unblocks:** DIAAT-233 (hover popup), DIAAT-234 (click-to-resolve menu).
+**Jira key:** DIAAT-232.
 
 ## TL;DR for the DIAAT-233 / DIAAT-234 authors
 
