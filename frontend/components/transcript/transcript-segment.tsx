@@ -494,7 +494,13 @@ function Words({
           if (hasAlternatives) {
             setMenuRun(run.start);
           } else {
-            startEditingRun(run.start, run.end, wordStart, wordEnd, initialText);
+            startEditingRun(
+              run.start,
+              run.end,
+              wordStart,
+              wordEnd,
+              initialText
+            );
           }
         };
 
@@ -553,7 +559,9 @@ function Words({
             }
             role={onCorrectRange ? "button" : undefined}
             tabIndex={onCorrectRange ? 0 : undefined}
-            aria-haspopup={onCorrectRange && hasAlternatives ? "menu" : undefined}
+            aria-haspopup={
+              onCorrectRange && hasAlternatives ? "menu" : undefined
+            }
             aria-expanded={
               onCorrectRange && hasAlternatives ? isMenuOpen : undefined
             }

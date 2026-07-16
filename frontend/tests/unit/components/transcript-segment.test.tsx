@@ -877,7 +877,9 @@ describe("TranscriptSegment", () => {
       await user.click(lowConfidenceRun(container));
       expect(screen.getByRole("menu", { name: /resolve/i })).toBeDefined();
       expect(screen.getByRole("menuitem", { name: /edit/i })).toBeDefined();
-      expect(screen.getByRole("menuitem", { name: /suggested/i })).toBeDefined();
+      expect(
+        screen.getByRole("menuitem", { name: /suggested/i })
+      ).toBeDefined();
     });
 
     it("Edit from the menu opens the inline editor pre-filled with the run's text", async () => {

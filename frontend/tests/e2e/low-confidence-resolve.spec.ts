@@ -85,7 +85,10 @@ test.describe("Low-confidence click-to-resolve menu", () => {
     // an "Edited" badge and the change appears in the change-history panel.
     await expect(page.getByText("Edited").first()).toBeVisible();
 
-    await page.getByLabel(/show change history/i).first().click();
+    await page
+      .getByLabel(/show change history/i)
+      .first()
+      .click();
     await expect(page.getByText(/change history/i).first()).toBeVisible();
     // The applied phrase (quotes/percent stripped) shows as the new value.
     const cleaned = candidateText.replace(/[“”"]/g, "").trim().slice(0, 12);
