@@ -73,6 +73,10 @@ jobs:
     needs: [build, tag]
     if: needs.build.outputs.image_pushed == 'true'
     runs-on: ubuntu-latest
+    # Hard operational bound so the job can never hang for hours if the
+    # poll loop ever regresses; comfortably above the initial delay plus
+    # the ~15 min polling budget below.
+    timeout-minutes: 20
     env:
       API_HEALTH_URL: https://hmcts-batch-transcription-dev.azurewebsites.net/api/v1/health
       FRONTEND_URL: https://hmcts-batch-transcription-frontend-dev.azurewebsites.net/batch
@@ -86,7 +90,12 @@ jobs:
     steps:
       - name: Poll dev endpoints until healthy
         run: |
-          set -uo pipefail
+          # -e so unexpected command failures (sleep/date/etc.) fail the
+          # step fast; the curl `|| true` fallback below keeps expected
+          # request failures from tripping it. The only arithmetic that
+          # can evaluate to a non-zero exit is inside an `if`, so -e is
+          # safe here.
+          set -euo pipefail
 
           check() {
             # Echoes the HTTP status code, or 000 if the request failed
