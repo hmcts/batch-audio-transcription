@@ -88,6 +88,7 @@ const JOB_1_ACCURACY: TranscriptAccuracy = {
   hasCorrections: true,
   wordErrorRate: 4.7,
   correctedPercent: 12,
+  hasBaseline: false,
 };
 
 // All entries sit below the 65% threshold (see JOB_1_ACCURACY) — the
@@ -162,6 +163,8 @@ const JOB_2_ACCURACY: TranscriptAccuracy = {
   hasCorrections: true,
   wordErrorRate: 2.1,
   correctedPercent: 15,
+  hasBaseline: true,
+  baselineWordErrorRate: 6.3,
 };
 
 export const MOCK_JOBS: TranscriptionJob[] = [

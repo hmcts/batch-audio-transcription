@@ -1,20 +1,30 @@
 """Accuracy/needs-review computation for a completed transcription job.
 
-Two distinct things get surfaced to the frontend, and they must not be
+Three distinct things get surfaced to the frontend, and they must not be
 conflated:
 - Confidence: Azure's own per-phrase confidence score. Always available,
   but not a measurement of correctness — nothing has verified it against
   ground truth.
-- Word error rate: only meaningful once a clerk has corrected at least one
-  segment, since that's the first point a real reference transcript exists
-  to measure the original auto-generated wording against (see wer.py).
+- Correction-based word error rate: only meaningful once a clerk has
+  corrected at least one segment, since that's the first point a real
+  reference transcript exists to measure the original auto-generated
+  wording against (see wer.py). Restricted to corrected segments only, so
+  it's necessarily a partial picture — segments nobody has looked at yet
+  contribute nothing to it.
+- Baseline word error rate: computed against an independent reference
+  transcript the clerk uploads separately (e.g. a court reporter's
+  transcript), compared against the *entire* auto-generated transcription.
+  Unlike the correction-based WER, it covers the whole transcript from the
+  moment a baseline is uploaded and is completely unaffected by any
+  corrections made in this app — the two numbers can disagree, and that's
+  expected rather than a bug.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from transcription_svc.audio.wer import aggregate_word_error_rate
+from transcription_svc.audio.wer import aggregate_word_error_rate, baseline_word_error_rate
 from transcription_svc.database.models import DialogueEntry
 
 # Azure's per-word confidence often sits in the high 70s/low 80s for
@@ -45,11 +55,17 @@ class AccuracySummary:
     word_error_rate: float | None  # 0-100+, only set once a segment is corrected
     corrected_percent: float | None  # % of segments corrected so far
     needs_review: list[NeedsReviewItem]
+    has_baseline: bool  # True once a clerk has uploaded a reference transcript
+    # 0-100+, WER of the whole auto-generated transcription against the
+    # uploaded baseline — independent of any in-app corrections. Only set
+    # once a baseline has been uploaded.
+    baseline_word_error_rate: float | None
 
 
 def compute_accuracy(
     entries: list[DialogueEntry],
     confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+    baseline_transcript: str | None = None,
 ) -> AccuracySummary:
     scored = [e for e in entries if e.confidence is not None]
     total_words = sum(len(e.text.split()) for e in entries)
@@ -85,6 +101,15 @@ def compute_accuracy(
         wer = aggregate_word_error_rate(pairs) * 100
         corrected_percent = (len(corrected) / len(entries)) * 100 if entries else 0.0
 
+    has_baseline = bool(baseline_transcript and baseline_transcript.strip())
+    baseline_wer = None
+    if has_baseline:
+        # The *original* auto-generated wording, not effective_text() — the
+        # whole point of a baseline WER is measuring Speech Batch's own
+        # output independent of any corrections a clerk has since made.
+        full_original_text = " ".join(e.text for e in entries)
+        baseline_wer = baseline_word_error_rate(baseline_transcript, full_original_text) * 100
+
     return AccuracySummary(
         confidence_score=confidence_score * 100,
         words_transcribed=total_words,
@@ -94,4 +119,6 @@ def compute_accuracy(
         word_error_rate=wer,
         corrected_percent=corrected_percent,
         needs_review=needs_review,
+        has_baseline=has_baseline,
+        baseline_word_error_rate=baseline_wer,
     )

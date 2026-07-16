@@ -806,6 +806,171 @@ class TestGetJob:
         assert body["model_identifier"] is None
 
 
+class TestUploadBaselineTranscript:
+    def _patch_session(self, client, mocker):
+        from transcription_svc.database.engine import get_session
+
+        mock_session = MagicMock()
+        client.app.dependency_overrides[get_session] = lambda: mock_session
+        return mock_session
+
+    def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
+        response = client.post(
+            f"/api/v1/jobs/{uuid.uuid4()}/baseline",
+            files={"file": ("baseline.txt", b"hello world", "text/plain")},
+        )
+        assert response.status_code == 404
+
+    def test_returns_404_for_other_callers_job(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.uuid4()
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(
+            f"/api/v1/jobs/{job.id}/baseline",
+            files={"file": ("baseline.txt", b"hello world", "text/plain")},
+        )
+        assert response.status_code == 404
+
+    def test_returns_422_when_job_not_succeeded(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUBMITTED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(
+            f"/api/v1/jobs/{job.id}/baseline",
+            files={"file": ("baseline.txt", b"hello world", "text/plain")},
+        )
+        assert response.status_code == 422
+
+    def test_rejects_unsupported_extension(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(
+            f"/api/v1/jobs/{job.id}/baseline",
+            files={"file": ("baseline.pdf", b"hello world", "application/pdf")},
+        )
+        assert response.status_code == 422
+
+    def test_rejects_missing_extension(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(
+            f"/api/v1/jobs/{job.id}/baseline",
+            files={"file": ("baseline", b"hello world", "text/plain")},
+        )
+        assert response.status_code == 422
+
+    def test_rejects_empty_file(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(
+            f"/api/v1/jobs/{job.id}/baseline",
+            files={"file": ("baseline.txt", b"   ", "text/plain")},
+        )
+        assert response.status_code == 422
+
+    def test_rejects_non_utf8_content(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(
+            f"/api/v1/jobs/{job.id}/baseline",
+            files={"file": ("baseline.txt", b"\xff\xfe\x00\x01", "text/plain")},
+        )
+        assert response.status_code == 422
+
+    def test_stores_baseline_and_returns_wer(self, client, as_caller, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.9,
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mock_session = self._patch_session(client, mocker)
+
+        try:
+            response = client.post(
+                f"/api/v1/jobs/{job.id}/baseline",
+                files={"file": ("baseline.txt", b"the slow brown fox", "text/plain")},
+            )
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["accuracy"]["has_baseline"] is True
+        assert body["accuracy"]["baseline_word_error_rate"] == 25.0
+        assert job.baseline_transcript == "the slow brown fox"
+        mock_session.commit.assert_called_once()
+
+    def test_strips_utf8_bom_from_baseline(self, client, as_caller, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.9,
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        self._patch_session(client, mocker)
+
+        # A Windows-exported .txt often starts with a UTF-8 BOM; it must be
+        # stripped so it isn't glued onto the first word (which would make an
+        # otherwise-identical baseline report a non-zero WER).
+        try:
+            response = client.post(
+                f"/api/v1/jobs/{job.id}/baseline",
+                files={
+                    "file": (
+                        "baseline.txt",
+                        b"\xef\xbb\xbf" + b"the quick brown fox",  # UTF-8 BOM + text
+                        "text/plain",
+                    )
+                },
+            )
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        assert job.baseline_transcript == "the quick brown fox"
+        assert response.json()["accuracy"]["baseline_word_error_rate"] == 0.0
+
+    def test_requires_auth(self, client):
+        response = client.post(
+            f"/api/v1/jobs/{uuid.uuid4()}/baseline",
+            files={"file": ("baseline.txt", b"hello world", "text/plain")},
+        )
+        assert response.status_code in (401, 422)
+
+
 class TestCorrectSegment:
     def _patch_session(self, client, mocker):
         from transcription_svc.database.engine import get_session

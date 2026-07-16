@@ -192,6 +192,24 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
     setJob(body.job as TranscriptionJob);
   };
 
+  const uploadBaseline = async (file: File) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    const response = await fetch(apiPath(`/api/jobs/${jobId}/baseline`), {
+      method: "POST",
+      body: form,
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw new Error(
+        body?.error ??
+          `Failed to upload baseline transcript: ${response.status}`
+      );
+    }
+    const body = await response.json();
+    setJob(body.job as TranscriptionJob);
+  };
+
   useEffect(() => {
     const id = setInterval(async () => {
       if (
@@ -330,7 +348,10 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
                 end of the transcript. */}
             {job.accuracy && (
               <aside className="w-72 shrink-0 space-y-4 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto">
-                <TranscriptAccuracy accuracy={job.accuracy} />
+                <TranscriptAccuracy
+                  accuracy={job.accuracy}
+                  onUploadBaseline={uploadBaseline}
+                />
                 {job.lowConfidenceSegments &&
                   job.lowConfidenceSegments.length > 0 && (
                     <NeedsReviewPanel

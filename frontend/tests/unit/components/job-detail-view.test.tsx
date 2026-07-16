@@ -33,6 +33,7 @@ function makeJob(overrides: Partial<TranscriptionJob> = {}): TranscriptionJob {
       lowConfidenceCount: 1,
       confidenceThreshold: 85,
       hasCorrections: false,
+      hasBaseline: false,
     },
     lowConfidenceSegments: [
       {

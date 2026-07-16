@@ -74,6 +74,8 @@ interface BackendAccuracy {
   has_corrections: boolean;
   word_error_rate: number | null;
   corrected_percent: number | null;
+  has_baseline: boolean;
+  baseline_word_error_rate: number | null;
 }
 
 interface BackendNeedsReviewItem {
@@ -297,6 +299,8 @@ function toAccuracy(
     hasCorrections: accuracy.has_corrections,
     wordErrorRate: accuracy.word_error_rate ?? undefined,
     correctedPercent: accuracy.corrected_percent ?? undefined,
+    hasBaseline: accuracy.has_baseline,
+    baselineWordErrorRate: accuracy.baseline_word_error_rate ?? undefined,
   };
 }
 
@@ -502,6 +506,22 @@ export async function rollbackToHistoryEntry(
     `/api/v1/jobs/${jobId}/segments/${index}/history/${historyIndex}/rollback`,
     { method: "POST" }
   );
+  const body: BackendJob = await response.json();
+  return toTranscriptionJob(body);
+}
+
+export async function uploadBaselineTranscript(
+  jobId: string,
+  file: Blob,
+  filename: string
+): Promise<TranscriptionJob> {
+  const form = new FormData();
+  form.append("file", file, filename);
+
+  const response = await backendFetch(`/api/v1/jobs/${jobId}/baseline`, {
+    method: "POST",
+    body: form,
+  });
   const body: BackendJob = await response.json();
   return toTranscriptionJob(body);
 }
