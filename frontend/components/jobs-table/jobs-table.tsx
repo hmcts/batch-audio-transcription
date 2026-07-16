@@ -8,8 +8,8 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { JobProgress } from "@/components/job-status/job-progress";
 import { JobStatusBadge } from "@/components/job-status/job-status-badge";
-import { Progress } from "@/components/ui/progress";
 import type { JobStatus, TranscriptionJob } from "@/lib/types";
 
 const TRANSCRIPT_LINK_LABEL: Record<JobStatus, string> = {
@@ -145,18 +145,9 @@ export function JobsTable({
               <td className="px-4 py-3">
                 <div className="flex flex-col gap-1">
                   <JobStatusBadge status={job.status} />
-                  {job.status === "PROCESSING" &&
-                    job.progressPercent !== undefined && (
-                      <div className="flex items-center gap-2">
-                        <Progress
-                          value={job.progressPercent}
-                          className="w-24"
-                        />
-                        <span className="text-xs text-muted-foreground tabular-nums">
-                          {job.progressPercent}%
-                        </span>
-                      </div>
-                    )}
+                  {job.status === "PROCESSING" && (
+                    <JobProgress job={job} compact />
+                  )}
                 </div>
               </td>
               <td className="px-4 py-3">

@@ -11,8 +11,18 @@ export async function POST(request: Request) {
 
   const filename = file instanceof File ? file.name : "audio";
 
+  const rawDuration = form.get("audio_duration_seconds");
+  const parsedDuration =
+    typeof rawDuration === "string"
+      ? Number.parseFloat(rawDuration)
+      : Number.NaN;
+  const audioDurationSeconds =
+    Number.isFinite(parsedDuration) && parsedDuration > 0
+      ? parsedDuration
+      : undefined;
+
   try {
-    const job = await uploadAndSubmit(file, filename);
+    const job = await uploadAndSubmit(file, filename, audioDurationSeconds);
     return NextResponse.json({ job }, { status: 201 });
   } catch (err) {
     console.error("Failed to upload and submit job", err);

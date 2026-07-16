@@ -503,6 +503,55 @@ class TestSubmitJob:
         )
         assert response.status_code == 422
 
+    def test_passes_audio_duration_seconds_through_to_submission(self, client, as_caller, mocker):
+        job = _make_job()
+        submit_mock = mocker.patch(
+            "transcription_svc.api.routes.submit_and_queue_batch_job",
+            return_value=job,
+        )
+        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+
+        response = client.post(
+            "/api/v1/jobs",
+            json={
+                "audio_url": "https://storage.example.com/audio.wav?sig=token",
+                "audio_duration_seconds": 9360.0,
+            },
+        )
+        assert response.status_code == 201
+        assert submit_mock.call_args.kwargs["audio_duration_seconds"] == 9360.0
+
+    def test_audio_duration_seconds_is_optional(self, client, as_caller, mocker):
+        job = _make_job()
+        submit_mock = mocker.patch(
+            "transcription_svc.api.routes.submit_and_queue_batch_job",
+            return_value=job,
+        )
+        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+
+        response = client.post(
+            "/api/v1/jobs",
+            json={"audio_url": "https://storage.example.com/audio.wav?sig=token"},
+        )
+        assert response.status_code == 201
+        assert submit_mock.call_args.kwargs["audio_duration_seconds"] is None
+
+    def test_rejects_negative_audio_duration_seconds(self, client, as_caller, mocker):
+        mocker.patch(
+            "transcription_svc.api.routes.submit_and_queue_batch_job",
+            return_value=_make_job(),
+        )
+        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+
+        response = client.post(
+            "/api/v1/jobs",
+            json={
+                "audio_url": "https://storage.example.com/audio.wav?sig=token",
+                "audio_duration_seconds": -1.0,
+            },
+        )
+        assert response.status_code == 422
+
 
 class TestListJobs:
     def test_returns_jobs_for_caller(self, client, as_caller, mocker):
@@ -583,6 +632,23 @@ class TestGetJob:
 
         assert body["accuracy"] is None
         assert body["needs_review"] is None
+
+    def test_includes_audio_duration_seconds_when_known(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.RUNNING)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.audio_duration_seconds = 9360.0
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        assert response.json()["audio_duration_seconds"] == 9360.0
+
+    def test_audio_duration_seconds_is_none_when_unknown(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.RUNNING)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        assert response.json()["audio_duration_seconds"] is None
 
 
 class TestCorrectSegment:

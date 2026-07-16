@@ -131,6 +131,35 @@ describe("submitJob", () => {
     );
     expect(body.metadata.case_reference).toBe("PA/00002/2026");
   });
+
+  it("forwards the audio duration when provided", async () => {
+    const fetchMock = mockFetchOnce({
+      ...BACKEND_JOB,
+      status: "pending",
+      dialogue_entries: null,
+    });
+
+    await submitJob(
+      "https://storage.example.com/audio.wav?sig=abc",
+      {
+        caseReference: "PA/00002/2026",
+        tribunal: "Tribunal",
+        audioFileName: "hearing2.wav",
+      },
+      "uploads/x/hearing2.wav",
+      9360
+    );
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body);
+    expect(body.audio_duration_seconds).toBe(9360);
+  });
+
+  it("maps audio_duration_seconds from the backend onto the job", async () => {
+    mockFetchOnce({ ...BACKEND_JOB, audio_duration_seconds: 9360 });
+    const job = await getJob(BACKEND_JOB.job_id);
+    expect(job?.audioDurationSeconds).toBe(9360);
+  });
 });
 
 describe("uploadAudio", () => {

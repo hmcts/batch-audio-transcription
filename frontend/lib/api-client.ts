@@ -72,6 +72,7 @@ interface BackendJob {
   status: string;
   created_at: string;
   updated_at: string | null;
+  audio_duration_seconds?: number | null;
   dialogue_entries: BackendDialogueEntry[] | null;
   accuracy: BackendAccuracy | null;
   needs_review: BackendNeedsReviewItem[] | null;
@@ -295,6 +296,10 @@ function toTranscriptionJob(job: BackendJob): TranscriptionJob {
         : undefined,
     status,
     progressPercent: PROGRESS_BY_STATUS[job.status] ?? 0,
+    audioDurationSeconds:
+      typeof job.audio_duration_seconds === "number"
+        ? job.audio_duration_seconds
+        : undefined,
     errorMessage: job.error_message ?? undefined,
     segments: toSegments(job.dialogue_entries),
     accuracy: toAccuracy(job.accuracy),
@@ -363,7 +368,8 @@ export interface SubmitJobMetadata {
 export async function submitJob(
   audioUrl: string,
   metadata: SubmitJobMetadata,
-  blobName?: string
+  blobName?: string,
+  audioDurationSeconds?: number
 ): Promise<TranscriptionJob> {
   const response = await backendFetch("/api/v1/jobs", {
     method: "POST",
@@ -371,6 +377,7 @@ export async function submitJob(
     body: JSON.stringify({
       audio_url: audioUrl,
       blob_name: blobName,
+      audio_duration_seconds: audioDurationSeconds,
       metadata: {
         case_reference: metadata.caseReference,
         tribunal: metadata.tribunal,
@@ -449,7 +456,8 @@ export async function rollbackToHistoryEntry(
 
 export async function uploadAndSubmit(
   file: Blob,
-  filename: string
+  filename: string,
+  audioDurationSeconds?: number
 ): Promise<TranscriptionJob> {
   const { audio_url, blob_name } = await uploadAudio(file, filename);
   const caseReference = filename.replace(/\.[^.]+$/, "").replace(/_/g, "/");
@@ -460,6 +468,7 @@ export async function uploadAndSubmit(
       tribunal: "First-tier Tribunal — Immigration and Asylum Chamber",
       audioFileName: filename,
     },
-    blob_name
+    blob_name,
+    audioDurationSeconds
   );
 }

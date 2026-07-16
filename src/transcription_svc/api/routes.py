@@ -169,7 +169,19 @@ class SubmitJobRequest(BaseModel):
     enable_diarization: bool = True
     callback_url: str | None = None
     idempotency_key: str | None = None
+    # Total duration of the source audio, in seconds — supplied by the caller
+    # (the frontend reads it client-side from the file before upload) since
+    # Azure only reports it back once the batch job has already succeeded,
+    # too late to show "Transcribing 2h 36m of audio" while still PROCESSING.
+    audio_duration_seconds: float | None = None
     metadata: dict = Field(default_factory=dict)
+
+    @field_validator("audio_duration_seconds")
+    @classmethod
+    def validate_audio_duration_seconds(cls, v: float | None) -> float | None:
+        if v is not None and v < 0:
+            raise ValueError("audio_duration_seconds must not be negative")
+        return v
 
     @field_validator("audio_url")
     @classmethod
@@ -265,6 +277,7 @@ class JobResponse(BaseModel):
     status: str
     created_at: str
     updated_at: str | None = None
+    audio_duration_seconds: float | None = None
     dialogue_entries: list[DialogueEntryResponse] | None = None
     accuracy: AccuracyResponse | None = None
     needs_review: list[NeedsReviewItemResponse] | None = None
@@ -361,6 +374,7 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
         status=job.status.value,
         created_at=job.created_datetime.isoformat(),
         updated_at=job.updated_datetime.isoformat() if job.updated_datetime else None,
+        audio_duration_seconds=job.audio_duration_seconds,
         dialogue_entries=[
             DialogueEntryResponse(
                 speaker=e.speaker,
@@ -534,6 +548,7 @@ async def submit_job(
             callback_url=body.callback_url,
             idempotency_key=body.idempotency_key,
             metadata=body.metadata,
+            audio_duration_seconds=body.audio_duration_seconds,
             audio_blob_path=body.blob_name,
         )
     except IntegrityError:

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AudioUpload } from "@/components/audio-upload/audio-upload";
 import { FilterableJobsSection } from "@/components/jobs-table/filterable-jobs-section";
+import { readAudioDurationSeconds } from "@/lib/audio-duration";
 import { apiPath } from "@/lib/base-path";
 import type { TranscriptionJob } from "@/lib/types";
 
@@ -60,8 +61,16 @@ export default function DashboardPage() {
     async (file: File) => {
       setUploading(true);
       try {
+        // Read duration in the browser before upload — the backend can't
+        // determine it until Azure finishes, but the progress UI needs it up
+        // front to show "Transcribing 2h 36m of audio" and estimate remaining
+        // time. Best-effort: undefined simply omits those extras.
+        const durationSeconds = await readAudioDurationSeconds(file);
         const formData = new FormData();
         formData.append("file", file);
+        if (durationSeconds !== undefined) {
+          formData.append("audio_duration_seconds", String(durationSeconds));
+        }
         const response = await fetch(apiPath("/api/upload"), {
           method: "POST",
           body: formData,
