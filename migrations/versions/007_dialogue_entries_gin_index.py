@@ -13,15 +13,15 @@ the top choice), so a GIN index is added ahead of DIAAT-233/234 needing to
 query into it (e.g. "jobs with a low-confidence word that has a
 higher-confidence alternative") without a full-table JSON scan.
 
-Revision ID: 006
-Revises: 005
+Revision ID: 007
+Revises: 006
 Create Date: 2026-07-15
 """
 
 from alembic import op
 
-revision = "006"
-down_revision = "005"
+revision = "007"
+down_revision = "006"
 branch_labels = None
 depends_on = None
 
