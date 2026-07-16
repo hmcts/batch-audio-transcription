@@ -54,18 +54,25 @@ export function JobProgress({ job, compact = false }: JobProgressProps) {
           </span>
         </div>
       )}
-      <p className={`text-muted-foreground ${compact ? "text-xs" : "text-sm"}`}>
-        {durationMessage && <span>{durationMessage}. </span>}
-        {elapsedSeconds !== null && (
-          <span>Elapsed: {formatDuration(elapsedSeconds)}</span>
-        )}
-        {remainingSeconds !== undefined && (
-          <span>
-            {" "}
-            · Estimated remaining: {formatDuration(remainingSeconds)}
-          </span>
-        )}
-      </p>
+      {/* Only render the paragraph once there's something to show — avoids an
+          empty <p> (and its vertical spacing) during SSR / the first hydration
+          frame, when `now` is null and there may be no duration message. */}
+      {(durationMessage || elapsedSeconds !== null) && (
+        <p
+          className={`text-muted-foreground ${compact ? "text-xs" : "text-sm"}`}
+        >
+          {durationMessage && <span>{durationMessage}. </span>}
+          {elapsedSeconds !== null && (
+            <span>Elapsed: {formatDuration(elapsedSeconds)}</span>
+          )}
+          {remainingSeconds !== undefined && (
+            <span>
+              {" "}
+              · Estimated remaining: {formatDuration(remainingSeconds)}
+            </span>
+          )}
+        </p>
+      )}
     </div>
   );
 }

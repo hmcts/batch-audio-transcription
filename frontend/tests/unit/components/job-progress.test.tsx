@@ -1,4 +1,5 @@
 import { act, render, screen } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { JobProgress } from "@/components/job-status/job-progress";
 import type { TranscriptionJob } from "@/lib/types";
@@ -29,6 +30,21 @@ describe("JobProgress", () => {
   it("shows elapsed time since submission", () => {
     render(<JobProgress job={makeJob()} />);
     expect(screen.getByText(/Elapsed: 10m/)).toBeDefined();
+  });
+
+  it("renders no empty paragraph on the server when there's nothing to show", () => {
+    // On the server useNow() returns null, so with no audio-duration message
+    // there's no elapsed/estimate text — the <p> must be omitted entirely
+    // rather than rendered empty (which would add stray vertical spacing).
+    const html = renderToStaticMarkup(
+      <JobProgress
+        job={makeJob({
+          progressPercent: undefined,
+          audioDurationSeconds: undefined,
+        })}
+      />
+    );
+    expect(html).not.toContain("<p");
   });
 
   it("shows the audio duration message in the ticket's example format", () => {
