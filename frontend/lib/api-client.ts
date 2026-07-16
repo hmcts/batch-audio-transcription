@@ -374,7 +374,8 @@ export interface SubmitJobMetadata {
 export async function submitJob(
   audioUrl: string,
   metadata: SubmitJobMetadata,
-  blobName?: string
+  blobName?: string,
+  audioDurationSeconds?: number
 ): Promise<TranscriptionJob> {
   const response = await backendFetch("/api/v1/jobs", {
     method: "POST",
@@ -382,6 +383,7 @@ export async function submitJob(
     body: JSON.stringify({
       audio_url: audioUrl,
       blob_name: blobName,
+      audio_duration_seconds: audioDurationSeconds,
       metadata: {
         case_reference: metadata.caseReference,
         tribunal: metadata.tribunal,
@@ -472,7 +474,8 @@ export async function rollbackToHistoryEntry(
 
 export async function uploadAndSubmit(
   file: Blob,
-  filename: string
+  filename: string,
+  audioDurationSeconds?: number
 ): Promise<TranscriptionJob> {
   const { audio_url, blob_name } = await uploadAudio(file, filename);
   const caseReference = filename.replace(/\.[^.]+$/, "").replace(/_/g, "/");
@@ -483,6 +486,7 @@ export async function uploadAndSubmit(
       tribunal: "First-tier Tribunal — Immigration and Asylum Chamber",
       audioFileName: filename,
     },
-    blob_name
+    blob_name,
+    audioDurationSeconds
   );
 }

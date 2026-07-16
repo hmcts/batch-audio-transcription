@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import math
 import mimetypes
 import re
 import socket
@@ -170,7 +171,22 @@ class SubmitJobRequest(BaseModel):
     enable_diarization: bool = True
     callback_url: str | None = None
     idempotency_key: str | None = None
+    # Total duration of the source audio, in seconds — supplied by the caller
+    # (the frontend reads it client-side from the file before upload) since
+    # Azure only reports it back once the batch job has already succeeded,
+    # too late to show "Transcribing 2h 36m of audio" while still PROCESSING.
+    audio_duration_seconds: float | None = None
     metadata: dict = Field(default_factory=dict)
+
+    @field_validator("audio_duration_seconds")
+    @classmethod
+    def validate_audio_duration_seconds(cls, v: float | None) -> float | None:
+        # Reject non-finite values (NaN/±Infinity) as well as negatives: Postgres
+        # would store them but they can't be serialised back in a JSON response,
+        # so they must not cross the API boundary in the first place.
+        if v is not None and (not math.isfinite(v) or v < 0):
+            raise ValueError("audio_duration_seconds must be a finite, non-negative number")
+        return v
 
     @field_validator("audio_url")
     @classmethod
@@ -592,6 +608,7 @@ async def submit_job(
             callback_url=body.callback_url,
             idempotency_key=body.idempotency_key,
             metadata=body.metadata,
+            audio_duration_seconds=body.audio_duration_seconds,
             audio_blob_path=body.blob_name,
         )
     except IntegrityError:

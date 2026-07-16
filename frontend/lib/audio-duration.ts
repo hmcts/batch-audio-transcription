@@ -1,0 +1,66 @@
+// Reads the duration of an audio File in the browser, before upload, by
+// loading just its metadata into a detached <audio> element. Runs client-side
+// because the backend only learns the real duration once Azure has finished
+// transcribing — too late to show "Transcribing 2h 36m of audio" while the
+// job is still processing. Best-effort: resolves to undefined (rather than
+// rejecting) if the browser can't decode the file or metadata never loads, so
+// a failure here never blocks the upload itself.
+//
+// For a valid audio file `loadedmetadata` fires almost immediately, so the
+// caller can safely await this before uploading. The timeout is deliberately
+// short: it only bites for files whose metadata never loads (corrupt or
+// unsupported), where we'd rather proceed with the upload promptly and simply
+// omit the duration than stall the user waiting on a value we won't get.
+const METADATA_TIMEOUT_MS = 3_000;
+
+export function readAudioDurationSeconds(
+  file: Blob
+): Promise<number | undefined> {
+  return new Promise((resolve) => {
+    // No <audio> support (e.g. SSR) — nothing to read.
+    if (typeof document === "undefined") {
+      resolve(undefined);
+      return;
+    }
+
+    // Guard the whole setup: URL.createObjectURL / createElement (and the
+    // listener wiring) can throw in constrained environments, and an
+    // uncaught throw in this executor would reject the Promise — defeating
+    // the best-effort contract and breaking the upload flow. Any failure
+    // degrades to undefined instead.
+    try {
+      const objectUrl = URL.createObjectURL(file);
+      const audio = document.createElement("audio");
+      audio.preload = "metadata";
+
+      let settled = false;
+      const finish = (value: number | undefined) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        audio.removeEventListener("loadedmetadata", onLoaded);
+        audio.removeEventListener("error", onError);
+        URL.revokeObjectURL(objectUrl);
+        resolve(value);
+      };
+
+      const onLoaded = () => {
+        const { duration } = audio;
+        // Some containers report Infinity/NaN until fully buffered — treat
+        // those as "unknown" rather than sending a bogus number.
+        finish(
+          Number.isFinite(duration) && duration > 0 ? duration : undefined
+        );
+      };
+      const onError = () => finish(undefined);
+
+      const timer = setTimeout(() => finish(undefined), METADATA_TIMEOUT_MS);
+
+      audio.addEventListener("loadedmetadata", onLoaded);
+      audio.addEventListener("error", onError);
+      audio.src = objectUrl;
+    } catch {
+      resolve(undefined);
+    }
+  });
+}

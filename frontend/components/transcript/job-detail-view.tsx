@@ -3,13 +3,13 @@
 import { ChevronDown, ChevronLeft, History } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { JobProgress } from "@/components/job-status/job-progress";
 import { JobStatusBadge } from "@/components/job-status/job-status-badge";
 import { AudioPlayerBar } from "@/components/transcript/audio-player-bar";
 import { ModificationHistoryTable } from "@/components/transcript/modification-history-table";
 import { NeedsReviewPanel } from "@/components/transcript/needs-review-panel";
 import { TranscriptAccuracy } from "@/components/transcript/transcript-accuracy";
 import { TranscriptSegment } from "@/components/transcript/transcript-segment";
-import { Progress } from "@/components/ui/progress";
 import { apiPath } from "@/lib/base-path";
 import type { TranscriptionJob } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -408,14 +408,7 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
               Transcription is still in progress. This page updates
               automatically — no need to refresh.
             </p>
-            {job.progressPercent !== undefined && (
-              <div className="flex items-center gap-3 max-w-sm">
-                <Progress value={job.progressPercent} className="flex-1" />
-                <span className="text-sm text-muted-foreground tabular-nums">
-                  {job.progressPercent}%
-                </span>
-              </div>
-            )}
+            <JobProgress job={job} />
           </div>
         )}
 
