@@ -54,7 +54,10 @@ test.describe("Segment accept-all", () => {
 
     // The change is recorded in the history as an "accept" action, distinct
     // from a correction — open the history panel and check the label.
-    await page.getByLabel(/show change history/i).first().click();
+    await page
+      .getByLabel(/show change history/i)
+      .first()
+      .click();
     await expect(page.getByText(/accepted as-is/i)).toBeVisible();
   });
 });

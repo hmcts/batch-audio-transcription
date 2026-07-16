@@ -1220,9 +1220,7 @@ class TestRollbackSegment:
         entry = body["dialogue_entries"][0]
         assert entry["accepted"] is False
         assert entry["correction_history"] is None
-        assert body["needs_review"] == [
-            {"speaker": "0", "start_time": 0.0, "confidence": 0.4}
-        ]
+        assert body["needs_review"] == [{"speaker": "0", "start_time": 0.0, "confidence": 0.4}]
         mock_session.commit.assert_called_once()
 
 
