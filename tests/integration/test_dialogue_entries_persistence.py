@@ -30,14 +30,19 @@ from transcription_svc.database.models import (
 
 
 def _db_available(url: str) -> bool:
+    engine = None
     try:
         engine = create_engine(url)
         with engine.connect():
             return True
     except Exception:
+        # create_engine itself can raise on a malformed connection string
+        # (leaving `engine` unbound), so the dispose() below must guard for
+        # that rather than assume the engine was created.
         return False
     finally:
-        engine.dispose()
+        if engine is not None:
+            engine.dispose()
 
 
 _DB_URL = get_settings().DATABASE_CONNECTION_STRING
