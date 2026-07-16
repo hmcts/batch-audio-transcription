@@ -110,6 +110,32 @@ class TestExtractTranscriptionDurationSeconds:
 
         assert _extract_transcription_duration_seconds({}, None) is None
 
+    def test_wall_clock_fallback_never_returns_negative_under_clock_skew(self):
+        from transcription_svc.audio.polling_service import (
+            _extract_transcription_duration_seconds,
+        )
+
+        # Clock skew: the job-creation timestamp is ahead of the worker's
+        # clock (fallback_start in the future). The wall-clock difference is
+        # negative, but a duration must never be negative — clamp to 0.
+        future_start = datetime.now(UTC) + timedelta(seconds=60)
+        duration = _extract_transcription_duration_seconds({}, future_start)
+        assert duration == 0.0
+
+    def test_azure_timestamp_path_never_returns_negative(self):
+        from transcription_svc.audio.polling_service import (
+            _extract_transcription_duration_seconds,
+        )
+
+        # lastActionDateTime before createdDateTime (skew/reordering): the
+        # Azure path rejects the negative window and falls back — here with
+        # no fallback_start it returns None rather than a negative number.
+        status_data = {
+            "createdDateTime": "2026-07-15T10:01:30Z",
+            "lastActionDateTime": "2026-07-15T10:00:00Z",
+        }
+        assert _extract_transcription_duration_seconds(status_data, None) is None
+
 
 class TestProcessJob:
     @pytest.mark.asyncio

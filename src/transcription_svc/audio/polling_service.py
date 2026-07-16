@@ -89,6 +89,10 @@ def _extract_transcription_duration_seconds(
     actual processing window. Falls back to wall-clock time since this
     service first created the job record when Azure's timestamps are
     missing or unparseable.
+
+    Both paths clamp to 0: a negative value is never a meaningful duration
+    and can arise from clock skew (e.g. the worker's clock running behind
+    the job-creation timestamp on the wall-clock path).
     """
     created = status_data.get("createdDateTime")
     last_action = status_data.get("lastActionDateTime")
@@ -103,7 +107,7 @@ def _extract_transcription_duration_seconds(
             pass
 
     if fallback_start is not None:
-        return (datetime.now(UTC) - fallback_start).total_seconds()
+        return max(0.0, (datetime.now(UTC) - fallback_start).total_seconds())
 
     return None
 
