@@ -27,13 +27,18 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_index(
-        "ix_transcription_job_dialogue_entries_gin",
-        "transcription_job",
-        ["dialogue_entries"],
-        postgresql_using="gin",
+    # Idempotent: environments that deployed DIAAT-232 *before* the duplicate-006
+    # revisions were linearised (#46) already created this index under the old
+    # revision id "006". After the renumber their alembic_version still reads
+    # "006", so `alembic upgrade head` re-runs this (now "007") step against a DB
+    # that already has the index. A plain CREATE INDEX would raise
+    # "relation already exists" and crash the container on startup, so guard with
+    # IF NOT EXISTS. On a fresh database this behaves exactly like create_index.
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_transcription_job_dialogue_entries_gin "
+        "ON transcription_job USING gin (dialogue_entries)"
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_transcription_job_dialogue_entries_gin", table_name="transcription_job")
+    op.execute("DROP INDEX IF EXISTS ix_transcription_job_dialogue_entries_gin")
