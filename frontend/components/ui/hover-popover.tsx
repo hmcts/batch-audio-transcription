@@ -15,15 +15,17 @@ interface HoverPopoverProps {
 }
 
 /**
- * A lightweight info popover that opens on hover *or* click/keyboard focus —
- * plain React state rather than a UI library, since it only needs to render
- * a small metadata card, not full positioning/portal machinery.
+ * A lightweight info popover that opens on hover *or* click — plain React
+ * state rather than a UI library, since it only needs to render a small
+ * metadata card, not full positioning/portal machinery.
  *
  * Visibility is derived from two independent inputs — `hovering` (mouse over
- * the trigger/panel) and `pinned` (opened by an explicit click) — so the two
- * interaction modes compose instead of fighting: hovering shows it, moving
- * away hides it again *unless* a click has pinned it open. Clicking toggles
- * the pin, giving touch/keyboard users the same information as mouse users.
+ * the trigger/panel) and `pinned` (toggled by activating the trigger) — so
+ * the two interaction modes compose instead of fighting: hovering shows it,
+ * moving away hides it again *unless* it has been pinned open. The trigger is
+ * a real <button>, so keyboard users Tab to it and press Enter/Space to
+ * toggle the pin (and Escape to close), getting the same information as mouse
+ * users without needing hover.
  */
 export function HoverPopover({
   trigger,
