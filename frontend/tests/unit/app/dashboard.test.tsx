@@ -27,6 +27,12 @@ vi.mock("@/lib/base-path", () => ({
 }));
 
 describe("DashboardPage", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ jobs: [] }) })
+    );
+  });
   it("renders page heading", () => {
     render(<DashboardPage />);
     expect(screen.getByText("Batch Audio Transcription")).toBeDefined();
