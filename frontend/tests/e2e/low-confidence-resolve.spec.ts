@@ -93,6 +93,9 @@ test.describe("Low-confidence click-to-resolve menu", () => {
     )
       .replace(/[“”"]/g, "")
       .trim();
+    // Fail loudly if phrase extraction breaks (e.g. a DOM change), rather than
+    // letting the history assertion below be silently skipped.
+    expect(phrase).not.toBe("");
     await firstCandidate.click();
 
     // The correction is saved exactly like a typed one: the segment now shows
@@ -107,11 +110,9 @@ test.describe("Low-confidence click-to-resolve menu", () => {
     // The applied phrase shows as the new value. Match it as a plain-string
     // substring (exact: false) so transcript text containing regex
     // metacharacters can't break or destabilise the assertion.
-    if (phrase) {
-      await expect(
-        page.getByText(phrase, { exact: false }).first()
-      ).toBeVisible();
-    }
+    await expect(
+      page.getByText(phrase, { exact: false }).first()
+    ).toBeVisible();
   });
 
   test("a low-confidence word without alternatives skips the menu and opens Edit directly", async ({
