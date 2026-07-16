@@ -100,6 +100,17 @@ test.describe("Audio skip controls (-10s / +10s)", () => {
     expect(await audioCurrentTime(page)).toBeGreaterThanOrEqual(0);
 
     // --- Seek while playing: playback must continue from the new position. ---
+    // Only meaningful when the audio is comfortably longer than one skip
+    // step; otherwise a +10s jump immediately clamps to the end (and
+    // playback would legitimately stop), so there's nothing to assert.
+    if (duration <= SEEK_STEP + 5) {
+      test.info().annotations.push({
+        type: "skip-detail",
+        description: `Audio too short (${duration}s) to test seek-while-playing`,
+      });
+      return;
+    }
+
     const playPause = page.getByRole("button", { name: /^play$/i });
     await playPause.click();
     // Confirm real playback is advancing.
@@ -107,12 +118,14 @@ test.describe("Audio skip controls (-10s / +10s)", () => {
       .poll(async () => await audioCurrentTime(page), { timeout: 5_000 })
       .toBeGreaterThan(0.5);
 
-    // A +10s jump while playing should move forward and keep playing.
+    // A +10s jump while playing should move forward (clamped to duration)
+    // and keep playing.
     const before = await audioCurrentTime(page);
     await forward.click();
+    const expectedPlaying = Math.min(duration, before + SEEK_STEP);
     await expect
       .poll(async () => await audioCurrentTime(page))
-      .toBeGreaterThan(before + SEEK_STEP - TOLERANCE);
+      .toBeGreaterThan(expectedPlaying - TOLERANCE);
     expect(await audioPaused(page)).toBe(false);
   });
 });

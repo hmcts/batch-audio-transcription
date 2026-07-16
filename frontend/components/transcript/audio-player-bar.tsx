@@ -32,7 +32,7 @@ export function AudioPlayerBar({
         aria-label="Skip back 10 seconds"
       >
         <SkipBack className="size-4" />
-        <span>10s</span>
+        <span>−10s</span>
       </Button>
 
       {/* Play/pause */}
@@ -57,7 +57,7 @@ export function AudioPlayerBar({
         onClick={() => onSeek(Math.min(duration, position + 10))}
         aria-label="Skip forward 10 seconds"
       >
-        <span>10s</span>
+        <span>+10s</span>
         <SkipForward className="size-4" />
       </Button>
 

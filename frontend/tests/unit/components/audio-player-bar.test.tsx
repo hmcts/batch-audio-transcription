@@ -39,15 +39,17 @@ describe("AudioPlayerBar", () => {
     expect(onTogglePlay).toHaveBeenCalledOnce();
   });
 
-  it("renders explicit, visible -10s and +10s skip labels", () => {
+  it("renders explicit, visible −10s and +10s skip labels", () => {
     setup();
     const back = screen.getByRole("button", { name: /skip back 10 seconds/i });
     const forward = screen.getByRole("button", {
       name: /skip forward 10 seconds/i,
     });
-    // The "10s" text must be visible (not sr-only) so the control is explicit.
-    expect(back.textContent).toContain("10s");
-    expect(forward.textContent).toContain("10s");
+    // Direction must be explicit in the visible text (not sr-only, not just
+    // an icon) — assert the full labels so a regression back to ambiguous
+    // "10s" text fails the test.
+    expect(back.textContent).toContain("−10s");
+    expect(forward.textContent).toContain("+10s");
   });
 
   it("seeks 10s back, clamped at 0", async () => {
