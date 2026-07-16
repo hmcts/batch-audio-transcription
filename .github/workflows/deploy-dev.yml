@@ -49,46 +49,57 @@ jobs:
           git tag -a "${TAG}" -m "Deploy ${VERSION} to dev (run ${RUN_ID})"
           git push origin "${TAG}"
 
-  # Post-deploy smoke check (DIAAT-240). The deploy tag pushed by the
-  # `tag` job triggers an asynchronous ADO pipeline (terraform apply +
-  # App Service restart) that can take several minutes to bring the new
-  # containers up. This job polls the dev API health endpoint and the
-  # frontend /batch route until both return 200, and fails loudly if
-  # either is unhealthy within the timeout — so a broken deploy (e.g. a
-  # crash-looping container from a failed DB migration) is caught
-  # immediately rather than by a human hitting the app.
+  # Post-deploy version-gated e2e check (DIAAT-241, supersedes the
+  # health-only DIAAT-240 smoke wait). The deploy tag pushed by the `tag`
+  # job triggers an asynchronous ADO pipeline (terraform apply + App
+  # Service restart) that can take several minutes to bring the new
+  # containers up.
+  #
+  # This job polls BOTH deployed-version endpoints until they report the
+  # git SHA of the commit that triggered this deploy (github.sha), then —
+  # and only then — runs the Playwright e2e suite against dev. Gating on
+  # the version marker (rather than just health) removes the DIAAT-240
+  # race where the OLD container is still healthy when polling starts: we
+  # wait for the NEW build to actually be live before asserting anything.
+  #
+  # Any failure — version never matches within the timeout, or an e2e
+  # failure — fails the workflow loudly so a broken deploy is caught here
+  # rather than by a human hitting the app.
   #
   # It runs AFTER the tag is pushed and mirrors the `tag` job's gating
-  # (only on real pushes to main that produced a pushed image). It does
-  # NOT gate anything upstream — the ADO deploy has already been kicked
-  # off by the time this runs; its purpose is purely to notify.
-  #
-  # KNOWN LIMITATION (scope of companion ticket DIAAT-241): this checks
-  # health only, not a deployed-version marker. If the OLD container is
-  # still healthy when polling starts, the check could pass before the
-  # new build is actually live. To reduce that risk we wait an initial
-  # delay to let the ADO restart begin before polling. DIAAT-241 will
-  # add version-gated polling to make this precise.
-  smoke:
+  # (only on real pushes to main that produced a pushed image). Because it
+  # only runs on push to main, its logic can't execute in a PR — its first
+  # real run is on the merge commit.
+  e2e:
     needs: [build, tag]
     if: needs.build.outputs.image_pushed == 'true'
     runs-on: ubuntu-latest
     # Hard operational bound so the job can never hang for hours if the
-    # poll loop ever regresses; comfortably above the initial delay plus
-    # the ~15 min polling budget below.
-    timeout-minutes: 20
+    # poll loop ever regresses; comfortably above the initial delay, the
+    # ~15 min version-poll budget, and the follow-on e2e run.
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: frontend
     env:
-      API_HEALTH_URL: https://hmcts-batch-transcription-dev.azurewebsites.net/api/v1/health
-      FRONTEND_URL: https://hmcts-batch-transcription-frontend-dev.azurewebsites.net/batch
+      API_VERSION_URL: https://hmcts-batch-transcription-dev.azurewebsites.net/api/v1/version
+      FRONTEND_VERSION_URL: https://hmcts-batch-transcription-frontend-dev.azurewebsites.net/batch/api/version
+      FRONTEND_BASE_URL: https://hmcts-batch-transcription-frontend-dev.azurewebsites.net
+      # The expected deployed version: the full git SHA of the commit that
+      # triggered this deploy. Baked into both images as GIT_SHA (see
+      # ci-build-image.yml) so it compares equal end-to-end.
+      EXPECTED_SHA: ${{ github.sha }}
       # Wait before the first poll to give the async ADO deploy + App
-      # Service restart time to begin (see KNOWN LIMITATION above).
+      # Service restart time to begin.
       INITIAL_DELAY_SECONDS: "60"
       # Total polling budget after the initial delay (~15 minutes).
       TIMEOUT_SECONDS: "900"
       # Delay between polls.
       INTERVAL_SECONDS: "20"
     steps:
-      - name: Poll dev endpoints until healthy
+      - uses: actions/checkout@v7
+
+      - name: Wait for both dev endpoints to report the expected version
         run: |
           # -e so unexpected command failures (sleep/date/etc.) fail the
           # step fast; the curl `|| true` fallback below keeps expected
@@ -97,41 +108,75 @@ jobs:
           # safe here.
           set -euo pipefail
 
-          check() {
-            # Echoes the HTTP status code, or 000 if the request failed
-            # to get any response (connection refused, DNS, timeout).
-            curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$1" || true
+          fetch_version() {
+            # Echoes the reported version string, or empty if the request
+            # failed / returned no parseable version. jq is preinstalled on
+            # ubuntu-latest runners.
+            curl -s --max-time 10 "$1" 2>/dev/null | jq -r '.version // empty' 2>/dev/null || true
           }
 
+          echo "Expecting deployed version (github.sha): ${EXPECTED_SHA}"
           echo "Waiting ${INITIAL_DELAY_SECONDS}s for the ADO deploy + App Service restart to begin..."
           sleep "${INITIAL_DELAY_SECONDS}"
 
           deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
-          api_status=000
-          frontend_status=000
+          api_version=""
+          frontend_version=""
 
           while :; do
-            api_status=$(check "${API_HEALTH_URL}")
-            api_status=${api_status:-000}
-            frontend_status=$(check "${FRONTEND_URL}")
-            frontend_status=${frontend_status:-000}
-            echo "$(date -u +%H:%M:%S) API=${api_status} frontend=${frontend_status}"
+            api_version=$(fetch_version "${API_VERSION_URL}")
+            frontend_version=$(fetch_version "${FRONTEND_VERSION_URL}")
+            echo "$(date -u +%H:%M:%S) API='${api_version:-<none>}' frontend='${frontend_version:-<none>}' expected='${EXPECTED_SHA}'"
 
-            if [[ "${api_status}" == "200" && "${frontend_status}" == "200" ]]; then
-              echo "Both dev endpoints returned 200. Deploy looks healthy."
+            if [[ "${api_version}" == "${EXPECTED_SHA}" && "${frontend_version}" == "${EXPECTED_SHA}" ]]; then
+              echo "Both dev endpoints report the expected version. New build is live."
               exit 0
             fi
 
             if (( $(date +%s) >= deadline )); then
-              echo "::error::Dev post-deploy smoke check timed out after ${TIMEOUT_SECONDS}s (plus ${INITIAL_DELAY_SECONDS}s initial delay)."
-              if [[ "${api_status}" != "200" ]]; then
-                echo "::error::API health endpoint unhealthy: ${API_HEALTH_URL} (last status: ${api_status})"
+              echo "::error::Dev post-deploy version check timed out after ${TIMEOUT_SECONDS}s (plus ${INITIAL_DELAY_SECONDS}s initial delay); expected ${EXPECTED_SHA}."
+              if [[ "${api_version}" != "${EXPECTED_SHA}" ]]; then
+                echo "::error::API version endpoint never matched: ${API_VERSION_URL} (last: '${api_version:-<none>}')"
               fi
-              if [[ "${frontend_status}" != "200" ]]; then
-                echo "::error::Frontend route unhealthy: ${FRONTEND_URL} (last status: ${frontend_status})"
+              if [[ "${frontend_version}" != "${EXPECTED_SHA}" ]]; then
+                echo "::error::Frontend version endpoint never matched: ${FRONTEND_VERSION_URL} (last: '${frontend_version:-<none>}')"
               fi
               exit 1
             fi
 
             sleep "${INTERVAL_SECONDS}"
           done
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run Playwright e2e against dev
+        run: pnpm run test:e2e
+        env:
+          PLAYWRIGHT_BASE_URL: ${{ env.FRONTEND_BASE_URL }}
+          # Dev has real jobs, so the empty-state dashboard test is not
+          # applicable and skips itself (see dashboard.spec.ts). Feature
+          # specs gated on E2E_*_JOB_ID skip without seeded data — seeding
+          # dev for full feature coverage is a documented follow-up.
+          E2E_EXPECT_EMPTY: "false"
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-dev
+          path: frontend/playwright-report/
+          retention-days: 7

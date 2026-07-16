@@ -35,6 +35,16 @@ test.describe("Dashboard", () => {
   });
 
   test("shows an empty state when there are no jobs yet", async ({ page }) => {
+    // Gated on E2E_EXPECT_EMPTY (DIAAT-241): only meaningful against an empty
+    // backend. Local `pnpm dev` and the backend-less CI e2e run start empty,
+    // so it asserts by default. The post-deploy dev run sets
+    // E2E_EXPECT_EMPTY=false because dev has real jobs, so this test skips
+    // there rather than failing.
+    test.skip(
+      process.env.E2E_EXPECT_EMPTY === "false",
+      "Backend has existing jobs (E2E_EXPECT_EMPTY=false); empty-state check not applicable"
+    );
+
     // The full-history list is the "Uploads (N)" section (see app/page.tsx);
     // an earlier "All uploads" locator matched no markup and always failed.
     const uploadsSection = page
