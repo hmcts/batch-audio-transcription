@@ -50,7 +50,9 @@ class Settings(BaseSettings):
     WEBHOOK_TIMEOUT_SECONDS: float = 30.0
     WEBHOOK_MAX_RETRIES: int = 3
 
-    # Low-confidence word tracking (optional)
+    # Optional per-environment override for the review-highlighting cutoff
+    # (see audio/accuracy.py DEFAULT_CONFIDENCE_THRESHOLD). Expressed as a
+    # 0-1 ratio, matching Azure's per-word confidence scale — NOT a percent.
     LOW_CONFIDENCE_THRESHOLD: float | None = None
 
     # Corrections dataset export (DIAAT-231)
@@ -85,6 +87,16 @@ class Settings(BaseSettings):
     def validate_audio_storage_backend(cls, v: str) -> str:
         if v not in ("azure", "local"):
             raise ValueError("AUDIO_STORAGE_BACKEND must be 'azure' or 'local'")
+        return v
+
+    @field_validator("LOW_CONFIDENCE_THRESHOLD")
+    @classmethod
+    def validate_low_confidence_threshold(cls, v: float | None) -> float | None:
+        # Guard against the common percent-vs-ratio misconfiguration (e.g.
+        # setting 65 instead of 0.65, which would flag every word). Azure's
+        # per-word confidence is a 0-1 ratio; 0.0 (flag nothing) is allowed.
+        if v is not None and not (0.0 <= v <= 1.0):
+            raise ValueError("LOW_CONFIDENCE_THRESHOLD must be a ratio between 0 and 1")
         return v
 
 

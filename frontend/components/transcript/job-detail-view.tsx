@@ -160,6 +160,18 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
     setJob(body.job as TranscriptionJob);
   };
 
+  const acceptSegment = async (index: number) => {
+    const response = await fetch(
+      apiPath(`/api/jobs/${jobId}/segments/${index}/accept`),
+      { method: "POST" }
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to accept segment: ${response.status}`);
+    }
+    const body = await response.json();
+    setJob(body.job as TranscriptionJob);
+  };
+
   const rollbackToHistoryEntry = async (
     index: number,
     historyIndex: number
@@ -276,8 +288,18 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
                       onRollbackToHistory={(historyIndex) =>
                         rollbackToHistoryEntry(index, historyIndex)
                       }
+                      onAccept={() => acceptSegment(index)}
                       isActive={isActive}
                       getCurrentTime={getCurrentTime}
+                      // Backend threshold is a 0-100 percent; the per-word
+                      // highlight compares against a 0-1 ratio. Keep them in
+                      // sync so highlights match the backend "needs review"
+                      // list even under an env override.
+                      lowConfidenceThreshold={
+                        job.accuracy
+                          ? job.accuracy.confidenceThreshold / 100
+                          : undefined
+                      }
                     />
                   );
                 })}
@@ -286,9 +308,17 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
 
             {/* Sidebar (right) — omitted when the backend hasn't returned
                 any confidence-scored segments (e.g. an older job predating
-                this feature). */}
+                this feature). Sticky so it stays in view while scrolling a
+                long transcript (potentially ~15,000 words): the `top`
+                offset clears the sticky audio player bar above it, and
+                `max-h`/`overflow-y-auto` keep the panel itself from
+                spilling past the bottom of the viewport if it ever has more
+                content than fits (e.g. many low-confidence segments). It
+                naturally un-sticks once its flex-row parent (as tall as the
+                transcript column) runs out, so it doesn't float past the
+                end of the transcript. */}
             {job.accuracy && (
-              <aside className="w-72 shrink-0 space-y-4">
+              <aside className="w-72 shrink-0 space-y-4 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto">
                 <TranscriptAccuracy accuracy={job.accuracy} />
                 {job.lowConfidenceSegments &&
                   job.lowConfidenceSegments.length > 0 && (

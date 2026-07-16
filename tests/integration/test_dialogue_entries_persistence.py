@@ -65,9 +65,13 @@ def session():
     with Session(engine) as s:
         yield s
     # Leave no trace between runs against a shared scratch database.
+    # TRUNCATE ... CASCADE (rather than ordered DELETEs) so any table with an
+    # FK onto these — e.g. correction_dataset_entry references both
+    # transcription_job and caller (see models.py) — is cleared too, instead
+    # of the cleanup failing with a foreign-key violation. CASCADE also keeps
+    # this robust as future tables add references to caller/transcription_job.
     with engine.begin() as conn:
-        conn.execute(sqlalchemy.text("DELETE FROM transcription_job"))
-        conn.execute(sqlalchemy.text("DELETE FROM caller"))
+        conn.execute(sqlalchemy.text("TRUNCATE TABLE transcription_job, caller CASCADE"))
     engine.dispose()
 
 

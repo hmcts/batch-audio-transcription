@@ -202,6 +202,60 @@ describe("TranscriptSegment", () => {
     expect(goodWord?.className).not.toContain("bg-orange-100");
   });
 
+  // DIAAT-235: the highlight threshold was lowered from 0.85 to 0.65 so
+  // correct-but-imperfectly-confident common words stop being flagged,
+  // while genuinely uncertain words still are.
+  it("does not flag a word between the old (0.85) and new (0.65) threshold as low-confidence", () => {
+    const wordsWithMidConfidence: SegmentType["words"] = WORDS.map((w) =>
+      w.text === "morning" ? { ...w, confidence: 0.75 } : w
+    );
+    const { container } = render(
+      <TranscriptSegment
+        segment={{ ...SEGMENT, words: wordsWithMidConfidence }}
+      />
+    );
+    const word = Array.from(
+      wordsParagraph(container).querySelectorAll("span")
+    ).find((el) => el.textContent?.trim() === "morning.");
+    expect(word?.className).not.toContain("bg-orange-100");
+  });
+
+  it("still flags a word below the new 0.65 threshold as low-confidence", () => {
+    const wordsWithLowConfidence: SegmentType["words"] = WORDS.map((w) =>
+      w.text === "morning" ? { ...w, confidence: 0.5 } : w
+    );
+    const { container } = render(
+      <TranscriptSegment
+        segment={{ ...SEGMENT, words: wordsWithLowConfidence }}
+      />
+    );
+    const word = Array.from(
+      wordsParagraph(container).querySelectorAll("span")
+    ).find((el) => el.textContent?.trim() === "morning.");
+    expect(word?.className).toContain("bg-orange-100");
+  });
+
+  // DIAAT-235: the per-word highlight cutoff follows the backend-derived
+  // threshold (passed as a 0-1 ratio) so highlights stay consistent with the
+  // "needs review" list even when ops override the threshold.
+  it("respects an explicit lowConfidenceThreshold prop over the default", () => {
+    // "morning" is 0.6 — below the default 0.65 (would normally highlight),
+    // but a 0.5 override should leave it un-highlighted.
+    const wordsMid: SegmentType["words"] = WORDS.map((w) =>
+      w.text === "morning" ? { ...w, confidence: 0.6 } : w
+    );
+    const { container } = render(
+      <TranscriptSegment
+        segment={{ ...SEGMENT, words: wordsMid }}
+        lowConfidenceThreshold={0.5}
+      />
+    );
+    const word = Array.from(
+      wordsParagraph(container).querySelectorAll("span")
+    ).find((el) => el.textContent?.trim() === "morning.");
+    expect(word?.className).not.toContain("bg-orange-100");
+  });
+
   it("highlights the word matching the current playback position", async () => {
     const { container } = render(
       <TranscriptSegment
@@ -540,6 +594,91 @@ describe("TranscriptSegment", () => {
 
       await user.unhover(historyItem as Element);
       expect(morningWord?.className).not.toContain("ring-amber-500");
+    });
+  });
+
+  describe("accept as-is", () => {
+    // A low-confidence segment (< 85%) that hasn't been edited — the only
+    // state in which the accept control is offered.
+    const LOW_CONF: SegmentType = {
+      ...SEGMENT,
+      confidence: 0.5,
+      words: WORDS,
+    };
+
+    it("does not show an accept button without an onAccept handler", () => {
+      render(<TranscriptSegment segment={LOW_CONF} />);
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    it("shows an accept button for a low-confidence, uncorrected segment", () => {
+      render(<TranscriptSegment segment={LOW_CONF} onAccept={vi.fn()} />);
+      expect(screen.getByLabelText(/accept segment as-is/i)).toBeDefined();
+    });
+
+    it("does not offer accept for a high-confidence segment", () => {
+      render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, confidence: 0.98, words: WORDS }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    it("does not offer accept once the segment has been corrected", () => {
+      render(
+        <TranscriptSegment
+          segment={{ ...LOW_CONF, correctedText: "fixed text" }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    it("does not offer accept once the segment has already been accepted", () => {
+      render(
+        <TranscriptSegment
+          segment={{ ...LOW_CONF, accepted: true }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    it("calls onAccept when the accept button is clicked", async () => {
+      const onAccept = vi.fn().mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      render(<TranscriptSegment segment={LOW_CONF} onAccept={onAccept} />);
+      await user.click(screen.getByLabelText(/accept segment as-is/i));
+      expect(onAccept).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows an Accepted badge and clears low-confidence highlighting once accepted", () => {
+      const { container } = render(
+        <TranscriptSegment
+          segment={{ ...LOW_CONF, accepted: true }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.getByText(/^Accepted$/)).toBeDefined();
+      // "morning." was the low-confidence word — after accepting it must no
+      // longer carry the orange highlight, without its text being altered.
+      const morningWord = Array.from(
+        wordsParagraph(container).querySelectorAll("span")
+      ).find((el) => el.textContent?.trim() === "morning.");
+      expect(morningWord).toBeDefined();
+      expect(morningWord?.className ?? "").not.toContain("bg-orange-100");
+    });
+
+    it("still highlights low-confidence words before acceptance", () => {
+      const { container } = render(
+        <TranscriptSegment segment={LOW_CONF} onAccept={vi.fn()} />
+      );
+      const morningWord = Array.from(
+        wordsParagraph(container).querySelectorAll("span")
+      ).find((el) => el.textContent?.trim() === "morning.");
+      expect(morningWord?.className).toContain("bg-orange-100");
     });
   });
 });

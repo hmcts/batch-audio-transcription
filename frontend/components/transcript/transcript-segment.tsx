@@ -19,7 +19,13 @@ import {
   displayRangeForWordRange,
 } from "@/lib/word-alignment";
 
-const LOW_CONFIDENCE_THRESHOLD = 0.85;
+// Kept in sync with the backend's DEFAULT_CONFIDENCE_THRESHOLD
+// (transcription_svc/audio/accuracy.py). Azure's per-word confidence often
+// sits in the high 70s/low 80s for correctly-recognised but short/common
+// words, purely from acoustic/language-model uncertainty rather than a real
+// error — highlighting at 0.85 buried genuine issues in that noise. 0.65
+// keeps highlighting meaningful without overwhelming reviewers (DIAAT-235).
+const LOW_CONFIDENCE_THRESHOLD = 0.65;
 
 type WordList = NonNullable<TranscriptSegmentType["words"]>;
 type WordCorrectionList = NonNullable<TranscriptSegmentType["wordCorrections"]>;
@@ -50,15 +56,21 @@ interface CorrectedRun {
 type Run = OriginalRun | CorrectedRun;
 
 // Groups tokens[from..to] (inclusive) into runs of consecutive
-// below/above-threshold confidence.
+// below/above-threshold confidence. When `suppressHighlighting` is set
+// (the segment has been accepted via the "accept all" action), every run
+// renders as if above-threshold — clearing the low-confidence highlighting
+// without touching the underlying text or per-word confidence data.
 function groupByConfidence(
   tokens: DisplayToken[],
   from: number,
-  to: number
+  to: number,
+  threshold: number,
+  suppressHighlighting = false
 ): OriginalRun[] {
   const runs: OriginalRun[] = [];
   for (let i = from; i <= to; i++) {
-    const lowConfidence = tokens[i].confidence < LOW_CONFIDENCE_THRESHOLD;
+    const lowConfidence =
+      !suppressHighlighting && tokens[i].confidence < threshold;
     const last = runs[runs.length - 1];
     if (last && last.lowConfidence === lowConfidence) {
       last.end = i;
@@ -115,7 +127,9 @@ function mergeOverlappingCorrectionRanges(
 
 function buildRuns(
   tokens: DisplayToken[],
-  corrections: WordCorrectionList | undefined
+  corrections: WordCorrectionList | undefined,
+  threshold: number,
+  suppressHighlighting = false
 ): Run[] {
   const correctionRanges = mergeOverlappingCorrectionRanges(
     (corrections ?? [])
@@ -142,7 +156,15 @@ function buildRuns(
   let cursor = 0;
   for (const c of correctionRanges) {
     if (c.start > cursor) {
-      runs.push(...groupByConfidence(tokens, cursor, c.start - 1));
+      runs.push(
+        ...groupByConfidence(
+          tokens,
+          cursor,
+          c.start - 1,
+          threshold,
+          suppressHighlighting
+        )
+      );
     }
     runs.push({
       kind: "corrected",
@@ -155,7 +177,15 @@ function buildRuns(
     cursor = c.end + 1;
   }
   if (cursor < tokens.length) {
-    runs.push(...groupByConfidence(tokens, cursor, tokens.length - 1));
+    runs.push(
+      ...groupByConfidence(
+        tokens,
+        cursor,
+        tokens.length - 1,
+        threshold,
+        suppressHighlighting
+      )
+    );
   }
   return runs;
 }
@@ -164,6 +194,10 @@ interface WordsProps {
   text: string;
   words: WordList;
   wordCorrections?: WordCorrectionList;
+  // Confidence cutoff (0-1) below which a word is highlighted for review.
+  // Threaded from the backend-derived threshold so per-word highlights stay
+  // consistent with the "needs review" list even under an env override.
+  lowConfidenceThreshold: number;
   isActive?: boolean;
   getCurrentTime?: () => number;
   // Corrects just the clicked run (a low-confidence phrase, or an existing
@@ -178,16 +212,22 @@ interface WordsProps {
   // range can be highlighted here to show the clerk exactly where that
   // change landed.
   highlightRange?: { start: number; end: number } | null;
+  // True once the segment has been accepted as-is — suppresses the
+  // low-confidence (orange) highlighting without touching the underlying
+  // text or per-word confidence data.
+  accepted?: boolean;
 }
 
 function Words({
   text,
   words,
   wordCorrections,
+  lowConfidenceThreshold,
   isActive,
   getCurrentTime,
   onCorrectRange,
   highlightRange,
+  accepted,
 }: WordsProps) {
   // The <audio> element's timeupdate event only fires a few times a
   // second — too coarse to track individual words, some of which are
@@ -288,7 +328,12 @@ function Words({
     );
   }
 
-  const runs = buildRuns(tokens, wordCorrections);
+  const runs = buildRuns(
+    tokens,
+    wordCorrections,
+    lowConfidenceThreshold,
+    accepted
+  );
   const highlightDisplayRange = highlightRange
     ? displayRangeForWordRange(tokens, highlightRange.start, highlightRange.end)
     : null;
@@ -448,6 +493,8 @@ function historyKindLabel(kind: string): string {
       return "Phrase correction";
     case "rollback":
       return "Rolled back";
+    case "accept_all":
+      return "Accepted as-is";
     default:
       return kind;
   }
@@ -567,11 +614,18 @@ interface TranscriptSegmentProps {
   ) => Promise<void> | void;
   onRollback?: () => Promise<void> | void;
   onRollbackToHistory?: (historyIndex: number) => Promise<void> | void;
+  // Marks the segment reviewed/accepted as-is (clears its low-confidence
+  // highlighting) without editing the text. Distinct from onCorrect.
+  onAccept?: () => Promise<void> | void;
   isActive?: boolean;
   // Reads live audio position on demand — only polled (via rAF) while
   // isActive, to highlight the word currently being spoken in sync with
   // playback without waiting on the coarser timeupdate event.
   getCurrentTime?: () => number;
+  // Confidence cutoff (0-1) below which a word is highlighted for review.
+  // Defaults to LOW_CONFIDENCE_THRESHOLD; callers should pass the
+  // backend-derived value so highlights match the "needs review" list.
+  lowConfidenceThreshold?: number;
 }
 
 export function TranscriptSegment({
@@ -581,12 +635,15 @@ export function TranscriptSegment({
   onCorrectRange,
   onRollback,
   onRollbackToHistory,
+  onAccept,
   isActive,
   getCurrentTime,
+  lowConfidenceThreshold = LOW_CONFIDENCE_THRESHOLD,
 }: TranscriptSegmentProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(segment.correctedText ?? segment.text);
   const [saving, setSaving] = useState(false);
+  const [accepting, setAccepting] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [highlightRange, setHighlightRange] = useState<{
     start: number;
@@ -603,10 +660,24 @@ export function TranscriptSegment({
     segment.correctedText !== undefined ||
     (segment.wordCorrections?.length ?? 0) > 0;
   const hasHistory = (segment.correctionHistory?.length ?? 0) > 0;
+  const accepted = segment.accepted ?? false;
+  // Only offer "accept as-is" while the segment still counts as needing
+  // review: it's low-confidence, hasn't been edited, and hasn't already
+  // been accepted. Accepting an already-clean segment would be a no-op.
+  const canAccept = !!onAccept && isLowConf && !hasCorrections && !accepted;
 
   const startEditing = () => {
     setDraft(displayText);
     setEditing(true);
+  };
+
+  const accept = async () => {
+    setAccepting(true);
+    try {
+      await onAccept?.();
+    } finally {
+      setAccepting(false);
+    }
   };
 
   const save = async () => {
@@ -687,29 +758,46 @@ export function TranscriptSegment({
               Edited
             </span>
           )}
-          {hasHistory && (
-            <button
-              type="button"
-              onClick={() => setShowHistory((v) => !v)}
-              aria-label="Show change history"
-              className={cn(
-                "text-muted-foreground hover:text-foreground",
-                !onCorrect && "ml-auto"
-              )}
-            >
-              <History className="size-3.5" />
-            </button>
+          {accepted && !hasCorrections && (
+            <span className="inline-flex items-center gap-1 text-xs font-medium px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
+              <Check className="size-3" />
+              Accepted
+            </span>
           )}
-          {onCorrect && !editing && (
-            <button
-              type="button"
-              onClick={startEditing}
-              aria-label="Edit segment text"
-              className="ml-auto text-muted-foreground hover:text-foreground"
-            >
-              <Pencil className="size-3.5" />
-            </button>
-          )}
+          <div className="ml-auto flex items-center gap-2">
+            {hasHistory && (
+              <button
+                type="button"
+                onClick={() => setShowHistory((v) => !v)}
+                aria-label="Show change history"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <History className="size-3.5" />
+              </button>
+            )}
+            {canAccept && !editing && (
+              <button
+                type="button"
+                onClick={accept}
+                disabled={accepting}
+                aria-label="Accept segment as-is"
+                title="Accept as-is — mark reviewed without editing"
+                className="text-emerald-600 hover:text-emerald-700 disabled:opacity-50"
+              >
+                <Check className="size-4" />
+              </button>
+            )}
+            {onCorrect && !editing && (
+              <button
+                type="button"
+                onClick={startEditing}
+                aria-label="Edit segment text"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <Pencil className="size-3.5" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Text / edit form */}
@@ -744,10 +832,12 @@ export function TranscriptSegment({
             text={segment.text}
             words={segment.words}
             wordCorrections={segment.wordCorrections}
+            lowConfidenceThreshold={lowConfidenceThreshold}
             isActive={isActive}
             getCurrentTime={getCurrentTime}
             onCorrectRange={onCorrectRange}
             highlightRange={highlightRange}
+            accepted={accepted}
           />
         ) : (
           <p className="text-sm leading-relaxed">{displayText}</p>

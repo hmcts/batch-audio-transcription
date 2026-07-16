@@ -37,6 +37,14 @@ class TestHasCorrections:
         )
         assert entry.has_corrections() is True
 
+    def test_false_when_only_accepted_not_corrected(self):
+        """accepted is a distinct concept from has_corrections() — an
+        accept-all action confirms the text as-is, it does not correct it."""
+        entry = DialogueEntry(
+            speaker="0", text="hello world", start_time=0, end_time=1, accepted=True
+        )
+        assert entry.has_corrections() is False
+
 
 class TestEffectiveText:
     def test_returns_original_text_when_uncorrected(self):

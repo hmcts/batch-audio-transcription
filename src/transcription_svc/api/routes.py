@@ -21,7 +21,7 @@ from sqlmodel import Session
 
 from transcription_svc.api.dependencies import get_caller
 from transcription_svc.audio import local_storage
-from transcription_svc.audio.accuracy import compute_accuracy
+from transcription_svc.audio.accuracy import DEFAULT_CONFIDENCE_THRESHOLD, compute_accuracy
 from transcription_svc.audio.azure_utils import AsyncAzureBlobManager
 from transcription_svc.audio.submission import submit_and_queue_batch_job
 from transcription_svc.config.settings import get_settings
@@ -256,6 +256,7 @@ class DialogueEntryResponse(BaseModel):
     correction_history: list[CorrectionEntryResponse] | None = None
     words: list[WordInfoResponse] | None = None
     alternatives: list[PhraseAlternativesResponse] | None = None
+    accepted: bool = False
 
 
 class NeedsReviewItemResponse(BaseModel):
@@ -344,6 +345,7 @@ def _to_dialogue_entries(job: TranscriptionJob) -> list[DialogueEntry] | None:
             correction_history=_entry_field(e, "correction_history"),
             words=_entry_field(e, "words"),
             alternatives=_entry_field(e, "alternatives"),
+            accepted=_entry_field(e, "accepted", False),
         )
         for e in job.dialogue_entries
     ]
@@ -354,7 +356,14 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
     accuracy = None
     needs_review = None
     if entries is not None:
-        summary = compute_accuracy(entries)
+        # LOW_CONFIDENCE_THRESHOLD lets ops tune the review-highlighting
+        # cutoff per environment (e.g. via Key Vault) without a code change;
+        # unset (the common case) falls back to the code default. Use an
+        # explicit None check so an intentional 0.0 (flag nothing) is honoured
+        # rather than treated as unset. Settings validates the 0-1 range.
+        configured = get_settings().LOW_CONFIDENCE_THRESHOLD
+        threshold = configured if configured is not None else DEFAULT_CONFIDENCE_THRESHOLD
+        summary = compute_accuracy(entries, confidence_threshold=threshold)
         accuracy = AccuracyResponse(
             confidence_score=summary.confidence_score,
             words_transcribed=summary.words_transcribed,
@@ -435,6 +444,7 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
                 ]
                 if e.alternatives
                 else None,
+                accepted=e.accepted,
             )
             for e in entries
         ]
@@ -626,6 +636,7 @@ def _load_entry_for_correction(
         correction_history=_entry_field(raw, "correction_history"),
         words=_entry_field(raw, "words"),
         alternatives=_entry_field(raw, "alternatives"),
+        accepted=_entry_field(raw, "accepted", False),
     )
     return job, entry
 
@@ -827,12 +838,57 @@ async def rollback_segment(
     job, entry = _load_entry_for_correction(session, job_id, index, caller)
 
     previous_text = entry.effective_text()
-    if previous_text == entry.text:
+    if previous_text == entry.text and not entry.accepted:
         raise HTTPException(status_code=422, detail="Segment has no corrections to roll back")
 
     entry.corrected_text = None
     entry.word_corrections = None
     entry.correction_history = None
+    entry.accepted = False
+
+    _save_corrected_entry(session, job, index, entry)
+    return _to_response(job)
+
+
+@router.post("/jobs/{job_id}/segments/{index}/accept", response_model=JobResponse)
+async def accept_segment(
+    job_id: UUID,
+    index: int,
+    session: Session = Depends(get_session),
+    caller: Caller = Depends(get_caller),
+) -> JobResponse:
+    """Mark a segment as reviewed/accepted without editing its text.
+
+    Lets a clerk clear a low-confidence segment's "needs review" status by
+    confirming the transcribed text is correct as spoken, instead of having
+    to retype it verbatim just to satisfy has_corrections(). Recorded via
+    the same correction_history audit trail as a real edit — kind=
+    "accept_all" distinguishes it from an actual correction ("segment" /
+    "word_range") or a rollback. previous_text/new_text are identical since
+    nothing about the text changes.
+
+    Unlike correct_segment/correct_word_range, this never sets
+    corrected_text/word_corrections, so it never contributes to the
+    word-error-rate calculation in audio/accuracy.py (there is nothing to
+    compare against — no correction was made). needs_review filtering
+    additionally excludes entries with accepted=True (see compute_accuracy).
+    """
+    job, entry = _load_entry_for_correction(session, job_id, index, caller)
+
+    if entry.accepted:
+        raise HTTPException(status_code=422, detail="Segment has already been accepted")
+
+    current_text = entry.effective_text()
+    entry.accepted = True
+    entry.correction_history = [
+        *(entry.correction_history or []),
+        CorrectionEntry(
+            timestamp=datetime.now(UTC).isoformat(),
+            kind="accept_all",
+            previous_text=current_text,
+            new_text=current_text,
+        ),
+    ]
 
     _save_corrected_entry(session, job, index, entry)
     return _to_response(job)
