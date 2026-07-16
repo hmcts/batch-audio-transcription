@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { formatTime } from "@/lib/mock-data";
 import {
   buildModificationHistory,
@@ -41,7 +42,10 @@ export function ModificationHistoryTable({
   job,
   onSeekToSegment,
 }: ModificationHistoryTableProps) {
-  const rows = buildModificationHistory(job);
+  // Flatten + sort is O(n log n); memoise so frequent parent re-renders
+  // (e.g. audio-position updates on the transcript page) don't re-sort a
+  // potentially long transcript's whole history on every frame.
+  const rows = useMemo(() => buildModificationHistory(job), [job]);
 
   if (rows.length === 0) {
     return (
@@ -81,6 +85,10 @@ export function ModificationHistoryTable({
                 // actions can share a timestamp+segment), so compose a key
                 // from the position within the deterministically-sorted list.
                 key={`${row.timestamp}-${row.segmentIndex}-${index}`}
+                // Mouse convenience only — clicking anywhere on the row seeks.
+                // Keyboard/assistive-tech users get a real <button> in the
+                // segment cell instead (adding role/tabIndex to <tr> itself
+                // would destroy its table-row semantics for the cells within).
                 onClick={
                   seekable
                     ? () => onSeekToSegment(row.segmentStartTime)
@@ -96,9 +104,26 @@ export function ModificationHistoryTable({
                   {formatTimestamp(row.timestamp)}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap">
-                  <span className="font-medium">
-                    Segment {row.segmentNumber}
-                  </span>
+                  {seekable ? (
+                    <button
+                      type="button"
+                      // Same seek as the row click; stop propagation so the
+                      // row's onClick doesn't also fire (harmless, but avoids
+                      // a duplicate seek call).
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSeekToSegment(row.segmentStartTime);
+                      }}
+                      title="Jump to this segment"
+                      className="font-medium text-primary hover:underline text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded"
+                    >
+                      Segment {row.segmentNumber}
+                    </button>
+                  ) : (
+                    <span className="font-medium">
+                      Segment {row.segmentNumber}
+                    </span>
+                  )}
                   <span className="block text-xs text-muted-foreground">
                     {row.speaker} · {formatTime(row.segmentStartTime)}
                   </span>

@@ -87,8 +87,13 @@ export function buildModificationHistory(
   });
 
   rows.sort((a, b) => {
-    const byTime = toEpoch(b.row.timestamp) - toEpoch(a.row.timestamp);
-    if (byTime !== 0) return byTime;
+    const ta = toEpoch(a.row.timestamp);
+    const tb = toEpoch(b.row.timestamp);
+    // Explicit comparisons (not subtraction) so two unparseable timestamps —
+    // both -Infinity — tie to 0 and fall through to the deterministic
+    // tie-break, rather than producing NaN (-Inf - -Inf) and unstable order.
+    if (ta > tb) return -1; // newest first
+    if (ta < tb) return 1;
     if (a.row.segmentIndex !== b.row.segmentIndex) {
       return a.row.segmentIndex - b.row.segmentIndex;
     }

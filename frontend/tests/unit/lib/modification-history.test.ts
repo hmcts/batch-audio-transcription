@@ -181,6 +181,39 @@ describe("buildModificationHistory", () => {
     ]);
   });
 
+  it("orders deterministically when timestamps are unparseable (no NaN comparator)", () => {
+    const rows = buildModificationHistory(
+      job({
+        segments: [
+          segment({
+            id: "s1",
+            correctionHistory: [
+              {
+                timestamp: "not-a-date",
+                kind: "segment",
+                previousText: "1",
+                newText: "2",
+              },
+            ],
+          }),
+          segment({
+            id: "s2",
+            correctionHistory: [
+              {
+                timestamp: "also-bad",
+                kind: "segment",
+                previousText: "3",
+                newText: "4",
+              },
+            ],
+          }),
+        ],
+      })
+    );
+    // Both unparseable -> tie on time, fall through to segment order.
+    expect(rows.map((r) => r.segmentNumber)).toEqual([1, 2]);
+  });
+
   it("uses the concise phrase diff for word-range corrections", () => {
     const [row] = buildModificationHistory(
       job({

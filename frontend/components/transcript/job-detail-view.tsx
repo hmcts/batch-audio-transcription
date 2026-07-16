@@ -11,7 +11,6 @@ import { TranscriptAccuracy } from "@/components/transcript/transcript-accuracy"
 import { TranscriptSegment } from "@/components/transcript/transcript-segment";
 import { Progress } from "@/components/ui/progress";
 import { apiPath } from "@/lib/base-path";
-import { buildModificationHistory } from "@/lib/modification-history";
 import type { TranscriptionJob } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -230,7 +229,14 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
       (max, s) => Math.max(max, s.startTime + s.duration),
       0
     );
-    const modificationCount = buildModificationHistory(job).length;
+    // Cheap count — just sum the per-segment history lengths. Avoids the
+    // full flatten+sort (buildModificationHistory) on every render, since
+    // this runs even while the section is collapsed and the transcript page
+    // re-renders frequently (audio position updates).
+    const modificationCount = job.segments.reduce(
+      (n, s) => n + (s.correctionHistory?.length ?? 0),
+      0
+    );
 
     return (
       <main className="min-h-screen bg-background">

@@ -145,6 +145,28 @@ describe("ModificationHistoryTable", () => {
     expect(onSeekToSegment).toHaveBeenCalledWith(65);
   });
 
+  it("exposes a keyboard-accessible segment button that seeks", async () => {
+    const onSeekToSegment = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ModificationHistoryTable
+        job={JOB_WITH_HISTORY}
+        onSeekToSegment={onSeekToSegment}
+      />
+    );
+    // Newest row first = segment 2 (accept-all, startTime 65).
+    const button = screen.getByRole("button", { name: /segment 2/i });
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    await user.keyboard("{Enter}");
+    expect(onSeekToSegment).toHaveBeenCalledWith(65);
+  });
+
+  it("renders plain segment labels (no buttons) without a seek handler", () => {
+    render(<ModificationHistoryTable job={JOB_WITH_HISTORY} />);
+    expect(screen.queryByRole("button", { name: /segment/i })).toBeNull();
+  });
+
   it("does not make rows clickable without a seek handler", async () => {
     const user = userEvent.setup();
     render(<ModificationHistoryTable job={JOB_WITH_HISTORY} />);
