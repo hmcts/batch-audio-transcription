@@ -35,7 +35,7 @@ const JOB_1_SEGMENTS: TranscriptSegment[] = [
     text: "Good morning, Judge. My name is Adeyemi, of counsel, instructed by Whitfield Law. I appear on behalf of the appellant.",
     startTime: 19,
     duration: 11,
-    confidence: 0.73,
+    confidence: 0.58,
     flaggedForReview: true,
   },
   {
@@ -75,7 +75,7 @@ const JOB_1_SEGMENTS: TranscriptSegment[] = [
     text: "I confirm that I can understand the interpreter clearly.",
     startTime: 64,
     duration: 8,
-    confidence: 0.78,
+    confidence: 0.61,
     flaggedForReview: true,
   },
 ];
@@ -90,29 +90,31 @@ const JOB_1_ACCURACY: TranscriptAccuracy = {
   correctedPercent: 12,
 };
 
+// All entries sit below the 65% threshold (see JOB_1_ACCURACY) — the
+// "needs review" list only contains genuinely low-confidence segments.
 const JOB_1_LOW_CONFIDENCE: LowConfidenceSegment[] = [
   {
     speaker: "Counsel",
     speakerColor: color("Counsel"),
-    confidence: 0.73,
+    confidence: 0.58,
     startTime: 19,
   },
   {
     speaker: "Appellant",
     speakerColor: color("Appellant"),
-    confidence: 0.78,
+    confidence: 0.61,
     startTime: 159,
   },
   {
     speaker: "Appellant",
     speakerColor: color("Appellant"),
-    confidence: 0.74,
+    confidence: 0.55,
     startTime: 178,
   },
   {
     speaker: "Appellant",
     speakerColor: color("Appellant"),
-    confidence: 0.71,
+    confidence: 0.52,
     startTime: 220,
   },
   {
@@ -124,7 +126,7 @@ const JOB_1_LOW_CONFIDENCE: LowConfidenceSegment[] = [
   {
     speaker: "Appellant",
     speakerColor: color("Appellant"),
-    confidence: 0.8,
+    confidence: 0.64,
     startTime: 264,
   },
 ];
@@ -189,7 +191,7 @@ export const MOCK_JOBS: TranscriptionJob[] = [
       {
         speaker: "Counsel",
         speakerColor: color("Counsel"),
-        confidence: 0.81,
+        confidence: 0.6,
         startTime: 88,
       },
     ],
