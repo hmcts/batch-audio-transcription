@@ -332,6 +332,83 @@ describe("acceptSegment", () => {
   });
 });
 
+describe("alternatives mapping (DIAAT-233)", () => {
+  it("maps snake_case nBest alternatives onto the segment", async () => {
+    mockFetchOnce({
+      ...BACKEND_JOB,
+      dialogue_entries: [
+        {
+          speaker: "Speaker 0",
+          text: "Hello world.",
+          start_time: 0,
+          end_time: 2.5,
+          alternatives: [
+            {
+              start_word_index: 0,
+              end_word_index: 1,
+              candidates: [
+                {
+                  text: "Hello world.",
+                  confidence: 0.564,
+                  lexical: "hello world",
+                },
+                { text: "hello worm", confidence: 0.5, lexical: "hello worm" },
+                { text: "hello word", confidence: null, lexical: null },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    const job = await getJob(BACKEND_JOB.job_id);
+    const alternatives = job?.segments?.[0].alternatives;
+    expect(alternatives).toHaveLength(1);
+    expect(alternatives?.[0].startWordIndex).toBe(0);
+    expect(alternatives?.[0].endWordIndex).toBe(1);
+    expect(alternatives?.[0].candidates.map((c) => c.text)).toEqual([
+      "Hello world.",
+      "hello worm",
+      "hello word",
+    ]);
+    // A null backend confidence/lexical becomes undefined, never 0/"".
+    expect(alternatives?.[0].candidates[2].confidence).toBeUndefined();
+    expect(alternatives?.[0].candidates[2].lexical).toBeUndefined();
+  });
+
+  it("carries a missing word-range through as undefined indices", async () => {
+    mockFetchOnce({
+      ...BACKEND_JOB,
+      dialogue_entries: [
+        {
+          speaker: "Speaker 0",
+          text: "Hello world.",
+          start_time: 0,
+          end_time: 2.5,
+          alternatives: [
+            {
+              start_word_index: null,
+              end_word_index: null,
+              candidates: [{ text: "Hello world." }, { text: "hello worm" }],
+            },
+          ],
+        },
+      ],
+    });
+
+    const job = await getJob(BACKEND_JOB.job_id);
+    const group = job?.segments?.[0].alternatives?.[0];
+    expect(group?.startWordIndex).toBeUndefined();
+    expect(group?.endWordIndex).toBeUndefined();
+  });
+
+  it("leaves alternatives undefined when the backend omits them", async () => {
+    mockFetchOnce(BACKEND_JOB);
+    const job = await getJob(BACKEND_JOB.job_id);
+    expect(job?.segments?.[0].alternatives).toBeUndefined();
+  });
+});
+
 describe("colorForSpeaker", () => {
   it("is deterministic for the same speaker id", () => {
     expect(colorForSpeaker("0")).toBe(colorForSpeaker("0"));

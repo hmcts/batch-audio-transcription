@@ -8,8 +8,10 @@ import {
   RotateCcw,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
+import { LowConfidencePopup } from "@/components/transcript/low-confidence-popup";
 import { Button } from "@/components/ui/button";
+import { diagnoseLowConfidenceWord } from "@/lib/alternatives";
 import { confidencePercent, formatTime } from "@/lib/mock-data";
 import { historyKindLabel } from "@/lib/modification-history";
 import type { TranscriptSegment as TranscriptSegmentType } from "@/lib/types";
@@ -195,6 +197,10 @@ interface WordsProps {
   text: string;
   words: WordList;
   wordCorrections?: WordCorrectionList;
+  // Azure's nBest alternate readings for this entry (DIAAT-232), used to
+  // explain a hovered low-confidence word (DIAAT-233). Undefined when Azure
+  // returned only the top reading.
+  alternatives?: TranscriptSegmentType["alternatives"];
   // Confidence cutoff (0-1) below which a word is highlighted for review.
   // Threaded from the backend-derived threshold so per-word highlights stay
   // consistent with the "needs review" list even under an env override.
@@ -223,6 +229,7 @@ function Words({
   text,
   words,
   wordCorrections,
+  alternatives,
   lowConfidenceThreshold,
   isActive,
   getCurrentTime,
@@ -244,6 +251,10 @@ function Words({
   } | null>(null);
   const [rangeDraft, setRangeDraft] = useState("");
   const [savingRange, setSavingRange] = useState(false);
+  // Which low-confidence run's explanatory popup is currently open (keyed by
+  // the run's start display-token index), driven purely by hover/focus.
+  const [hoveredRun, setHoveredRun] = useState<number | null>(null);
+  const popupBaseId = useId();
 
   const tokens = useMemo(
     () => alignWordsToDisplayTokens(text, words),
@@ -435,6 +446,22 @@ function Words({
         const wordStart = tokens[run.start].startWordIndex;
         const wordEnd = tokens[run.end].endWordIndex;
 
+        // The single weakest lexical word in the run drives the flag — use it
+        // both to key into the alternatives lookup and as the representative
+        // confidence shown in the popup.
+        let worstWordIndex = wordStart;
+        for (let i = wordStart + 1; i <= wordEnd; i++) {
+          if (words[i].confidence < words[worstWordIndex].confidence) {
+            worstWordIndex = i;
+          }
+        }
+        const diagnosis = diagnoseLowConfidenceWord(
+          { words, alternatives },
+          worstWordIndex
+        );
+        const isPopupOpen = hoveredRun === run.start;
+        const popupId = `${popupBaseId}-lowconf-${run.start}`;
+
         return (
           <span
             key={run.start}
@@ -466,19 +493,34 @@ function Words({
                   }
                 : undefined
             }
+            onMouseEnter={() => setHoveredRun(run.start)}
+            onMouseLeave={() =>
+              setHoveredRun((current) =>
+                current === run.start ? null : current
+              )
+            }
+            onFocus={() => setHoveredRun(run.start)}
+            onBlur={() =>
+              setHoveredRun((current) =>
+                current === run.start ? null : current
+              )
+            }
             role={onCorrectRange ? "button" : undefined}
             tabIndex={onCorrectRange ? 0 : undefined}
-            title={
-              onCorrectRange
-                ? "Click to correct this low-confidence phrase"
-                : undefined
-            }
+            aria-describedby={isPopupOpen ? popupId : undefined}
             className={cn(
-              "rounded bg-orange-100 text-orange-900",
+              "relative rounded bg-orange-100 text-orange-900",
               onCorrectRange && "cursor-pointer hover:bg-orange-200"
             )}
           >
             {runTokens}
+            {isPopupOpen && (
+              <LowConfidencePopup
+                id={popupId}
+                confidence={diagnosis.wordConfidence}
+                alternativeCandidates={diagnosis.alternativeCandidates}
+              />
+            )}
           </span>
         );
       })}
@@ -818,6 +860,7 @@ export function TranscriptSegment({
             text={segment.text}
             words={segment.words}
             wordCorrections={segment.wordCorrections}
+            alternatives={segment.alternatives}
             lowConfidenceThreshold={lowConfidenceThreshold}
             isActive={isActive}
             getCurrentTime={getCurrentTime}
