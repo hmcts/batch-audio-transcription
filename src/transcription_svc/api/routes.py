@@ -280,6 +280,12 @@ class JobResponse(BaseModel):
     # identity per correction, so it cannot distinguish two people editing
     # under the same caller. In local dev this is always "local-dev".
     caller_name: str | None = None
+    # Run metadata (DIAAT-227): audio length, how long the transcription
+    # itself took, and which model/engine produced it. audio_duration is
+    # known from submission; the other two only once the job succeeds.
+    audio_duration_seconds: float | None = None
+    transcription_duration_seconds: float | None = None
+    model_identifier: str | None = None
 
 
 class JobListResponse(BaseModel):
@@ -434,6 +440,9 @@ def _to_response(job: TranscriptionJob, caller_name: str | None = None) -> JobRe
         error_message=job.error_message,
         metadata=job.metadata_,
         caller_name=caller_name,
+        audio_duration_seconds=job.audio_duration_seconds,
+        transcription_duration_seconds=job.transcription_duration_seconds,
+        model_identifier=job.model_identifier,
     )
 
 

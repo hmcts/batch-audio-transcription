@@ -9,6 +9,10 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { JobStatusBadge } from "@/components/job-status/job-status-badge";
+import {
+  hasRunMetadata,
+  JobMetadataPopover,
+} from "@/components/jobs-table/job-metadata-popover";
 import { Progress } from "@/components/ui/progress";
 import type { JobStatus, TranscriptionJob } from "@/lib/types";
 
@@ -128,9 +132,15 @@ export function JobsTable({
             >
               <td className="px-4 py-3 font-medium">{job.caseReference}</td>
               <td className="px-4 py-3 text-muted-foreground">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 min-w-0">
                   <FileAudio className="size-4 shrink-0" />
-                  <span className="truncate max-w-48">{job.audioFileName}</span>
+                  {hasRunMetadata(job) ? (
+                    <JobMetadataPopover job={job} />
+                  ) : (
+                    <span className="truncate max-w-48">
+                      {job.audioFileName}
+                    </span>
+                  )}
                 </div>
               </td>
               <td className="px-4 py-3 text-muted-foreground">

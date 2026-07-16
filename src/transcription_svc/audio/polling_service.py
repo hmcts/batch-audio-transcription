@@ -57,6 +57,54 @@ class _PendingJob:
     metadata_: dict
     webhook_secret: str
     audio_blob_path: str | None = None
+    locale: str = "en-GB"
+    created_datetime: datetime | None = None
+
+
+def _extract_model_identifier(status_data: dict, locale: str) -> str:
+    """Best-effort model identifier from Azure's batch job status response.
+
+    Azure returns a `model.self` URL identifying the exact model resource
+    used (e.g. ".../speechtotext/v3.2/models/base/<guid>") once a job has
+    completed. Nothing in this service pins a specific custom model at
+    submission time, so when Azure omits the field (older API versions,
+    mocked responses) fall back to a locale-qualified label identifying the
+    engine in use.
+    """
+    model = status_data.get("model") or {}
+    model_self = model.get("self")
+    if isinstance(model_self, str) and model_self:
+        return model_self
+    return f"azure-speech-batch-transcription ({locale})"
+
+
+def _extract_transcription_duration_seconds(
+    status_data: dict, fallback_start: datetime | None
+) -> float | None:
+    """How long the transcription itself took to produce.
+
+    Prefers Azure's own `createdDateTime`/`lastActionDateTime` timestamps
+    (present on real batch job status responses) since they reflect Azure's
+    actual processing window. Falls back to wall-clock time since this
+    service first created the job record when Azure's timestamps are
+    missing or unparseable.
+    """
+    created = status_data.get("createdDateTime")
+    last_action = status_data.get("lastActionDateTime")
+    if isinstance(created, str) and isinstance(last_action, str):
+        try:
+            start = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            end = datetime.fromisoformat(last_action.replace("Z", "+00:00"))
+            duration = (end - start).total_seconds()
+            if duration >= 0:
+                return duration
+        except ValueError:
+            pass
+
+    if fallback_start is not None:
+        return (datetime.now(UTC) - fallback_start).total_seconds()
+
+    return None
 
 
 class BatchPollingService:
@@ -132,6 +180,8 @@ class BatchPollingService:
                         metadata_=row.metadata_,
                         webhook_secret=webhook_secret,
                         audio_blob_path=row.audio_blob_path,
+                        locale=row.locale,
+                        created_datetime=row.created_datetime,
                     )
                 )
             return result
@@ -145,7 +195,7 @@ class BatchPollingService:
                 if job.batch_job_status == BatchJobStatus.NOT_STARTED:
                     await asyncio.to_thread(self._update_status, job.id, BatchJobStatus.RUNNING)
             elif azure_status == BatchJobStatus.SUCCEEDED:
-                await self._handle_succeeded(job)
+                await self._handle_succeeded(job, status_data)
             elif azure_status == BatchJobStatus.FAILED:
                 await self._handle_failed(job, status_data)
 
@@ -157,7 +207,7 @@ class BatchPollingService:
         with Session(get_engine()) as session:
             update_job_batch_status(session, job_id, status)
 
-    async def _handle_succeeded(self, job: _PendingJob) -> None:
+    async def _handle_succeeded(self, job: _PendingJob, status_data: dict) -> None:
         try:
             dialogue_entries = await get_batch_results(
                 job.batch_job_url, transcription_job_id=job.id
@@ -175,8 +225,18 @@ class BatchPollingService:
 
         processed_entries = process_speakers(dialogue_entries)
 
+        model_identifier = _extract_model_identifier(status_data, job.locale)
+        transcription_duration_seconds = _extract_transcription_duration_seconds(
+            status_data, job.created_datetime
+        )
+
         await asyncio.to_thread(
-            self._save_results, job.id, processed_entries, BatchJobStatus.SUCCEEDED
+            self._save_results,
+            job.id,
+            processed_entries,
+            BatchJobStatus.SUCCEEDED,
+            transcription_duration_seconds,
+            model_identifier,
         )
 
         await self._dispatch_success(job, processed_entries)
@@ -219,9 +279,23 @@ class BatchPollingService:
             logger.warning("Could not delete batch job %s: %s", job.batch_job_url, exc)
             await asyncio.to_thread(self._record_cleanup_failure, job.id, str(exc))
 
-    def _save_results(self, job_id, entries, batch_status) -> None:
+    def _save_results(
+        self,
+        job_id,
+        entries,
+        batch_status,
+        transcription_duration_seconds=None,
+        model_identifier=None,
+    ) -> None:
         with Session(get_engine()) as session:
-            save_job_results(session, job_id, entries, batch_status)
+            save_job_results(
+                session,
+                job_id,
+                entries,
+                batch_status,
+                transcription_duration_seconds=transcription_duration_seconds,
+                model_identifier=model_identifier,
+            )
 
     def _record_error(self, job_id, error_msg) -> None:
         with Session(get_engine()) as session:

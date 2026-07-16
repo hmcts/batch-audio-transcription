@@ -176,6 +176,9 @@ export const MOCK_JOBS: TranscriptionJob[] = [
     segments: JOB_1_SEGMENTS,
     accuracy: JOB_1_ACCURACY,
     lowConfidenceSegments: JOB_1_LOW_CONFIDENCE,
+    audioDurationSeconds: 1920,
+    transcriptionDurationSeconds: 187,
+    modelIdentifier: "azure-speech-batch-transcription (en-GB)",
   },
   {
     id: "job-ea11042-2025",
@@ -195,6 +198,9 @@ export const MOCK_JOBS: TranscriptionJob[] = [
         startTime: 88,
       },
     ],
+    audioDurationSeconds: 1932,
+    transcriptionDurationSeconds: 154,
+    modelIdentifier: "azure-speech-batch-transcription (en-GB)",
   },
   {
     id: "job-rp00331-2026",
@@ -203,6 +209,7 @@ export const MOCK_JOBS: TranscriptionJob[] = [
     audioFileName: "RP_00331_2026_hearing.mp3",
     uploadedAt: "2026-06-30T08:00:00Z",
     status: "FAILED",
+    audioDurationSeconds: 2401,
   },
 ];
 
@@ -214,6 +221,24 @@ export function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+// Human-readable duration for run metadata (audio length, transcription
+// time) — e.g. "1h 5m 3s", "12m 34s", "8s". Unlike formatTime's mm:ss (built
+// for a scrubber alongside playback), this reads naturally in a popover with
+// no visual timeline for context, and covers audio far longer than an hour.
+export function formatDuration(seconds: number | undefined): string {
+  if (seconds === undefined || Number.isNaN(seconds)) return "—";
+  const total = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+
+  const parts: string[] = [];
+  if (hours > 0) parts.push(`${hours}h`);
+  if (hours > 0 || minutes > 0) parts.push(`${minutes}m`);
+  parts.push(`${secs}s`);
+  return parts.join(" ");
 }
 
 export function confidencePercent(confidence: number): number {

@@ -55,6 +55,9 @@ const BACKEND_JOB = {
     tribunal: "First-tier Tribunal — Immigration and Asylum Chamber",
     audio_file_name: "hearing.wav",
   },
+  audio_duration_seconds: 754.2,
+  transcription_duration_seconds: 41.8,
+  model_identifier: "https://eastus.example.com/models/base/xyz",
 };
 
 describe("listJobs", () => {
@@ -74,6 +77,34 @@ describe("listJobs", () => {
     });
     expect(jobs[0].segments).toHaveLength(2);
     expect(jobs[0].segments?.[0].speaker).toBe("Speaker 0");
+  });
+
+  it("maps run metadata (audio duration, transcription duration, model)", async () => {
+    mockFetchOnce({ jobs: [BACKEND_JOB] });
+
+    const jobs = await listJobs();
+
+    expect(jobs[0].audioDurationSeconds).toBe(754.2);
+    expect(jobs[0].transcriptionDurationSeconds).toBe(41.8);
+    expect(jobs[0].modelIdentifier).toBe(
+      "https://eastus.example.com/models/base/xyz"
+    );
+  });
+
+  it("leaves run metadata undefined when the backend hasn't populated it yet", async () => {
+    const pendingJob = {
+      ...BACKEND_JOB,
+      status: "submitted",
+      transcription_duration_seconds: null,
+      model_identifier: null,
+    };
+    mockFetchOnce({ jobs: [pendingJob] });
+
+    const jobs = await listJobs();
+
+    expect(jobs[0].audioDurationSeconds).toBe(754.2);
+    expect(jobs[0].transcriptionDurationSeconds).toBeUndefined();
+    expect(jobs[0].modelIdentifier).toBeUndefined();
   });
 
   it("sends the bearer token from TRANSCRIPTION_API_KEY", async () => {

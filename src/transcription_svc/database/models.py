@@ -223,6 +223,12 @@ class TranscriptionJob(BaseTable, table=True):
     audio_duration_seconds: float | None = Field(default=None)
     audio_blob_path: str | None = Field(default=None)
 
+    # Run metadata (DIAAT-227) — populated once the job reaches a terminal
+    # state so the dashboard can surface "how long did this take and which
+    # model produced it" without opening the transcript.
+    transcription_duration_seconds: float | None = Field(default=None)
+    model_identifier: str | None = Field(default=None)
+
     # Cleanup
     needs_cleanup: bool = Field(default=False)
     cleanup_failure_reason: str | None = Field(default=None)

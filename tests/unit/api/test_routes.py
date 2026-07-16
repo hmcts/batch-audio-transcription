@@ -630,6 +630,33 @@ class TestGetJob:
         finally:
             get_settings.cache_clear()
 
+    def test_includes_run_metadata_for_completed_job(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.audio_duration_seconds = 754.2
+        job.transcription_duration_seconds = 41.8
+        job.model_identifier = "https://eastus.example.com/models/base/xyz"
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        body = response.json()
+
+        assert body["audio_duration_seconds"] == 754.2
+        assert body["transcription_duration_seconds"] == 41.8
+        assert body["model_identifier"] == "https://eastus.example.com/models/base/xyz"
+
+    def test_run_metadata_defaults_to_null_before_completion(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUBMITTED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        body = response.json()
+
+        assert body["audio_duration_seconds"] is None
+        assert body["transcription_duration_seconds"] is None
+        assert body["model_identifier"] is None
+
 
 class TestCorrectSegment:
     def _patch_session(self, client, mocker):
