@@ -5,8 +5,13 @@
 // job is still processing. Best-effort: resolves to undefined (rather than
 // rejecting) if the browser can't decode the file or metadata never loads, so
 // a failure here never blocks the upload itself.
-
-const METADATA_TIMEOUT_MS = 10_000;
+//
+// For a valid audio file `loadedmetadata` fires almost immediately, so the
+// caller can safely await this before uploading. The timeout is deliberately
+// short: it only bites for files whose metadata never loads (corrupt or
+// unsupported), where we'd rather proceed with the upload promptly and simply
+// omit the duration than stall the user waiting on a value we won't get.
+const METADATA_TIMEOUT_MS = 3_000;
 
 export function readAudioDurationSeconds(
   file: Blob

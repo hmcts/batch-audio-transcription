@@ -64,7 +64,10 @@ export default function DashboardPage() {
         // Read duration in the browser before upload — the backend can't
         // determine it until Azure finishes, but the progress UI needs it up
         // front to show "Transcribing 2h 36m of audio" and estimate remaining
-        // time. Best-effort: undefined simply omits those extras.
+        // time. For a valid file this resolves near-instantly; it's bounded by
+        // a short internal timeout so a file whose metadata won't load can't
+        // meaningfully delay the upload. Best-effort: undefined simply omits
+        // those extras.
         const durationSeconds = await readAudioDurationSeconds(file);
         const formData = new FormData();
         formData.append("file", file);
