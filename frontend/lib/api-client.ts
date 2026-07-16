@@ -3,6 +3,7 @@ import type {
   CorrectionEntry,
   JobStatus,
   LowConfidenceSegment,
+  PhraseAlternatives,
   TranscriptAccuracy,
   TranscriptionJob,
   TranscriptSegment,
@@ -39,6 +40,18 @@ interface BackendCorrectionEntry {
   new_phrase?: string | null;
 }
 
+interface BackendNBestCandidate {
+  text: string;
+  confidence?: number | null;
+  lexical?: string | null;
+}
+
+interface BackendPhraseAlternatives {
+  start_word_index?: number | null;
+  end_word_index?: number | null;
+  candidates: BackendNBestCandidate[];
+}
+
 interface BackendDialogueEntry {
   speaker: string;
   text: string;
@@ -49,6 +62,7 @@ interface BackendDialogueEntry {
   word_corrections?: BackendWordCorrection[] | null;
   correction_history?: BackendCorrectionEntry[] | null;
   words?: BackendWordInfo[] | null;
+  alternatives?: BackendPhraseAlternatives[] | null;
   accepted?: boolean;
 }
 
@@ -226,6 +240,25 @@ function toCorrectionHistory(
   }));
 }
 
+function toAlternatives(
+  alternatives: BackendPhraseAlternatives[] | null | undefined
+): PhraseAlternatives[] | undefined {
+  if (!alternatives || alternatives.length === 0) return undefined;
+  return alternatives.map((group) => ({
+    startWordIndex: group.start_word_index ?? undefined,
+    endWordIndex: group.end_word_index ?? undefined,
+    // Candidate order is Azure-authoritative (index 0 = top reading) — map
+    // it through verbatim without re-sorting. `confidence` is genuinely
+    // optional on non-top candidates, so preserve its absence as undefined
+    // rather than coercing it to 0 (which would read as "0% confidence").
+    candidates: group.candidates.map((c) => ({
+      text: c.text,
+      confidence: c.confidence ?? undefined,
+      lexical: c.lexical ?? undefined,
+    })),
+  }));
+}
+
 function toSegments(
   entries: BackendDialogueEntry[] | null
 ): TranscriptSegment[] | undefined {
@@ -244,6 +277,7 @@ function toSegments(
     duration: Math.max(0, entry.end_time - entry.start_time),
     confidence: entry.confidence ?? undefined,
     words: toWords(entry.words),
+    alternatives: toAlternatives(entry.alternatives),
     accepted: entry.accepted ?? false,
   }));
 }

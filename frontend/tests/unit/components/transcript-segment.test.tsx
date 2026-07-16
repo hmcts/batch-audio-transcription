@@ -681,4 +681,153 @@ describe("TranscriptSegment", () => {
       expect(morningWord?.className).toContain("bg-orange-100");
     });
   });
+
+  describe("low-confidence hover popup (DIAAT-233)", () => {
+    // "morning" (index 1, confidence 0.6) is the low-confidence word.
+    // The alternatives group covers the whole phrase and offers one
+    // alternate reading beyond the top choice.
+    const WITH_ALTERNATIVES: SegmentType = {
+      ...SEGMENT,
+      words: WORDS,
+      alternatives: [
+        {
+          startWordIndex: 0,
+          endWordIndex: 6,
+          candidates: [
+            { text: "Good morning. We are on the record." },
+            { text: "Good mourning. We are on the record.", confidence: 0.48 },
+          ],
+        },
+      ],
+    };
+
+    function lowConfidenceRun(container: HTMLElement) {
+      const run = Array.from(
+        wordsParagraph(container).querySelectorAll("span")
+      ).find(
+        (el) =>
+          el.className.includes("bg-orange-100") &&
+          el.textContent?.includes("morning")
+      );
+      if (!run) throw new Error("low-confidence run not found");
+      return run;
+    }
+
+    it("does not render the popup until the word is hovered", () => {
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      expect(container.querySelector('[role="tooltip"]')).toBeNull();
+    });
+
+    it("shows the word's confidence score on hover", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      await user.hover(lowConfidenceRun(container));
+      const popup = screen.getByRole("tooltip");
+      expect(popup.textContent).toMatch(/60%/);
+    });
+
+    it("shows alternate readings Azure also heard on hover", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      await user.hover(lowConfidenceRun(container));
+      expect(screen.getByText(/azure also heard/i)).toBeDefined();
+      expect(screen.getByText(/Good mourning/)).toBeDefined();
+      expect(screen.getByText("48%")).toBeDefined();
+    });
+
+    it("dismisses the popup cleanly on mouse-out", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      const run = lowConfidenceRun(container);
+      await user.hover(run);
+      expect(screen.getByRole("tooltip")).toBeDefined();
+      await user.unhover(run);
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    it("degrades gracefully when the word has no alternative data", async () => {
+      const user = userEvent.setup();
+      // WORDS has per-word confidence but no alternatives at all.
+      const { container } = render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, words: WORDS }}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      await user.hover(lowConfidenceRun(container));
+      const popup = screen.getByRole("tooltip");
+      // Still shows the confidence and a short explanation, not an empty popup.
+      expect(popup.textContent).toMatch(/60%/);
+      expect(
+        screen.getByText(/suggested no alternative readings/i)
+      ).toBeDefined();
+      expect(screen.queryByText(/azure also heard/i)).toBeNull();
+    });
+
+    it("takes no action on hover — the inline editor never opens", async () => {
+      const onCorrectRange = vi.fn();
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={onCorrectRange}
+        />
+      );
+      await user.hover(lowConfidenceRun(container));
+      expect(screen.queryByRole("textbox")).toBeNull();
+      expect(onCorrectRange).not.toHaveBeenCalled();
+    });
+
+    it("still opens the inline editor on click (click-to-edit intact)", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      const run = lowConfidenceRun(container);
+      await user.hover(run);
+      await user.click(run);
+      expect(screen.getByRole("textbox")).toBeDefined();
+    });
+
+    it("shows the popup on keyboard focus and links it via aria-describedby", () => {
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      const run = lowConfidenceRun(container);
+      fireEvent.focus(run);
+      const popup = screen.getByRole("tooltip");
+      // The focused element describes itself with the popup, and focus stays
+      // on the run itself — the popup is not focusable, so it can't trap focus.
+      expect(run.getAttribute("aria-describedby")).toBe(popup.id);
+      expect(popup.querySelector("[tabindex]")).toBeNull();
+      fireEvent.blur(run);
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
 });
