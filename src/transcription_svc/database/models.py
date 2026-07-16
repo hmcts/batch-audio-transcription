@@ -56,10 +56,14 @@ class CorrectionEntry(SQLModel):
 
     A "rollback" is just another entry (kind="rollback") rather than a
     destructive edit, so the full history always stays intact and visible.
+    A clerk confirming a segment is correct as-is (without editing it) also
+    logs an entry here (kind="accept_all") rather than inventing a separate
+    mechanism — previous_text/new_text are identical for that kind, since no
+    text actually changed; only DialogueEntry.accepted flips to True.
     """
 
     timestamp: str  # ISO 8601, set by the backend
-    kind: str  # "segment" | "word_range" | "rollback"
+    kind: str  # "segment" | "word_range" | "rollback" | "accept_all"
     previous_text: str  # effective *segment* text immediately before this change
     new_text: str  # effective *segment* text immediately after this change
     start_word_index: int | None = None  # set only for kind="word_range"
@@ -98,6 +102,13 @@ class DialogueEntry(SQLModel):
     # highlighting to live playback position. None if Azure didn't return
     # word-level detail for this phrase.
     words: list[WordInfo] | None = None
+    # Set by the "accept all" action — a clerk confirming a low-confidence
+    # segment is correct as transcribed, without editing its text. Deliberately
+    # independent of has_corrections()/corrected_text: accepting must not make
+    # this segment count towards the word-error-rate calculation in
+    # audio/accuracy.py (nothing was actually corrected), but it must still
+    # remove the segment from "needs review" (see compute_accuracy()).
+    accepted: bool = False
 
     def has_corrections(self) -> bool:
         return self.corrected_text is not None or bool(self.word_corrections)
@@ -116,6 +127,57 @@ class DialogueEntry(SQLModel):
             parts.append(" ".join(w.text for w in self.words[cursor:]))
             return " ".join(p for p in parts if p)
         return self.text
+
+
+class CorrectionDatasetEntry(BaseTable, table=True):
+    """A durable, queryable record of one clerk correction for future model training/eval.
+
+    Distinct from DialogueEntry.correction_history (the per-job, in-place
+    audit trail embedded in transcription_job.dialogue_entries): this table
+    exists specifically so the accumulated corpus of (original ASR text,
+    corrected text) pairs can later be exported wholesale — independent of
+    any single job's lifecycle — to fine-tune or evaluate transcription
+    models. One row per clerk correction (whole-segment or word-range);
+    rollbacks are not recorded here since they don't produce a new training
+    example.
+
+    *** COMPLIANCE NOTE — READ BEFORE ENABLING IN ANY REAL ENVIRONMENT ***
+    This table can capture real court-hearing transcript content (original
+    and corrected wording from live hearings). Retention period and any
+    anonymisation/redaction requirements for that content have NOT yet been
+    defined, and legal/compliance sign-off has NOT happened (see DIAAT-231
+    acceptance criteria #3). Writes to this table are gated behind
+    `Settings.CORRECTIONS_DATASET_EXPORT_ENABLED`, which defaults to False
+    for exactly this reason — do not set it to True in any environment that
+    handles real hearing content until:
+      1. a retention policy (how long rows are kept, and how/when they're
+         purged) is agreed, and
+      2. an anonymisation/redaction approach (if any is required) for real
+         hearing content is agreed,
+    both signed off by legal/compliance.
+    """
+
+    __tablename__ = "correction_dataset_entry"
+
+    job_id: UUID = Field(foreign_key="transcription_job.id", index=True)
+    caller_id: UUID = Field(foreign_key="caller.id", index=True)
+    segment_index: int
+    # "segment" | "word_range" — mirrors CorrectionEntry.kind, restricted to
+    # the two actions that produce a genuine (original, corrected) pair.
+    correction_kind: str
+    start_word_index: int | None = Field(default=None)
+    end_word_index: int | None = Field(default=None)
+    speaker: str
+    locale: str
+    # The lexical (Speech Batch / ASR-generated) text this correction
+    # replaced — always the original wording, never a previously-corrected
+    # value — paired with corrected_text to form a (source, target) example.
+    original_text: str
+    corrected_text: str
+    # Azure's phrase-level confidence (kind="segment") or the average
+    # per-word confidence across the corrected range (kind="word_range");
+    # None if Azure didn't return confidence for this phrase.
+    confidence: float | None = Field(default=None)
 
 
 class Caller(BaseTable, table=True):

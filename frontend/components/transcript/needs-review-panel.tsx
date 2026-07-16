@@ -11,7 +11,11 @@ interface NeedsReviewPanelProps {
 
 export function NeedsReviewPanel({
   items,
-  threshold = 85,
+  // Fallback only — in practice the backend always supplies its own
+  // confidence_threshold via accuracy.confidenceThreshold. Kept in sync with
+  // DEFAULT_CONFIDENCE_THRESHOLD in transcription_svc/audio/accuracy.py
+  // (DIAAT-235).
+  threshold = 65,
   onSeek,
 }: NeedsReviewPanelProps) {
   return (

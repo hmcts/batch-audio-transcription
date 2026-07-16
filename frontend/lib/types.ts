@@ -20,10 +20,12 @@ export interface WordCorrection {
 
 // One logged change to a segment's text — part of an append-only audit
 // trail. A "rollback" is just another entry (kind "rollback") rather than
-// a destructive edit, so the full history always stays visible.
+// a destructive edit, so the full history always stays visible. An
+// "accept_all" entry means a clerk confirmed the segment's text is correct
+// as transcribed without editing it — previousText/newText are identical.
 export interface CorrectionEntry {
   timestamp: string;
-  kind: "segment" | "word_range" | "rollback";
+  kind: "segment" | "word_range" | "rollback" | "accept_all";
   // Whole-segment text before/after — always present, needed to restore
   // state on a "roll back to before this" action.
   previousText: string;
@@ -58,6 +60,11 @@ export interface TranscriptSegment {
   // Per-word timing/confidence for the original text — undefined if Azure
   // didn't return word-level detail for this phrase.
   words?: Word[];
+  // Set once a clerk clicks "accept" to confirm this segment's text is
+  // correct as transcribed, without editing it. Clears the segment from
+  // "needs review" but — unlike correctedText/wordCorrections — never
+  // affects the word-error-rate calculation, since nothing was corrected.
+  accepted?: boolean;
 }
 
 export interface LowConfidenceSegment {

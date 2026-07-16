@@ -17,7 +17,15 @@ from dataclasses import dataclass
 from transcription_svc.audio.wer import aggregate_word_error_rate
 from transcription_svc.database.models import DialogueEntry
 
-DEFAULT_CONFIDENCE_THRESHOLD = 0.85
+# Azure's per-word confidence often sits in the high 70s/low 80s for
+# correctly-recognised but short/common words (e.g. "the", "this") purely
+# because of acoustic/language-model uncertainty in that instant, not because
+# the word is wrong. At 0.85 that noise dominates the needs-review list and
+# overwhelms reviewers. Genuinely uncertain recognitions (unclear audio,
+# real mishears) tend to fall well below that, so 0.65 keeps flagging
+# meaningful for review while cutting out the common-word noise (see
+# DIAAT-235).
+DEFAULT_CONFIDENCE_THRESHOLD = 0.65
 
 
 @dataclass(frozen=True)
@@ -61,6 +69,7 @@ def compute_accuracy(
         if e.confidence is not None
         and e.confidence < confidence_threshold
         and not e.has_corrections()
+        and not e.accepted
     ]
 
     wer = None
