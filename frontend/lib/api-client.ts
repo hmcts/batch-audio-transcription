@@ -73,7 +73,6 @@ interface BackendJob {
   status: string;
   created_at: string;
   updated_at: string | null;
-  audio_duration_seconds?: number | null;
   dialogue_entries: BackendDialogueEntry[] | null;
   accuracy: BackendAccuracy | null;
   needs_review: BackendNeedsReviewItem[] | null;
@@ -302,10 +301,6 @@ function toTranscriptionJob(job: BackendJob): TranscriptionJob {
         : undefined,
     status,
     progressPercent: PROGRESS_BY_STATUS[job.status] ?? 0,
-    audioDurationSeconds:
-      typeof job.audio_duration_seconds === "number"
-        ? job.audio_duration_seconds
-        : undefined,
     errorMessage: job.error_message ?? undefined,
     segments: toSegments(job.dialogue_entries),
     accuracy: toAccuracy(job.accuracy),

@@ -97,9 +97,6 @@ export interface TranscriptionJob {
   completedAt?: string;
   status: JobStatus;
   progressPercent?: number;
-  // Total duration of the source audio in seconds, when known — powers the
-  // "Transcribing 2h 36m of audio" message and the remaining-time estimate.
-  audioDurationSeconds?: number;
   errorMessage?: string;
   segments?: TranscriptSegment[];
   accuracy?: TranscriptAccuracy;

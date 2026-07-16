@@ -296,7 +296,6 @@ class JobResponse(BaseModel):
     status: str
     created_at: str
     updated_at: str | None = None
-    audio_duration_seconds: float | None = None
     dialogue_entries: list[DialogueEntryResponse] | None = None
     accuracy: AccuracyResponse | None = None
     needs_review: list[NeedsReviewItemResponse] | None = None
@@ -416,7 +415,6 @@ def _to_response(job: TranscriptionJob, caller_name: str | None = None) -> JobRe
         status=job.status.value,
         created_at=job.created_datetime.isoformat(),
         updated_at=job.updated_datetime.isoformat() if job.updated_datetime else None,
-        audio_duration_seconds=job.audio_duration_seconds,
         dialogue_entries=[
             DialogueEntryResponse(
                 speaker=e.speaker,
