@@ -28,11 +28,17 @@ from transcription_svc.database.models import (
     WordInfo,
 )
 
+# Bounded psycopg2 connect timeout so an unreachable Postgres fails fast
+# instead of stalling test *collection* on the module-level skip check below,
+# or hanging the run in the session fixture, for the full OS-default TCP
+# timeout (conftest.py defaults DATABASE_CONNECTION_STRING to localhost).
+_CONNECT_ARGS = {"connect_timeout": 2}
+
 
 def _db_available(url: str) -> bool:
     engine = None
     try:
-        engine = create_engine(url)
+        engine = create_engine(url, connect_args=_CONNECT_ARGS)
         with engine.connect():
             return True
     except Exception:
@@ -54,7 +60,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 def session():
-    engine = create_engine(_DB_URL)
+    engine = create_engine(_DB_URL, connect_args=_CONNECT_ARGS)
     SQLModel.metadata.create_all(engine)
     with Session(engine) as s:
         yield s

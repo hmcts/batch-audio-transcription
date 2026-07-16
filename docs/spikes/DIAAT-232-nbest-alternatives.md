@@ -159,7 +159,8 @@ Before this change the parser kept, from `nBest[0]` only: `display` (→ `text`)
 4. **API** (`api/routes.py`): `alternatives` round-trips out through
    `GET /jobs/{id}` (`PhraseAlternativesResponse` / `NBestCandidateResponse`)
    and is preserved when reconstructing entries for correction endpoints.
-5. **Migration** `005_dialogue_entries_gin_index.py`: `dialogue_entries` is
+5. **Migration** `006_dialogue_entries_gin_index.py` (revision 006):
+   `dialogue_entries` is
    schemaless JSONB, so no column change is needed to start storing the field
    (existing rows read back as `None`). The migration adds a GIN index on the
    column ahead of DIAAT-233/234 querying into the now-larger payload.
