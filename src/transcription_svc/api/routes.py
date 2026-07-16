@@ -30,6 +30,7 @@ from transcription_svc.database.interface import (
     get_job_by_id,
     get_job_by_idempotency_key,
     list_jobs_by_caller,
+    record_correction_dataset_entry,
 )
 from transcription_svc.database.models import (
     Caller,
@@ -675,6 +676,22 @@ async def correct_segment(
         ),
     ]
 
+    # Dataset copy for future model training/eval (DIAAT-231) — gated behind
+    # CORRECTIONS_DATASET_EXPORT_ENABLED, see record_correction_dataset_entry.
+    # original_text is entry.text (the never-mutated ASR output), not
+    # previous_text, so the training pair is always (ASR text, clerk text)
+    # rather than (previous correction, latest correction).
+    record_correction_dataset_entry(
+        session,
+        job=job,
+        segment_index=index,
+        correction_kind="segment",
+        original_text=entry.text,
+        corrected_text=body.corrected_text,
+        confidence=entry.confidence,
+        speaker=entry.speaker,
+    )
+
     _save_corrected_entry(session, job, index, entry)
     return _to_response(job)
 
@@ -757,6 +774,36 @@ async def correct_word_range(
             new_phrase=body.corrected_text,
         ),
     ]
+
+    # Dataset copy for future model training/eval (DIAAT-231) — gated behind
+    # CORRECTIONS_DATASET_EXPORT_ENABLED, see record_correction_dataset_entry.
+    # original_lexical_phrase is recomputed from entry.words (the never-
+    # mutated original words) rather than reusing previous_phrase, which may
+    # itself be a prior correction when the clerk is re-editing the same
+    # range — the dataset always wants (ASR text, latest clerk text).
+    original_lexical_phrase = " ".join(
+        w.text for w in entry.words[body.start_word_index : body.end_word_index + 1]
+    )
+    range_confidences = [
+        w.confidence
+        for w in entry.words[body.start_word_index : body.end_word_index + 1]
+        if w.confidence is not None
+    ]
+    range_confidence = (
+        sum(range_confidences) / len(range_confidences) if range_confidences else entry.confidence
+    )
+    record_correction_dataset_entry(
+        session,
+        job=job,
+        segment_index=index,
+        correction_kind="word_range",
+        original_text=original_lexical_phrase,
+        corrected_text=body.corrected_text,
+        confidence=range_confidence,
+        speaker=entry.speaker,
+        start_word_index=body.start_word_index,
+        end_word_index=body.end_word_index,
+    )
 
     _save_corrected_entry(session, job, index, entry)
     return _to_response(job)

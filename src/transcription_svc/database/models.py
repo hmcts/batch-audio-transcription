@@ -162,6 +162,57 @@ class DialogueEntry(SQLModel):
         return self.text
 
 
+class CorrectionDatasetEntry(BaseTable, table=True):
+    """A durable, queryable record of one clerk correction for future model training/eval.
+
+    Distinct from DialogueEntry.correction_history (the per-job, in-place
+    audit trail embedded in transcription_job.dialogue_entries): this table
+    exists specifically so the accumulated corpus of (original ASR text,
+    corrected text) pairs can later be exported wholesale — independent of
+    any single job's lifecycle — to fine-tune or evaluate transcription
+    models. One row per clerk correction (whole-segment or word-range);
+    rollbacks are not recorded here since they don't produce a new training
+    example.
+
+    *** COMPLIANCE NOTE — READ BEFORE ENABLING IN ANY REAL ENVIRONMENT ***
+    This table can capture real court-hearing transcript content (original
+    and corrected wording from live hearings). Retention period and any
+    anonymisation/redaction requirements for that content have NOT yet been
+    defined, and legal/compliance sign-off has NOT happened (see DIAAT-231
+    acceptance criteria #3). Writes to this table are gated behind
+    `Settings.CORRECTIONS_DATASET_EXPORT_ENABLED`, which defaults to False
+    for exactly this reason — do not set it to True in any environment that
+    handles real hearing content until:
+      1. a retention policy (how long rows are kept, and how/when they're
+         purged) is agreed, and
+      2. an anonymisation/redaction approach (if any is required) for real
+         hearing content is agreed,
+    both signed off by legal/compliance.
+    """
+
+    __tablename__ = "correction_dataset_entry"
+
+    job_id: UUID = Field(foreign_key="transcription_job.id", index=True)
+    caller_id: UUID = Field(foreign_key="caller.id", index=True)
+    segment_index: int
+    # "segment" | "word_range" — mirrors CorrectionEntry.kind, restricted to
+    # the two actions that produce a genuine (original, corrected) pair.
+    correction_kind: str
+    start_word_index: int | None = Field(default=None)
+    end_word_index: int | None = Field(default=None)
+    speaker: str
+    locale: str
+    # The lexical (Speech Batch / ASR-generated) text this correction
+    # replaced — always the original wording, never a previously-corrected
+    # value — paired with corrected_text to form a (source, target) example.
+    original_text: str
+    corrected_text: str
+    # Azure's phrase-level confidence (kind="segment") or the average
+    # per-word confidence across the corrected range (kind="word_range");
+    # None if Azure didn't return confidence for this phrase.
+    confidence: float | None = Field(default=None)
+
+
 class Caller(BaseTable, table=True):
     __tablename__ = "caller"
 

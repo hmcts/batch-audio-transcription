@@ -6,6 +6,7 @@ from sqlmodel import SQLModel
 
 from transcription_svc.database.models import (  # noqa: F401 — ensure models are registered
     Caller,
+    CorrectionDatasetEntry,
     TranscriptionJob,
 )
 
