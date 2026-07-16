@@ -10,11 +10,15 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useMemo, useState } from "react";
 import { LowConfidencePopup } from "@/components/transcript/low-confidence-popup";
+import { LowConfidenceResolveMenu } from "@/components/transcript/low-confidence-resolve-menu";
 import { Button } from "@/components/ui/button";
 import { diagnoseLowConfidenceWord } from "@/lib/alternatives";
 import { confidencePercent, formatTime } from "@/lib/mock-data";
 import { historyKindLabel } from "@/lib/modification-history";
-import type { TranscriptSegment as TranscriptSegmentType } from "@/lib/types";
+import type {
+  NBestCandidate,
+  TranscriptSegment as TranscriptSegmentType,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
   alignWordsToDisplayTokens,
@@ -215,6 +219,11 @@ interface WordsProps {
     endWordIndex: number,
     correctedText: string
   ) => Promise<void> | void;
+  // Whole-segment correction — used only as the fallback when applying a
+  // suggested alternative whose phrase group lost its word-range alignment
+  // during a speaker-turn merge (DIAAT-232 spike). Normally a suggestion
+  // applies via onCorrectRange over the group's word-range.
+  onCorrectSegment?: (correctedText: string) => Promise<void> | void;
   // Set while hovering a history entry (in lexical word indices), so its
   // range can be highlighted here to show the clerk exactly where that
   // change landed.
@@ -234,6 +243,7 @@ function Words({
   isActive,
   getCurrentTime,
   onCorrectRange,
+  onCorrectSegment,
   highlightRange,
   accepted,
 }: WordsProps) {
@@ -254,6 +264,12 @@ function Words({
   // Which low-confidence run's explanatory popup is currently open (keyed by
   // the run's start display-token index), driven purely by hover/focus.
   const [hoveredRun, setHoveredRun] = useState<number | null>(null);
+  // Which low-confidence run's click-to-resolve menu is open (keyed by the
+  // run's start display-token index). Distinct from hover: hover explains
+  // (informational), click resolves (opens this menu). Only ever set for a
+  // run that has alternatives — runs without them open Edit directly.
+  const [menuRun, setMenuRun] = useState<number | null>(null);
+  const [applyingCandidate, setApplyingCandidate] = useState(false);
   const popupBaseId = useId();
 
   const tokens = useMemo(
@@ -459,66 +475,134 @@ function Words({
           { words, alternatives },
           worstWordIndex
         );
-        const isPopupOpen = hoveredRun === run.start;
+        // Suggested alternatives only exist when a phrase group with a known
+        // word-range covers this word; when it does, matchedRange is present
+        // (they come from the same group). No alternatives is common (many
+        // phrases return a single candidate — DIAAT-232 spike), so in that
+        // case clicking skips the menu and opens Edit directly, preserving
+        // today's one-click-to-edit behaviour.
+        const hasAlternatives = diagnosis.alternativeCandidates.length > 0;
+        const isMenuOpen = menuRun === run.start;
+        // Hover popup (informational) and the resolve menu coexist, but never
+        // both on screen at once — suppress every hover popup while *any*
+        // resolve menu is open, so hovering another run can't overlap it.
+        const isPopupOpen = hoveredRun === run.start && menuRun === null;
         const popupId = `${popupBaseId}-lowconf-${run.start}`;
+        const menuId = `${popupBaseId}-resolve-${run.start}`;
+
+        const openResolve = () => {
+          // Don't start a second correction while one is mid-flight — the
+          // menu buttons disable themselves, but the underlying words stay
+          // clickable, and concurrent PATCHes aren't supported.
+          if (applyingCandidate) return;
+          if (hasAlternatives) {
+            // Toggle: clicking the highlighted word again closes the menu
+            // rather than churning it closed-then-open.
+            setMenuRun((current) => (current === run.start ? null : run.start));
+          } else {
+            startEditingRun(
+              run.start,
+              run.end,
+              wordStart,
+              wordEnd,
+              initialText
+            );
+          }
+        };
+
+        const editFromMenu = () => {
+          setMenuRun(null);
+          startEditingRun(run.start, run.end, wordStart, wordEnd, initialText);
+        };
+
+        const applyCandidate = async (candidate: NBestCandidate) => {
+          setApplyingCandidate(true);
+          try {
+            if (diagnosis.matchedRange) {
+              await onCorrectRange?.(
+                diagnosis.matchedRange.startWordIndex,
+                diagnosis.matchedRange.endWordIndex,
+                candidate.text
+              );
+            } else {
+              // Unreachable while alternatives come from diagnoseLowConfidenceWord
+              // (candidates only exist when the group has a word-range). Kept as
+              // the DIAAT-232 spike's prescribed whole-segment fallback for a
+              // range-less (merge-broken) group.
+              await onCorrectSegment?.(candidate.text);
+            }
+            setMenuRun(null);
+          } finally {
+            setApplyingCandidate(false);
+          }
+        };
 
         return (
-          <span
-            key={run.start}
-            onClick={
-              onCorrectRange
-                ? () =>
-                    startEditingRun(
-                      run.start,
-                      run.end,
-                      wordStart,
-                      wordEnd,
-                      initialText
-                    )
-                : undefined
-            }
-            onKeyDown={
-              onCorrectRange
-                ? (e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      startEditingRun(
-                        run.start,
-                        run.end,
-                        wordStart,
-                        wordEnd,
-                        initialText
-                      );
+          // Non-interactive positioning wrapper: the popup and resolve menu
+          // are siblings of the interactive trigger, never nested inside it,
+          // so interactive controls (the menu's buttons) don't live inside a
+          // role="button" element.
+          <span key={run.start} className="relative">
+            <span
+              onClick={onCorrectRange ? openResolve : undefined}
+              onKeyDown={
+                onCorrectRange
+                  ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openResolve();
+                      }
                     }
-                  }
-                : undefined
-            }
-            onMouseEnter={() => setHoveredRun(run.start)}
-            onMouseLeave={() =>
-              setHoveredRun((current) =>
-                current === run.start ? null : current
-              )
-            }
-            onFocus={() => setHoveredRun(run.start)}
-            onBlur={() =>
-              setHoveredRun((current) =>
-                current === run.start ? null : current
-              )
-            }
-            role={onCorrectRange ? "button" : undefined}
-            tabIndex={onCorrectRange ? 0 : undefined}
-            aria-describedby={isPopupOpen ? popupId : undefined}
-            className={cn(
-              "relative rounded bg-orange-100 text-orange-900",
-              onCorrectRange && "cursor-pointer hover:bg-orange-200"
-            )}
-          >
-            {runTokens}
+                  : undefined
+              }
+              onMouseEnter={() => setHoveredRun(run.start)}
+              onMouseLeave={() =>
+                setHoveredRun((current) =>
+                  current === run.start ? null : current
+                )
+              }
+              onFocus={() => setHoveredRun(run.start)}
+              onBlur={() =>
+                setHoveredRun((current) =>
+                  current === run.start ? null : current
+                )
+              }
+              role={onCorrectRange ? "button" : undefined}
+              tabIndex={onCorrectRange ? 0 : undefined}
+              aria-haspopup={
+                onCorrectRange && hasAlternatives ? "menu" : undefined
+              }
+              aria-expanded={
+                onCorrectRange && hasAlternatives ? isMenuOpen : undefined
+              }
+              aria-controls={
+                onCorrectRange && hasAlternatives && isMenuOpen
+                  ? menuId
+                  : undefined
+              }
+              aria-describedby={isPopupOpen ? popupId : undefined}
+              className={cn(
+                "rounded bg-orange-100 text-orange-900",
+                onCorrectRange && "cursor-pointer hover:bg-orange-200"
+              )}
+            >
+              {runTokens}
+            </span>
             {isPopupOpen && (
               <LowConfidencePopup
                 id={popupId}
                 confidence={diagnosis.wordConfidence}
                 alternativeCandidates={diagnosis.alternativeCandidates}
+              />
+            )}
+            {isMenuOpen && (
+              <LowConfidenceResolveMenu
+                id={menuId}
+                candidates={diagnosis.alternativeCandidates}
+                applying={applyingCandidate}
+                onEdit={editFromMenu}
+                onPickCandidate={applyCandidate}
+                onClose={() => setMenuRun(null)}
               />
             )}
           </span>
@@ -865,6 +949,7 @@ export function TranscriptSegment({
             isActive={isActive}
             getCurrentTime={getCurrentTime}
             onCorrectRange={onCorrectRange}
+            onCorrectSegment={onCorrect}
             highlightRange={highlightRange}
             accepted={accepted}
           />
