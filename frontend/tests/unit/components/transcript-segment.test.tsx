@@ -1087,12 +1087,15 @@ describe("TranscriptSegment", () => {
           onCorrectRange={onCorrectRange}
         />
       );
-      await user.click(lowConfidenceRun(container));
+      const run = lowConfidenceRun(container);
+      await user.click(run);
       expect(screen.getByRole("menu", { name: /resolve/i })).toBeDefined();
       await user.keyboard("{Escape}");
       expect(screen.queryByRole("menu")).toBeNull();
       expect(onCorrectRange).not.toHaveBeenCalled();
       expect(screen.queryByRole("textbox")).toBeNull();
+      // Focus returns to the trigger word so the clerk keeps their place.
+      expect(document.activeElement).toBe(run);
     });
 
     it("suppresses the informational hover popup while the resolve menu is open", async () => {

@@ -49,6 +49,9 @@ export function LowConfidenceResolveMenu({
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
+        // Return focus to the trigger word before the menu unmounts, so a
+        // keyboard user keeps their place in the transcript.
+        menuRef.current?.closest<HTMLElement>('[role="button"]')?.focus();
         onClose();
       }
     };
