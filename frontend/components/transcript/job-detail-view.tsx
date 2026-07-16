@@ -291,6 +291,15 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
                       onAccept={() => acceptSegment(index)}
                       isActive={isActive}
                       getCurrentTime={getCurrentTime}
+                      // Backend threshold is a 0-100 percent; the per-word
+                      // highlight compares against a 0-1 ratio. Keep them in
+                      // sync so highlights match the backend "needs review"
+                      // list even under an env override.
+                      lowConfidenceThreshold={
+                        job.accuracy
+                          ? job.accuracy.confidenceThreshold / 100
+                          : undefined
+                      }
                     />
                   );
                 })}

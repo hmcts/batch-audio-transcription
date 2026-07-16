@@ -202,6 +202,60 @@ describe("TranscriptSegment", () => {
     expect(goodWord?.className).not.toContain("bg-orange-100");
   });
 
+  // DIAAT-235: the highlight threshold was lowered from 0.85 to 0.65 so
+  // correct-but-imperfectly-confident common words stop being flagged,
+  // while genuinely uncertain words still are.
+  it("does not flag a word between the old (0.85) and new (0.65) threshold as low-confidence", () => {
+    const wordsWithMidConfidence: SegmentType["words"] = WORDS.map((w) =>
+      w.text === "morning" ? { ...w, confidence: 0.75 } : w
+    );
+    const { container } = render(
+      <TranscriptSegment
+        segment={{ ...SEGMENT, words: wordsWithMidConfidence }}
+      />
+    );
+    const word = Array.from(
+      wordsParagraph(container).querySelectorAll("span")
+    ).find((el) => el.textContent?.trim() === "morning.");
+    expect(word?.className).not.toContain("bg-orange-100");
+  });
+
+  it("still flags a word below the new 0.65 threshold as low-confidence", () => {
+    const wordsWithLowConfidence: SegmentType["words"] = WORDS.map((w) =>
+      w.text === "morning" ? { ...w, confidence: 0.5 } : w
+    );
+    const { container } = render(
+      <TranscriptSegment
+        segment={{ ...SEGMENT, words: wordsWithLowConfidence }}
+      />
+    );
+    const word = Array.from(
+      wordsParagraph(container).querySelectorAll("span")
+    ).find((el) => el.textContent?.trim() === "morning.");
+    expect(word?.className).toContain("bg-orange-100");
+  });
+
+  // DIAAT-235: the per-word highlight cutoff follows the backend-derived
+  // threshold (passed as a 0-1 ratio) so highlights stay consistent with the
+  // "needs review" list even when ops override the threshold.
+  it("respects an explicit lowConfidenceThreshold prop over the default", () => {
+    // "morning" is 0.6 — below the default 0.65 (would normally highlight),
+    // but a 0.5 override should leave it un-highlighted.
+    const wordsMid: SegmentType["words"] = WORDS.map((w) =>
+      w.text === "morning" ? { ...w, confidence: 0.6 } : w
+    );
+    const { container } = render(
+      <TranscriptSegment
+        segment={{ ...SEGMENT, words: wordsMid }}
+        lowConfidenceThreshold={0.5}
+      />
+    );
+    const word = Array.from(
+      wordsParagraph(container).querySelectorAll("span")
+    ).find((el) => el.textContent?.trim() === "morning.");
+    expect(word?.className).not.toContain("bg-orange-100");
+  });
+
   it("highlights the word matching the current playback position", async () => {
     const { container } = render(
       <TranscriptSegment

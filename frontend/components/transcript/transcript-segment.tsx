@@ -19,7 +19,13 @@ import {
   displayRangeForWordRange,
 } from "@/lib/word-alignment";
 
-const LOW_CONFIDENCE_THRESHOLD = 0.85;
+// Kept in sync with the backend's DEFAULT_CONFIDENCE_THRESHOLD
+// (transcription_svc/audio/accuracy.py). Azure's per-word confidence often
+// sits in the high 70s/low 80s for correctly-recognised but short/common
+// words, purely from acoustic/language-model uncertainty rather than a real
+// error — highlighting at 0.85 buried genuine issues in that noise. 0.65
+// keeps highlighting meaningful without overwhelming reviewers (DIAAT-235).
+const LOW_CONFIDENCE_THRESHOLD = 0.65;
 
 type WordList = NonNullable<TranscriptSegmentType["words"]>;
 type WordCorrectionList = NonNullable<TranscriptSegmentType["wordCorrections"]>;
@@ -58,12 +64,13 @@ function groupByConfidence(
   tokens: DisplayToken[],
   from: number,
   to: number,
+  threshold: number,
   suppressHighlighting = false
 ): OriginalRun[] {
   const runs: OriginalRun[] = [];
   for (let i = from; i <= to; i++) {
     const lowConfidence =
-      !suppressHighlighting && tokens[i].confidence < LOW_CONFIDENCE_THRESHOLD;
+      !suppressHighlighting && tokens[i].confidence < threshold;
     const last = runs[runs.length - 1];
     if (last && last.lowConfidence === lowConfidence) {
       last.end = i;
@@ -121,6 +128,7 @@ function mergeOverlappingCorrectionRanges(
 function buildRuns(
   tokens: DisplayToken[],
   corrections: WordCorrectionList | undefined,
+  threshold: number,
   suppressHighlighting = false
 ): Run[] {
   const correctionRanges = mergeOverlappingCorrectionRanges(
@@ -149,7 +157,13 @@ function buildRuns(
   for (const c of correctionRanges) {
     if (c.start > cursor) {
       runs.push(
-        ...groupByConfidence(tokens, cursor, c.start - 1, suppressHighlighting)
+        ...groupByConfidence(
+          tokens,
+          cursor,
+          c.start - 1,
+          threshold,
+          suppressHighlighting
+        )
       );
     }
     runs.push({
@@ -168,6 +182,7 @@ function buildRuns(
         tokens,
         cursor,
         tokens.length - 1,
+        threshold,
         suppressHighlighting
       )
     );
@@ -179,6 +194,10 @@ interface WordsProps {
   text: string;
   words: WordList;
   wordCorrections?: WordCorrectionList;
+  // Confidence cutoff (0-1) below which a word is highlighted for review.
+  // Threaded from the backend-derived threshold so per-word highlights stay
+  // consistent with the "needs review" list even under an env override.
+  lowConfidenceThreshold: number;
   isActive?: boolean;
   getCurrentTime?: () => number;
   // Corrects just the clicked run (a low-confidence phrase, or an existing
@@ -203,6 +222,7 @@ function Words({
   text,
   words,
   wordCorrections,
+  lowConfidenceThreshold,
   isActive,
   getCurrentTime,
   onCorrectRange,
@@ -308,7 +328,12 @@ function Words({
     );
   }
 
-  const runs = buildRuns(tokens, wordCorrections, accepted);
+  const runs = buildRuns(
+    tokens,
+    wordCorrections,
+    lowConfidenceThreshold,
+    accepted
+  );
   const highlightDisplayRange = highlightRange
     ? displayRangeForWordRange(tokens, highlightRange.start, highlightRange.end)
     : null;
@@ -597,6 +622,10 @@ interface TranscriptSegmentProps {
   // isActive, to highlight the word currently being spoken in sync with
   // playback without waiting on the coarser timeupdate event.
   getCurrentTime?: () => number;
+  // Confidence cutoff (0-1) below which a word is highlighted for review.
+  // Defaults to LOW_CONFIDENCE_THRESHOLD; callers should pass the
+  // backend-derived value so highlights match the "needs review" list.
+  lowConfidenceThreshold?: number;
 }
 
 export function TranscriptSegment({
@@ -609,6 +638,7 @@ export function TranscriptSegment({
   onAccept,
   isActive,
   getCurrentTime,
+  lowConfidenceThreshold = LOW_CONFIDENCE_THRESHOLD,
 }: TranscriptSegmentProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(segment.correctedText ?? segment.text);
@@ -802,6 +832,7 @@ export function TranscriptSegment({
             text={segment.text}
             words={segment.words}
             wordCorrections={segment.wordCorrections}
+            lowConfidenceThreshold={lowConfidenceThreshold}
             isActive={isActive}
             getCurrentTime={getCurrentTime}
             onCorrectRange={onCorrectRange}

@@ -1,6 +1,6 @@
 """Unit tests for accuracy/needs-review computation."""
 
-from transcription_svc.audio.accuracy import compute_accuracy
+from transcription_svc.audio.accuracy import DEFAULT_CONFIDENCE_THRESHOLD, compute_accuracy
 from transcription_svc.database.models import DialogueEntry
 
 
@@ -103,3 +103,24 @@ class TestComputeAccuracy:
         assert summary.words_transcribed == 0
         assert summary.needs_review == []
         assert summary.has_corrections is False
+
+    # DIAAT-235: the default threshold was lowered from 0.85 to reduce how
+    # many merely-common-but-correct words get flagged for review.
+    def test_default_threshold_is_lowered_to_reduce_review_noise(self):
+        assert DEFAULT_CONFIDENCE_THRESHOLD == 0.65
+
+    def test_word_above_new_default_threshold_is_not_flagged(self):
+        # 0.75 sits above the new 0.65 default but below the old 0.85 one —
+        # this is exactly the "correct common word, imperfect confidence"
+        # case the lowered threshold should stop flagging.
+        entries = [_entry(speaker="Judge", start=0.0, confidence=0.75)]
+        summary = compute_accuracy(entries)
+        assert summary.low_confidence_count == 0
+        assert summary.needs_review == []
+
+    def test_word_below_new_default_threshold_is_still_flagged(self):
+        entries = [_entry(speaker="Judge", start=0.0, confidence=0.5)]
+        summary = compute_accuracy(entries)
+        assert summary.low_confidence_count == 1
+        assert len(summary.needs_review) == 1
+        assert summary.needs_review[0].speaker == "Judge"
