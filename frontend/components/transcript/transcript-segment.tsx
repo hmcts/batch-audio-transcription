@@ -19,7 +19,13 @@ import {
   displayRangeForWordRange,
 } from "@/lib/word-alignment";
 
-const LOW_CONFIDENCE_THRESHOLD = 0.85;
+// Kept in sync with the backend's DEFAULT_CONFIDENCE_THRESHOLD
+// (transcription_svc/audio/accuracy.py). Azure's per-word confidence often
+// sits in the high 70s/low 80s for correctly-recognised but short/common
+// words, purely from acoustic/language-model uncertainty rather than a real
+// error — highlighting at 0.85 buried genuine issues in that noise. 0.65
+// keeps highlighting meaningful without overwhelming reviewers (DIAAT-235).
+const LOW_CONFIDENCE_THRESHOLD = 0.65;
 
 type WordList = NonNullable<TranscriptSegmentType["words"]>;
 type WordCorrectionList = NonNullable<TranscriptSegmentType["wordCorrections"]>;

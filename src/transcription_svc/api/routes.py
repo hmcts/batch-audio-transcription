@@ -21,7 +21,7 @@ from sqlmodel import Session
 
 from transcription_svc.api.dependencies import get_caller
 from transcription_svc.audio import local_storage
-from transcription_svc.audio.accuracy import compute_accuracy
+from transcription_svc.audio.accuracy import DEFAULT_CONFIDENCE_THRESHOLD, compute_accuracy
 from transcription_svc.audio.azure_utils import AsyncAzureBlobManager
 from transcription_svc.audio.submission import submit_and_queue_batch_job
 from transcription_svc.config.settings import get_settings
@@ -339,7 +339,11 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
     accuracy = None
     needs_review = None
     if entries is not None:
-        summary = compute_accuracy(entries)
+        # LOW_CONFIDENCE_THRESHOLD lets ops tune the review-highlighting
+        # cutoff per environment (e.g. via Key Vault) without a code change;
+        # unset (the common case) falls back to the code default.
+        threshold = get_settings().LOW_CONFIDENCE_THRESHOLD or DEFAULT_CONFIDENCE_THRESHOLD
+        summary = compute_accuracy(entries, confidence_threshold=threshold)
         accuracy = AccuracyResponse(
             confidence_score=summary.confidence_score,
             words_transcribed=summary.words_transcribed,

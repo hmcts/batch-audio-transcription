@@ -584,6 +584,40 @@ class TestGetJob:
         assert body["accuracy"] is None
         assert body["needs_review"] is None
 
+    # DIAAT-235: LOW_CONFIDENCE_THRESHOLD lets ops override the review
+    # threshold per environment without a code change; previously declared
+    # in Settings but never actually wired into the accuracy computation.
+    def test_low_confidence_threshold_setting_overrides_the_default(
+        self, client, as_caller, mocker, monkeypatch
+    ):
+        from transcription_svc.config.settings import get_settings
+
+        monkeypatch.setenv("LOW_CONFIDENCE_THRESHOLD", "0.9")
+        get_settings.cache_clear()
+        try:
+            job = _make_job(status=JobStatus.SUCCEEDED)
+            job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+            job.dialogue_entries = [
+                {
+                    "speaker": "0",
+                    "text": "hello there",
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    # Above the 0.65 code default but below the 0.9 override —
+                    # only flagged once the setting is actually applied.
+                    "confidence": 0.75,
+                }
+            ]
+            mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+            response = client.get(f"/api/v1/jobs/{job.id}")
+            body = response.json()
+
+            assert body["accuracy"]["confidence_threshold"] == 90.0
+            assert len(body["needs_review"]) == 1
+        finally:
+            get_settings.cache_clear()
+
 
 class TestCorrectSegment:
     def _patch_session(self, client, mocker):
