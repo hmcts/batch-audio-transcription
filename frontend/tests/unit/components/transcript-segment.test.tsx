@@ -882,6 +882,23 @@ describe("TranscriptSegment", () => {
       ).toBeDefined();
     });
 
+    it("toggles the menu closed when the highlighted word is clicked again", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      const run = lowConfidenceRun(container);
+      await user.click(run);
+      expect(screen.getByRole("menu", { name: /resolve/i })).toBeDefined();
+      // Clicking the same word again closes it (a toggle), rather than the
+      // outside-click churning it closed-then-open.
+      await user.click(run);
+      expect(screen.queryByRole("menu", { name: /resolve/i })).toBeNull();
+    });
+
     it("Edit from the menu opens the inline editor pre-filled with the run's text", async () => {
       const user = userEvent.setup();
       const { container } = render(

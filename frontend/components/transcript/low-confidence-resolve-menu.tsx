@@ -53,11 +53,18 @@ export function LowConfidenceResolveMenu({
       }
     };
     // pointerdown (not mousedown) so the menu also dismisses on touch/pen
-    // input, which never emits mouse events.
+    // input, which never emits mouse events. The menu is rendered *inside* the
+    // trigger word's span, so treat a click anywhere within that trigger
+    // (the highlighted word or the menu itself) as "inside" — otherwise
+    // clicking the word to toggle the menu would be seen as an outside click
+    // and fight the trigger's own toggle handler.
     const onPointerDown = (e: PointerEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        onClose();
-      }
+      const menuEl = menuRef.current;
+      if (!menuEl) return;
+      const trigger = menuEl.closest('[role="button"]');
+      const target = e.target as Node;
+      if ((trigger ?? menuEl).contains(target)) return;
+      onClose();
     };
     document.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("pointerdown", onPointerDown);

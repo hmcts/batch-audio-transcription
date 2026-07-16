@@ -496,7 +496,9 @@ function Words({
           // clickable, and concurrent PATCHes aren't supported.
           if (applyingCandidate) return;
           if (hasAlternatives) {
-            setMenuRun(run.start);
+            // Toggle: clicking the highlighted word again closes the menu
+            // rather than churning it closed-then-open.
+            setMenuRun((current) => (current === run.start ? null : run.start));
           } else {
             startEditingRun(
               run.start,
