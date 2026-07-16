@@ -59,8 +59,12 @@ _ENVIRONMENT = get_settings().ENVIRONMENT
 # DATABASE_CONNECTION_STRING at a real (staging/prod) database can't wipe it
 # even by accident — a non-test environment simply skips before any truncate.
 _IS_SCRATCH_ENV = _ENVIRONMENT in ("test", "local")
+# `and` short-circuits, so _db_available() (a bounded ~2s connect probe) is
+# only ever called in a scratch environment — a non-scratch environment
+# decides "skip" without opening any DB connection at collection time.
+_SHOULD_RUN = _IS_SCRATCH_ENV and _db_available(_DB_URL)
 pytestmark = pytest.mark.skipif(
-    not _IS_SCRATCH_ENV or not _db_available(_DB_URL),
+    not _SHOULD_RUN,
     reason=(
         "Live-DB round-trip test only runs against a scratch database "
         "(ENVIRONMENT in {test, local}) with a reachable Postgres"
