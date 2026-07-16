@@ -537,6 +537,18 @@ class TestGetJob:
         response = client.get(f"/api/v1/jobs/{job.id}")
         assert response.status_code == 200
 
+    def test_includes_owning_caller_name(self, client, as_caller, mocker):
+        # The modification-history table (DIAAT-230) uses caller_name as the
+        # "who made the change" attribution; every job response must carry it.
+        job = _make_job()
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        assert response.status_code == 200
+        # The as_caller fixture authenticates as "test-caller".
+        assert response.json()["caller_name"] == "test-caller"
+
     def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
         response = client.get(f"/api/v1/jobs/{uuid.uuid4()}")

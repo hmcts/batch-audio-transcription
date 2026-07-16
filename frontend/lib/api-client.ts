@@ -78,6 +78,7 @@ interface BackendJob {
   needs_review: BackendNeedsReviewItem[] | null;
   error_message: string | null;
   metadata: Record<string, unknown>;
+  caller_name?: string | null;
 }
 
 interface BackendJobList {
@@ -301,6 +302,7 @@ function toTranscriptionJob(job: BackendJob): TranscriptionJob {
     segments: toSegments(job.dialogue_entries),
     accuracy: toAccuracy(job.accuracy),
     lowConfidenceSegments: toLowConfidenceSegments(job.needs_review),
+    caller: job.caller_name ?? undefined,
   };
 }
 

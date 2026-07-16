@@ -1,16 +1,18 @@
 "use client";
 
-import { ChevronLeft } from "lucide-react";
+import { ChevronDown, ChevronLeft, History } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { JobStatusBadge } from "@/components/job-status/job-status-badge";
 import { AudioPlayerBar } from "@/components/transcript/audio-player-bar";
+import { ModificationHistoryTable } from "@/components/transcript/modification-history-table";
 import { NeedsReviewPanel } from "@/components/transcript/needs-review-panel";
 import { TranscriptAccuracy } from "@/components/transcript/transcript-accuracy";
 import { TranscriptSegment } from "@/components/transcript/transcript-segment";
 import { Progress } from "@/components/ui/progress";
 import { apiPath } from "@/lib/base-path";
 import type { TranscriptionJob } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -30,6 +32,7 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
   const [position, setPosition] = useState(0);
   const [audioDuration, setAudioDuration] = useState(0);
   const [audioAvailable, setAudioAvailable] = useState(true);
+  const [showModificationHistory, setShowModificationHistory] = useState(false);
 
   // A callback ref (rather than an effect) so listeners attach exactly when
   // the <audio> element mounts — which happens on first render if the job is
@@ -226,6 +229,14 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
       (max, s) => Math.max(max, s.startTime + s.duration),
       0
     );
+    // Cheap count — just sum the per-segment history lengths. Avoids the
+    // full flatten+sort (buildModificationHistory) on every render, since
+    // this runs even while the section is collapsed and the transcript page
+    // re-renders frequently (audio position updates).
+    const modificationCount = job.segments.reduce(
+      (n, s) => n + (s.correctionHistory?.length ?? 0),
+      0
+    );
 
     return (
       <main className="min-h-screen bg-background">
@@ -331,6 +342,46 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
               </aside>
             )}
           </div>
+
+          {/* Job-level modification history — every correction, rollback and
+              accept-all action across all segments in one auditable table
+              (DIAAT-230), so the whole transcript's edit history can be
+              scanned in one place rather than segment by segment. Collapsed
+              by default to keep the transcript the focus. */}
+          <section className="mt-8">
+            <button
+              type="button"
+              onClick={() => setShowModificationHistory((v) => !v)}
+              aria-expanded={showModificationHistory}
+              className="flex items-center gap-2 text-lg font-semibold hover:text-primary"
+            >
+              <History className="size-5" />
+              Modification history
+              <span className="text-sm font-normal text-muted-foreground">
+                ({modificationCount})
+              </span>
+              <ChevronDown
+                className={cn(
+                  "size-4 transition-transform",
+                  showModificationHistory && "rotate-180"
+                )}
+              />
+            </button>
+            {showModificationHistory && (
+              <div className="mt-3">
+                <p className="text-sm text-muted-foreground mb-3">
+                  All correction, rollback and accept-all actions taken on this
+                  transcript, newest first.
+                </p>
+                <ModificationHistoryTable
+                  job={job}
+                  onSeekToSegment={
+                    audioAvailable ? seekAndScrollToSegment : undefined
+                  }
+                />
+              </div>
+            )}
+          </section>
         </div>
       </main>
     );
