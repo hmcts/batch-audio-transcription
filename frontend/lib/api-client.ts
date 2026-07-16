@@ -49,6 +49,7 @@ interface BackendDialogueEntry {
   word_corrections?: BackendWordCorrection[] | null;
   correction_history?: BackendCorrectionEntry[] | null;
   words?: BackendWordInfo[] | null;
+  accepted?: boolean;
 }
 
 interface BackendAccuracy {
@@ -242,6 +243,7 @@ function toSegments(
     duration: Math.max(0, entry.end_time - entry.start_time),
     confidence: entry.confidence ?? undefined,
     words: toWords(entry.words),
+    accepted: entry.accepted ?? false,
   }));
 }
 
@@ -428,6 +430,18 @@ export async function rollbackSegment(
 ): Promise<TranscriptionJob> {
   const response = await backendFetch(
     `/api/v1/jobs/${jobId}/segments/${index}/rollback`,
+    { method: "POST" }
+  );
+  const body: BackendJob = await response.json();
+  return toTranscriptionJob(body);
+}
+
+export async function acceptSegment(
+  jobId: string,
+  index: number
+): Promise<TranscriptionJob> {
+  const response = await backendFetch(
+    `/api/v1/jobs/${jobId}/segments/${index}/accept`,
     { method: "POST" }
   );
   const body: BackendJob = await response.json();

@@ -948,6 +948,139 @@ class TestCorrectWordRange:
         mock_session.commit.assert_called_once()
 
 
+class TestAcceptSegment:
+    def _patch_session(self, client, mocker):
+        from transcription_svc.database.engine import get_session
+
+        mock_session = MagicMock()
+        client.app.dependency_overrides[get_session] = lambda: mock_session
+        return mock_session
+
+    def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
+        response = client.post(f"/api/v1/jobs/{uuid.uuid4()}/segments/0/accept")
+        assert response.status_code == 404
+
+    def test_returns_404_for_other_callers_job(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.uuid4()
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(f"/api/v1/jobs/{job.id}/segments/0/accept")
+        assert response.status_code == 404
+
+    def test_returns_422_when_job_not_succeeded(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUBMITTED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(f"/api/v1/jobs/{job.id}/segments/0/accept")
+        assert response.status_code == 422
+
+    def test_returns_404_for_out_of_range_index(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(f"/api/v1/jobs/{job.id}/segments/5/accept")
+        assert response.status_code == 404
+
+    def test_marks_segment_accepted_without_changing_text(self, client, as_caller, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.4,
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mock_session = self._patch_session(client, mocker)
+
+        try:
+            response = client.post(f"/api/v1/jobs/{job.id}/segments/0/accept")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        body = response.json()
+        entry = body["dialogue_entries"][0]
+        # Underlying text is never touched by an accept-all action.
+        assert entry["text"] == "the quick brown fox"
+        assert entry["corrected_text"] is None
+        assert entry["word_corrections"] is None
+        assert entry["accepted"] is True
+
+        # Recorded via the same correction_history mechanism as a real
+        # correction, but with a distinguishing kind and no actual change.
+        history = entry["correction_history"]
+        assert history[0]["kind"] == "accept_all"
+        assert history[0]["previous_text"] == "the quick brown fox"
+        assert history[0]["new_text"] == "the quick brown fox"
+
+        # An accept-all action is not a correction: it must not remove the
+        # segment from needs_review by way of has_corrections()/WER.
+        assert body["accuracy"]["has_corrections"] is False
+        assert body["accuracy"]["word_error_rate"] is None
+
+        # But it does clear the segment from the needs-review list.
+        assert body["needs_review"] == []
+        mock_session.commit.assert_called_once()
+
+    def test_returns_422_when_already_accepted(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.4,
+                "accepted": True,
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(f"/api/v1/jobs/{job.id}/segments/0/accept")
+        assert response.status_code == 422
+
+    def test_high_confidence_segment_not_in_needs_review_after_accept(
+        self, client, as_caller, mocker
+    ):
+        """Accepting a segment that was never low-confidence is harmless."""
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.99,
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        self._patch_session(client, mocker)
+
+        try:
+            response = client.post(f"/api/v1/jobs/{job.id}/segments/0/accept")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        assert response.json()["dialogue_entries"][0]["accepted"] is True
+
+
 class TestRollbackSegment:
     def _patch_session(self, client, mocker):
         from transcription_svc.database.engine import get_session
@@ -1048,6 +1181,48 @@ class TestRollbackSegment:
         assert entry["corrected_text"] is None
         assert entry["word_corrections"] is None
         assert entry["correction_history"] is None
+        mock_session.commit.assert_called_once()
+
+    def test_rolls_back_an_accepted_segment(self, client, as_caller, mocker):
+        """A hard reset also un-accepts a segment, restoring it to needs_review."""
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.4,
+                "accepted": True,
+                "correction_history": [
+                    {
+                        "timestamp": "2026-01-01T00:00:00+00:00",
+                        "kind": "accept_all",
+                        "previous_text": "the quick brown fox",
+                        "new_text": "the quick brown fox",
+                    }
+                ],
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mock_session = self._patch_session(client, mocker)
+
+        try:
+            response = client.post(f"/api/v1/jobs/{job.id}/segments/0/rollback")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        body = response.json()
+        entry = body["dialogue_entries"][0]
+        assert entry["accepted"] is False
+        assert entry["correction_history"] is None
+        assert body["needs_review"] == [
+            {"speaker": "0", "start_time": 0.0, "confidence": 0.4}
+        ]
         mock_session.commit.assert_called_once()
 
 

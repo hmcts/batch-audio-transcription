@@ -56,10 +56,14 @@ class CorrectionEntry(SQLModel):
 
     A "rollback" is just another entry (kind="rollback") rather than a
     destructive edit, so the full history always stays intact and visible.
+    A clerk confirming a segment is correct as-is (without editing it) also
+    logs an entry here (kind="accept_all") rather than inventing a separate
+    mechanism — previous_text/new_text are identical for that kind, since no
+    text actually changed; only DialogueEntry.accepted flips to True.
     """
 
     timestamp: str  # ISO 8601, set by the backend
-    kind: str  # "segment" | "word_range" | "rollback"
+    kind: str  # "segment" | "word_range" | "rollback" | "accept_all"
     previous_text: str  # effective *segment* text immediately before this change
     new_text: str  # effective *segment* text immediately after this change
     start_word_index: int | None = None  # set only for kind="word_range"
@@ -98,6 +102,13 @@ class DialogueEntry(SQLModel):
     # highlighting to live playback position. None if Azure didn't return
     # word-level detail for this phrase.
     words: list[WordInfo] | None = None
+    # Set by the "accept all" action — a clerk confirming a low-confidence
+    # segment is correct as transcribed, without editing its text. Deliberately
+    # independent of has_corrections()/corrected_text: accepting must not make
+    # this segment count towards the word-error-rate calculation in
+    # audio/accuracy.py (nothing was actually corrected), but it must still
+    # remove the segment from "needs review" (see compute_accuracy()).
+    accepted: bool = False
 
     def has_corrections(self) -> bool:
         return self.corrected_text is not None or bool(self.word_corrections)

@@ -542,4 +542,89 @@ describe("TranscriptSegment", () => {
       expect(morningWord?.className).not.toContain("ring-amber-500");
     });
   });
+
+  describe("accept as-is", () => {
+    // A low-confidence segment (< 85%) that hasn't been edited — the only
+    // state in which the accept control is offered.
+    const LOW_CONF: SegmentType = {
+      ...SEGMENT,
+      confidence: 0.5,
+      words: WORDS,
+    };
+
+    it("does not show an accept button without an onAccept handler", () => {
+      render(<TranscriptSegment segment={LOW_CONF} />);
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    it("shows an accept button for a low-confidence, uncorrected segment", () => {
+      render(<TranscriptSegment segment={LOW_CONF} onAccept={vi.fn()} />);
+      expect(screen.getByLabelText(/accept segment as-is/i)).toBeDefined();
+    });
+
+    it("does not offer accept for a high-confidence segment", () => {
+      render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, confidence: 0.98, words: WORDS }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    it("does not offer accept once the segment has been corrected", () => {
+      render(
+        <TranscriptSegment
+          segment={{ ...LOW_CONF, correctedText: "fixed text" }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    it("does not offer accept once the segment has already been accepted", () => {
+      render(
+        <TranscriptSegment
+          segment={{ ...LOW_CONF, accepted: true }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    it("calls onAccept when the accept button is clicked", async () => {
+      const onAccept = vi.fn().mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      render(<TranscriptSegment segment={LOW_CONF} onAccept={onAccept} />);
+      await user.click(screen.getByLabelText(/accept segment as-is/i));
+      expect(onAccept).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows an Accepted badge and clears low-confidence highlighting once accepted", () => {
+      const { container } = render(
+        <TranscriptSegment
+          segment={{ ...LOW_CONF, accepted: true }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.getByText(/^Accepted$/)).toBeDefined();
+      // "morning." was the low-confidence word — after accepting it must no
+      // longer carry the orange highlight, without its text being altered.
+      const morningWord = Array.from(
+        wordsParagraph(container).querySelectorAll("span")
+      ).find((el) => el.textContent?.trim() === "morning.");
+      expect(morningWord).toBeDefined();
+      expect(morningWord?.className ?? "").not.toContain("bg-orange-100");
+    });
+
+    it("still highlights low-confidence words before acceptance", () => {
+      const { container } = render(
+        <TranscriptSegment segment={LOW_CONF} onAccept={vi.fn()} />
+      );
+      const morningWord = Array.from(
+        wordsParagraph(container).querySelectorAll("span")
+      ).find((el) => el.textContent?.trim() === "morning.");
+      expect(morningWord?.className).toContain("bg-orange-100");
+    });
+  });
 });

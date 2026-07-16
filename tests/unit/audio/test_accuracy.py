@@ -4,7 +4,15 @@ from transcription_svc.audio.accuracy import compute_accuracy
 from transcription_svc.database.models import DialogueEntry
 
 
-def _entry(speaker="0", text="hello world", start=0.0, end=1.0, confidence=None, corrected=None):
+def _entry(
+    speaker="0",
+    text="hello world",
+    start=0.0,
+    end=1.0,
+    confidence=None,
+    corrected=None,
+    accepted=False,
+):
     return DialogueEntry(
         speaker=speaker,
         text=text,
@@ -12,6 +20,7 @@ def _entry(speaker="0", text="hello world", start=0.0, end=1.0, confidence=None,
         end_time=end,
         confidence=confidence,
         corrected_text=corrected,
+        accepted=accepted,
     )
 
 
@@ -71,6 +80,22 @@ class TestComputeAccuracy:
         entries = [_entry(confidence=None)]
         summary = compute_accuracy(entries)
         assert summary.needs_review == []
+
+    def test_accepted_segments_are_excluded_from_needs_review(self):
+        entries = [_entry(confidence=0.5, accepted=True)]
+        summary = compute_accuracy(entries, confidence_threshold=0.85)
+        assert summary.low_confidence_count == 0
+        assert summary.needs_review == []
+
+    def test_accepting_a_segment_does_not_count_as_a_correction(self):
+        """Accept-all is distinct from a real correction: it must not
+        contribute to has_corrections()/word_error_rate — there is no
+        actual reference text to compare against."""
+        entries = [_entry(text="the quick brown fox", confidence=0.5, accepted=True)]
+        summary = compute_accuracy(entries, confidence_threshold=0.85)
+        assert summary.has_corrections is False
+        assert summary.word_error_rate is None
+        assert summary.corrected_percent is None
 
     def test_empty_entries(self):
         summary = compute_accuracy([])

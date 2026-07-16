@@ -61,6 +61,7 @@ def compute_accuracy(
         if e.confidence is not None
         and e.confidence < confidence_threshold
         and not e.has_corrections()
+        and not e.accepted
     ]
 
     wer = None
