@@ -513,6 +513,17 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+@router.get("/version")
+async def version() -> dict:
+    """Return the git commit SHA baked into the image at build time.
+
+    Used by the post-deploy version-gated check (DIAAT-241) to confirm the
+    newly built container is live before running e2e tests. Returns "unknown"
+    when GIT_SHA was not passed as a build arg (e.g. local development).
+    """
+    return {"version": get_settings().GIT_SHA}
+
+
 async def _read_upload_capped(
     file: UploadFile,
     max_bytes: int,

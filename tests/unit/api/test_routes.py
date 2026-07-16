@@ -64,6 +64,33 @@ class TestHealth:
         assert response.status_code == 200
 
 
+class TestVersion:
+    def test_defaults_to_unknown(self, client, monkeypatch):
+        # No GIT_SHA in the environment -> the "unknown" default.
+        monkeypatch.delenv("GIT_SHA", raising=False)
+        from transcription_svc.config.settings import get_settings
+
+        get_settings.cache_clear()
+        response = client.get("/api/v1/version")
+        assert response.status_code == 200
+        assert response.json() == {"version": "unknown"}
+        get_settings.cache_clear()
+
+    def test_returns_baked_git_sha(self, client, monkeypatch):
+        monkeypatch.setenv("GIT_SHA", "abc123def456")
+        from transcription_svc.config.settings import get_settings
+
+        get_settings.cache_clear()
+        response = client.get("/api/v1/version")
+        assert response.status_code == 200
+        assert response.json() == {"version": "abc123def456"}
+        get_settings.cache_clear()
+
+    def test_no_auth_required(self, client):
+        response = client.get("/api/v1/version")
+        assert response.status_code == 200
+
+
 class TestUploadAudio:
     def _mock_blob_manager(self, mocker, *, upload_ok=True, blob_url="https://x/y.wav"):
         manager = mocker.AsyncMock()
