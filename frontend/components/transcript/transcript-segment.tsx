@@ -11,6 +11,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { confidencePercent, formatTime } from "@/lib/mock-data";
+import { historyKindLabel } from "@/lib/modification-history";
 import type { TranscriptSegment as TranscriptSegmentType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
@@ -458,21 +459,6 @@ function Words({
       })}
     </p>
   );
-}
-
-function historyKindLabel(kind: string): string {
-  switch (kind) {
-    case "segment":
-      return "Whole-segment edit";
-    case "word_range":
-      return "Phrase correction";
-    case "rollback":
-      return "Rolled back";
-    case "accept_all":
-      return "Accepted as-is";
-    default:
-      return kind;
-  }
 }
 
 interface HistoryPanelProps {

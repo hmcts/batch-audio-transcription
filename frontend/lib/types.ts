@@ -101,4 +101,10 @@ export interface TranscriptionJob {
   segments?: TranscriptSegment[];
   accuracy?: TranscriptAccuracy;
   lowConfidenceSegments?: LowConfidenceSegment[];
+  // The caller (API client / clerk identity) that owns this job. Every
+  // correction is made under this caller, so it's the "who made the change"
+  // attribution for the modification-history table. Job-level, not
+  // per-action: the audit trail records no separate identity per correction.
+  // In local dev this is always "local-dev".
+  caller?: string;
 }

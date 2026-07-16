@@ -92,6 +92,18 @@ describe("getJob", () => {
     expect(job?.caseReference).toBe("PA/00001/2026");
   });
 
+  it("maps the backend caller_name onto the job's caller", async () => {
+    mockFetchOnce({ ...BACKEND_JOB, caller_name: "local-dev" });
+    const job = await getJob(BACKEND_JOB.job_id);
+    expect(job?.caller).toBe("local-dev");
+  });
+
+  it("leaves caller undefined when the backend omits caller_name", async () => {
+    mockFetchOnce(BACKEND_JOB);
+    const job = await getJob(BACKEND_JOB.job_id);
+    expect(job?.caller).toBeUndefined();
+  });
+
   it("returns null on 404", async () => {
     mockFetchOnce({ detail: "Job not found" }, { ok: false, status: 404 });
     const job = await getJob("unknown");
