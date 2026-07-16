@@ -48,3 +48,81 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "${TAG}" -m "Deploy ${VERSION} to dev (run ${RUN_ID})"
           git push origin "${TAG}"
+
+  # Post-deploy smoke check (DIAAT-240). The deploy tag pushed by the
+  # `tag` job triggers an asynchronous ADO pipeline (terraform apply +
+  # App Service restart) that can take several minutes to bring the new
+  # containers up. This job polls the dev API health endpoint and the
+  # frontend /batch route until both return 200, and fails loudly if
+  # either is unhealthy within the timeout — so a broken deploy (e.g. a
+  # crash-looping container from a failed DB migration) is caught
+  # immediately rather than by a human hitting the app.
+  #
+  # It runs AFTER the tag is pushed and mirrors the `tag` job's gating
+  # (only on real pushes to main that produced a pushed image). It does
+  # NOT gate anything upstream — the ADO deploy has already been kicked
+  # off by the time this runs; its purpose is purely to notify.
+  #
+  # KNOWN LIMITATION (scope of companion ticket DIAAT-241): this checks
+  # health only, not a deployed-version marker. If the OLD container is
+  # still healthy when polling starts, the check could pass before the
+  # new build is actually live. To reduce that risk we wait an initial
+  # delay to let the ADO restart begin before polling. DIAAT-241 will
+  # add version-gated polling to make this precise.
+  smoke:
+    needs: [build, tag]
+    if: needs.build.outputs.image_pushed == 'true'
+    runs-on: ubuntu-latest
+    env:
+      API_HEALTH_URL: https://hmcts-batch-transcription-dev.azurewebsites.net/api/v1/health
+      FRONTEND_URL: https://hmcts-batch-transcription-frontend-dev.azurewebsites.net/batch
+      # Wait before the first poll to give the async ADO deploy + App
+      # Service restart time to begin (see KNOWN LIMITATION above).
+      INITIAL_DELAY_SECONDS: "60"
+      # Total polling budget after the initial delay (~15 minutes).
+      TIMEOUT_SECONDS: "900"
+      # Delay between polls.
+      INTERVAL_SECONDS: "20"
+    steps:
+      - name: Poll dev endpoints until healthy
+        run: |
+          set -uo pipefail
+
+          check() {
+            # Echoes the HTTP status code, or 000 if the request failed
+            # to get any response (connection refused, DNS, timeout).
+            curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$1" || true
+          }
+
+          echo "Waiting ${INITIAL_DELAY_SECONDS}s for the ADO deploy + App Service restart to begin..."
+          sleep "${INITIAL_DELAY_SECONDS}"
+
+          deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
+          api_status=000
+          frontend_status=000
+
+          while :; do
+            api_status=$(check "${API_HEALTH_URL}")
+            api_status=${api_status:-000}
+            frontend_status=$(check "${FRONTEND_URL}")
+            frontend_status=${frontend_status:-000}
+            echo "$(date -u +%H:%M:%S) API=${api_status} frontend=${frontend_status}"
+
+            if [[ "${api_status}" == "200" && "${frontend_status}" == "200" ]]; then
+              echo "Both dev endpoints returned 200. Deploy looks healthy."
+              exit 0
+            fi
+
+            if (( $(date +%s) >= deadline )); then
+              echo "::error::Dev post-deploy smoke check timed out after ${TIMEOUT_SECONDS}s (plus ${INITIAL_DELAY_SECONDS}s initial delay)."
+              if [[ "${api_status}" != "200" ]]; then
+                echo "::error::API health endpoint unhealthy: ${API_HEALTH_URL} (last status: ${api_status})"
+              fi
+              if [[ "${frontend_status}" != "200" ]]; then
+                echo "::error::Frontend route unhealthy: ${FRONTEND_URL} (last status: ${frontend_status})"
+              fi
+              exit 1
+            fi
+
+            sleep "${INTERVAL_SECONDS}"
+          done
