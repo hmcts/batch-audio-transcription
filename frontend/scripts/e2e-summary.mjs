@@ -14,6 +14,7 @@
 
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const DEFAULT_REPORT_PATH = "playwright-report/results.json";
 
@@ -226,9 +227,13 @@ export function summariseReportFile(reportPath) {
   return renderMarkdown(report);
 }
 
-// CLI entry point. Guarded so importing this module (tests) has no side effects.
+// CLI entry point. Guarded so importing this module (tests) has no side
+// effects. pathToFileURL correctly URL-encodes the (Node-resolved, absolute)
+// argv[1] path, so the comparison holds even if the runner's path contains
+// spaces or other characters that a naive `file://` + path concat would leave
+// unmatched — which would silently produce an empty job summary.
 const isMain =
-  process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   const reportPath = process.argv[2] ?? DEFAULT_REPORT_PATH;
   // Never throw: the summary is informational and runs with `if: always()`.
