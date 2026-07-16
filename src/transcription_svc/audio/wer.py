@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import re
 
+from rapidfuzz.distance import Levenshtein
+
 _WORD_RE = re.compile(r"\S+")
 
 
@@ -85,3 +87,26 @@ def aggregate_word_error_rate(pairs: list[tuple[str, str]]) -> float:
     if total_ref_words == 0:
         return 0.0
     return total_errors / total_ref_words
+
+
+def baseline_word_error_rate(reference: str, hypothesis: str) -> float:
+    """WER of hypothesis against a clerk-supplied baseline reference transcript.
+
+    Unlike word_error_rate/aggregate_word_error_rate above, there's no
+    smaller unit to compare here: a baseline transcript is uploaded as one
+    whole document with no segment-level alignment to the auto-generated
+    dialogue entries, so the comparison has to be whole-document. That's
+    exactly the scale the module docstring says the naive O(N*M) DP in
+    _edit_distance can't handle (30+ seconds on a real ~14,600-word
+    transcript). rapidfuzz's Levenshtein.distance uses a bit-parallel
+    (Myers') algorithm — O(N*M/64) — that runs the same comparison in
+    well under a second, and it operates directly on sequences of tokens
+    (not just characters), so words can be passed in as-is.
+    """
+    ref_words = _tokenize(reference)
+    hyp_words = _tokenize(hypothesis)
+
+    if not ref_words:
+        return 0.0 if not hyp_words else 1.0
+
+    return Levenshtein.distance(ref_words, hyp_words) / len(ref_words)

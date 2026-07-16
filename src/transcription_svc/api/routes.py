@@ -54,6 +54,10 @@ _MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 _ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".mp4", ".m4a", ".ogg", ".flac"}
 _UNSAFE_FILENAME_CHARS_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+# A plain-text reference transcript for even a multi-hour hearing is at most
+# a few hundred KB; 5MB is generous headroom without allowing an abusive upload.
+_MAX_BASELINE_BYTES = 5 * 1024 * 1024
+_ALLOWED_BASELINE_EXTENSIONS = {".txt"}
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -289,6 +293,8 @@ class AccuracyResponse(BaseModel):
     has_corrections: bool
     word_error_rate: float | None = None
     corrected_percent: float | None = None
+    has_baseline: bool = False
+    baseline_word_error_rate: float | None = None
 
 
 class JobResponse(BaseModel):
@@ -393,7 +399,11 @@ def _to_response(job: TranscriptionJob, caller_name: str | None = None) -> JobRe
         # rather than treated as unset. Settings validates the 0-1 range.
         configured = get_settings().LOW_CONFIDENCE_THRESHOLD
         threshold = configured if configured is not None else DEFAULT_CONFIDENCE_THRESHOLD
-        summary = compute_accuracy(entries, confidence_threshold=threshold)
+        summary = compute_accuracy(
+            entries,
+            confidence_threshold=threshold,
+            baseline_transcript=job.baseline_transcript,
+        )
         accuracy = AccuracyResponse(
             confidence_score=summary.confidence_score,
             words_transcribed=summary.words_transcribed,
@@ -402,6 +412,8 @@ def _to_response(job: TranscriptionJob, caller_name: str | None = None) -> JobRe
             has_corrections=summary.has_corrections,
             word_error_rate=summary.word_error_rate,
             corrected_percent=summary.corrected_percent,
+            has_baseline=summary.has_baseline,
+            baseline_word_error_rate=summary.baseline_word_error_rate,
         )
         needs_review = [
             NeedsReviewItemResponse(
@@ -501,7 +513,12 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
-async def _read_upload_capped(file: UploadFile, max_bytes: int) -> bytes:
+async def _read_upload_capped(
+    file: UploadFile,
+    max_bytes: int,
+    *,
+    error_detail: str = "Audio file exceeds the maximum upload size",
+) -> bytes:
     """Read in chunks, aborting as soon as max_bytes is exceeded.
 
     Bounds worst-case memory use to roughly max_bytes rather than reading an
@@ -512,9 +529,7 @@ async def _read_upload_capped(file: UploadFile, max_bytes: int) -> bytes:
     while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
         total += len(chunk)
         if total > max_bytes:
-            raise HTTPException(
-                status_code=413, detail="Audio file exceeds the maximum upload size"
-            )
+            raise HTTPException(status_code=413, detail=error_detail)
         chunks.append(chunk)
     return b"".join(chunks)
 
@@ -645,6 +660,68 @@ async def get_job(
     job = get_job_by_id(session, job_id)
     if not job or job.caller_id != caller.id:
         raise HTTPException(status_code=404, detail="Job not found")
+    return _to_response(job, caller.name)
+
+
+@router.post("/jobs/{job_id}/baseline", response_model=JobResponse)
+async def upload_baseline_transcript(
+    job_id: UUID,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+    caller: Caller = Depends(get_caller),
+) -> JobResponse:
+    """Store a clerk-supplied reference transcript to compute a real WER against.
+
+    Distinct from the correction-based WER (audio/accuracy.py), which only
+    measures the segments a clerk has actually corrected in this app: this
+    compares the *entire* auto-generated transcription against an
+    independent reference transcript the clerk already has (e.g. a court
+    reporter's transcript), so it stays meaningful even for segments nobody
+    has reviewed yet, and is completely unaffected by corrections made here.
+    Uploading again replaces any previously stored baseline.
+    """
+    job = get_job_by_id(session, job_id)
+    if not job or job.caller_id != caller.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
+        raise HTTPException(
+            status_code=422, detail="Job has no transcript to compare a baseline against"
+        )
+
+    # Require a recognised extension (matching the audio upload endpoint):
+    # a missing extension is rejected too, rather than silently accepted.
+    extension = PurePosixPath(file.filename or "").suffix.lower()
+    if extension not in _ALLOWED_BASELINE_EXTENSIONS:
+        allowed = ", ".join(sorted(_ALLOWED_BASELINE_EXTENSIONS))
+        detail = (
+            f"File has no extension. Allowed: {allowed}"
+            if not extension
+            else f"Unsupported file type '{extension}'. Allowed: {allowed}"
+        )
+        raise HTTPException(status_code=422, detail=detail)
+
+    content = await _read_upload_capped(
+        file,
+        _MAX_BASELINE_BYTES,
+        error_detail="Baseline transcript exceeds the maximum upload size",
+    )
+    try:
+        # utf-8-sig strips a leading BOM if present (common in Windows-exported
+        # .txt files) so it isn't glued onto the first token and skewing the WER;
+        # it decodes plain UTF-8 without a BOM identically.
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=422, detail="Baseline transcript must be UTF-8 encoded text"
+        ) from None
+    if not text.strip():
+        raise HTTPException(status_code=422, detail="Baseline transcript file is empty")
+
+    job.baseline_transcript = text
+    job.updated_datetime = datetime.now(UTC)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
     return _to_response(job, caller.name)
 
 

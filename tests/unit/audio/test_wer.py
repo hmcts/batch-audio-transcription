@@ -2,7 +2,11 @@
 
 import time
 
-from transcription_svc.audio.wer import aggregate_word_error_rate, word_error_rate
+from transcription_svc.audio.wer import (
+    aggregate_word_error_rate,
+    baseline_word_error_rate,
+    word_error_rate,
+)
 
 
 class TestWordErrorRate:
@@ -76,3 +80,49 @@ class TestAggregateWordErrorRate:
         start = time.monotonic()
         aggregate_word_error_rate(pairs)
         assert time.monotonic() - start < 2.0
+
+
+class TestBaselineWordErrorRate:
+    def test_identical_text_has_zero_error(self):
+        assert baseline_word_error_rate("the quick brown fox", "the quick brown fox") == 0.0
+
+    def test_is_case_insensitive(self):
+        assert baseline_word_error_rate("The Quick Fox", "the quick fox") == 0.0
+
+    def test_single_substitution(self):
+        assert baseline_word_error_rate("the quick brown fox", "the slow brown fox") == 0.25
+
+    def test_single_deletion(self):
+        assert baseline_word_error_rate("the quick brown fox", "the quick fox") == 0.25
+
+    def test_single_insertion(self):
+        assert baseline_word_error_rate("the quick brown fox", "the very quick brown fox") == 0.25
+
+    def test_completely_different_text(self):
+        assert baseline_word_error_rate("one two three", "four five six") == 1.0
+
+    def test_empty_reference_and_hypothesis_is_zero_error(self):
+        assert baseline_word_error_rate("", "") == 0.0
+
+    def test_empty_reference_with_nonempty_hypothesis_is_full_error(self):
+        assert baseline_word_error_rate("", "hello") == 1.0
+
+    def test_empty_hypothesis_against_reference_is_full_error(self):
+        assert baseline_word_error_rate("hello world", "") == 1.0
+
+    def test_matches_word_error_rate_for_small_inputs(self):
+        # Different implementation (rapidfuzz vs the naive DP above), same
+        # standard word-level Levenshtein definition — results must agree.
+        ref, hyp = "the quick brown fox jumps", "the very slow brown fox"
+        assert baseline_word_error_rate(ref, hyp) == word_error_rate(ref, hyp)
+
+    def test_completes_quickly_at_whole_transcript_scale(self):
+        # This is exactly the scale word_error_rate's docstring warns is
+        # infeasible for the naive O(N*M) DP (30+s on a real ~14,600-word
+        # transcript) — baseline comparisons are always whole-document, so
+        # this must stay fast via rapidfuzz's bit-parallel implementation.
+        long_ref = " ".join(f"word{i}" for i in range(14_600))
+        long_hyp = " ".join(f"word{i}" for i in range(14_600))
+        start = time.monotonic()
+        baseline_word_error_rate(long_ref, long_hyp)
+        assert time.monotonic() - start < 5.0

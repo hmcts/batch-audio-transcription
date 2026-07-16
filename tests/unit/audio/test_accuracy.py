@@ -124,3 +124,42 @@ class TestComputeAccuracy:
         assert summary.low_confidence_count == 1
         assert len(summary.needs_review) == 1
         assert summary.needs_review[0].speaker == "Judge"
+
+    def test_no_baseline_means_no_baseline_wer(self):
+        entries = [_entry(text="hello world")]
+        summary = compute_accuracy(entries)
+        assert summary.has_baseline is False
+        assert summary.baseline_word_error_rate is None
+
+    def test_baseline_enables_baseline_wer_computation(self):
+        entries = [_entry(text="the quick brown fox")]
+        summary = compute_accuracy(entries, baseline_transcript="the slow brown fox")
+        assert summary.has_baseline is True
+        assert summary.baseline_word_error_rate == 25.0
+
+    def test_baseline_wer_ignores_corrections(self):
+        # The whole point of a baseline WER is measuring the *original*
+        # Speech Batch output against an independent reference — a clerk's
+        # correction inside the app should not move this number at all.
+        entries = [_entry(text="the quick brown fox", corrected="the slow brown fox")]
+        summary = compute_accuracy(entries, baseline_transcript="the quick brown fox")
+        assert summary.baseline_word_error_rate == 0.0
+
+    def test_baseline_wer_spans_multiple_entries(self):
+        entries = [_entry(text="hello there"), _entry(text="general kenobi")]
+        summary = compute_accuracy(entries, baseline_transcript="hello there general kenobi")
+        assert summary.baseline_word_error_rate == 0.0
+
+    def test_blank_baseline_is_treated_as_no_baseline(self):
+        entries = [_entry(text="hello world")]
+        summary = compute_accuracy(entries, baseline_transcript="   ")
+        assert summary.has_baseline is False
+        assert summary.baseline_word_error_rate is None
+
+    def test_correction_wer_and_baseline_wer_are_independent(self):
+        entries = [_entry(text="the quick brown fox", corrected="the quick brown fox")]
+        summary = compute_accuracy(entries, baseline_transcript="a completely different sentence")
+        # Correction-based WER: corrected text matches original exactly -> 0 error.
+        assert summary.word_error_rate == 0.0
+        # Baseline WER: original text compared against an unrelated reference.
+        assert summary.baseline_word_error_rate == 100.0

@@ -117,6 +117,12 @@ export interface TranscriptAccuracy {
   hasCorrections: boolean;
   wordErrorRate?: number;
   correctedPercent?: number;
+  // True once a clerk has uploaded an independent reference transcript
+  // (e.g. a court reporter's transcript). Unlike wordErrorRate above, this
+  // WER is measured against the *entire* auto-generated transcription and
+  // is unaffected by any corrections made in this app.
+  hasBaseline: boolean;
+  baselineWordErrorRate?: number;
 }
 
 export interface TranscriptionJob {

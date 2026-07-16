@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, UniqueConstraint
+from sqlalchemy import Column, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -259,6 +259,17 @@ class TranscriptionJob(BaseTable, table=True):
     # Results
     dialogue_entries: list = Field(default_factory=list, sa_column=Column(JSONB))
     error_message: str | None = Field(default=None)
+
+    # A clerk-supplied reference transcript (e.g. a court reporter's
+    # transcript), uploaded independently of the auto-generated dialogue
+    # entries — lets a real word error rate be computed against the whole
+    # transcription, not just the segments a clerk has corrected in this
+    # app (see audio/accuracy.py). NULL until one is uploaded.
+    # Explicit TEXT (not the default inferred VARCHAR) since a full hearing
+    # transcript can be very large, and to match the baseline_transcript
+    # migration exactly so Alembic autogenerate doesn't report a spurious
+    # type diff.
+    baseline_transcript: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
 
     # Azure batch tracking
     batch_job_id: str | None = Field(default=None)
