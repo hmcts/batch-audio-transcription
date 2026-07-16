@@ -116,13 +116,38 @@ export function countOutcomes(tests) {
 }
 
 /**
- * Escape the handful of characters that would break a Markdown table cell or
- * list line. Test titles are author-controlled, but a stray pipe still
- * mangles a table.
+ * Escape the characters that would break a Markdown table cell. Used for the
+ * counts table (whose cells are NOT code spans) — a stray pipe would otherwise
+ * add a phantom column.
  * @param {string} s
  */
 function md(s) {
   return String(s).replace(/\|/g, "\\|");
+}
+
+/**
+ * Wrap text as an inline Markdown code span that survives backticks in the
+ * content. Per CommonMark, a code span opened by a run of N backticks can
+ * contain any run of fewer than N backticks, so we fence with one more
+ * backtick than the longest run in the text; if the content starts or ends
+ * with a backtick the span must be padded with a single space so the leading/
+ * trailing backtick isn't absorbed into the delimiter. Whitespace (including
+ * newlines) is collapsed so the span stays on a single list line.
+ *
+ * Note: pipes need no escaping here — inside a code span a `|` is literal, and
+ * backslash-escaping it would render a stray backslash.
+ * @param {string} text
+ * @returns {string}
+ */
+function codeSpan(text) {
+  const content = String(text).replace(/\s+/g, " ").trim();
+  const longestRun = (content.match(/`+/g) ?? []).reduce(
+    (max, run) => Math.max(max, run.length),
+    0
+  );
+  const fence = "`".repeat(longestRun + 1);
+  const pad = content.startsWith("`") || content.endsWith("`") ? " " : "";
+  return `${fence}${pad}${content}${pad}${fence}`;
 }
 
 /**
@@ -158,9 +183,9 @@ export function renderMarkdown(report) {
     header.push("🟡 Flaky");
     values.push(counts.flaky);
   }
-  lines.push(`| ${header.join(" | ")} |`);
+  lines.push(`| ${header.map((h) => md(h)).join(" | ")} |`);
   lines.push(`| ${header.map(() => "---:").join(" | ")} |`);
-  lines.push(`| ${values.join(" | ")} |`);
+  lines.push(`| ${values.map((v) => md(String(v))).join(" | ")} |`);
   lines.push("");
 
   // Skipped tests — the whole point of the ticket: show what was gated out.
@@ -170,7 +195,7 @@ export function renderMarkdown(report) {
     lines.push("_None._");
   } else {
     for (const t of skipped) {
-      lines.push(`- \`${md(t.title)}\``);
+      lines.push(`- ${codeSpan(t.title)}`);
     }
   }
   lines.push("");
@@ -183,7 +208,7 @@ export function renderMarkdown(report) {
   } else {
     const icon = { passed: "✅", failed: "❌", flaky: "🟡" };
     for (const t of ran) {
-      lines.push(`- ${icon[t.outcome] ?? "❔"} \`${md(t.title)}\``);
+      lines.push(`- ${icon[t.outcome] ?? "❔"} ${codeSpan(t.title)}`);
     }
   }
   lines.push("");

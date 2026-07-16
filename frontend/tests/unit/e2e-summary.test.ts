@@ -178,6 +178,53 @@ describe("renderMarkdown", () => {
   });
 });
 
+describe("code spans survive backticks in titles", () => {
+  // Build a report whose only test title contains backticks (common in
+  // code-ish test names). A naive single-backtick wrapper would close the
+  // span early and mangle the rest of the line.
+  const reportWithBackticks = {
+    suites: [
+      {
+        title: "cli.spec.ts",
+        file: "cli.spec.ts",
+        specs: [
+          {
+            title: "renders `code` and a ``double`` run",
+            file: "cli.spec.ts",
+            tests: [{ status: "expected" }],
+          },
+          {
+            title: "trailing backtick`",
+            file: "cli.spec.ts",
+            tests: [{ status: "skipped" }],
+          },
+        ],
+        suites: [],
+      },
+    ],
+  };
+
+  const out = renderMarkdown(reportWithBackticks);
+
+  it("fences with a backtick run longer than any run in the content", () => {
+    // The longest run in the ran title is `` (2), so the fence must be ``` (3).
+    expect(out).toContain(
+      "- ✅ ```cli.spec.ts › renders `code` and a ``double`` run```"
+    );
+  });
+
+  it("pads content that ends with a backtick so the span stays valid", () => {
+    // Skipped title ends in a backtick (longest run 1 → `` fence) and must be
+    // padded with a space so the trailing backtick isn't read as a delimiter.
+    expect(out).toContain("- `` cli.spec.ts › trailing backtick` ``");
+  });
+
+  it("never emits a broken single-backtick wrap around a backtick title", () => {
+    // The old bug: `...`code`...` would leave a dangling backtick + text.
+    expect(out).not.toContain("- `cli.spec.ts › renders `code`");
+  });
+});
+
 describe("edge cases", () => {
   it("renders a 'no results' note for an empty report", () => {
     expect(renderMarkdown({ suites: [] })).toContain(
