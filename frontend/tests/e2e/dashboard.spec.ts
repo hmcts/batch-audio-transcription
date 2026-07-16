@@ -145,10 +145,7 @@ test.describe("Transcription run metadata popover", () => {
       name: /about speech models/i,
     });
     if ((await docsLink.count()) > 0) {
-      await expect(docsLink).toHaveAttribute(
-        "href",
-        /learn\.microsoft\.com/
-      );
+      await expect(docsLink).toHaveAttribute("href", /learn\.microsoft\.com/);
     }
   });
 });
