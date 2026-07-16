@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  acceptSegment,
   colorForSpeaker,
   getJob,
   getJobAudio,
@@ -212,6 +213,50 @@ describe("getJobAudio", () => {
     const response = await getJobAudio("job-1", "bytes=999-1000");
     expect(response.status).toBe(416);
     expect(response.headers.get("Content-Range")).toBe("bytes */20");
+  });
+});
+
+describe("acceptSegment", () => {
+  it("POSTs to the segment accept endpoint and maps the returned job", async () => {
+    const fetchMock = mockFetchOnce({
+      ...BACKEND_JOB,
+      dialogue_entries: [
+        {
+          speaker: "Speaker 0",
+          text: "Good morning.",
+          start_time: 0,
+          end_time: 2.5,
+          confidence: 0.4,
+          accepted: true,
+          correction_history: [
+            {
+              timestamp: "2026-07-01T09:31:00Z",
+              kind: "accept_all",
+              previous_text: "Good morning.",
+              new_text: "Good morning.",
+            },
+          ],
+        },
+      ],
+    });
+
+    const job = await acceptSegment(BACKEND_JOB.job_id, 0);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain(
+      `/api/v1/jobs/${BACKEND_JOB.job_id}/segments/0/accept`
+    );
+    expect(init.method).toBe("POST");
+    // The accepted flag and the accept_all history entry survive the mapping
+    // so the UI can distinguish an accept from a real correction (DIAAT-230).
+    expect(job.segments?.[0].accepted).toBe(true);
+    expect(job.segments?.[0].correctionHistory?.[0].kind).toBe("accept_all");
+  });
+
+  it("defaults accepted to false when the backend omits it", async () => {
+    mockFetchOnce(BACKEND_JOB);
+    const job = await acceptSegment(BACKEND_JOB.job_id, 0);
+    expect(job.segments?.[0].accepted).toBe(false);
   });
 });
 

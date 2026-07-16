@@ -160,6 +160,18 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
     setJob(body.job as TranscriptionJob);
   };
 
+  const acceptSegment = async (index: number) => {
+    const response = await fetch(
+      apiPath(`/api/jobs/${jobId}/segments/${index}/accept`),
+      { method: "POST" }
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to accept segment: ${response.status}`);
+    }
+    const body = await response.json();
+    setJob(body.job as TranscriptionJob);
+  };
+
   const rollbackToHistoryEntry = async (
     index: number,
     historyIndex: number
@@ -276,6 +288,7 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
                       onRollbackToHistory={(historyIndex) =>
                         rollbackToHistoryEntry(index, historyIndex)
                       }
+                      onAccept={() => acceptSegment(index)}
                       isActive={isActive}
                       getCurrentTime={getCurrentTime}
                     />
