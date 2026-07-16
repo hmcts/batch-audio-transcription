@@ -71,6 +71,43 @@ def _merged_confidence(
     ) / total_scored_words
 
 
+# Azure Speech Batch diarises per recognised phrase, not per sentence. When a
+# sentence runs across a phrase boundary, the tail end — often just the last
+# few words — is occasionally attributed to a different speaker than the one
+# who said the rest of it, splitting a single speaker's turn in two. A
+# genuine speaker handover almost always coincides with a pause and lands on
+# a sentence boundary, so a raw speaker-id flip that instead has a near-zero
+# gap, no sentence-ending punctuation on the text so far, and only a short
+# run of new text is treated as a continuation of the current speaker rather
+# than a real handover.
+_MAX_MID_SENTENCE_GAP_SECONDS = 0.5
+# Diarisation timestamps for adjacent phrases can overlap slightly even
+# within a single speaker's continuous speech, so a small negative gap is
+# tolerated too.
+_MIN_MID_SENTENCE_GAP_SECONDS = -0.2
+_SENTENCE_TERMINATORS = (".", "!", "?")
+# A genuine (different-speaker) turn that happens to follow in quick
+# succession is usually a substantial utterance, not a one-or-two-word
+# fragment — capping the merge to short fragments limits how often this
+# heuristic can accidentally swallow a real speaker change.
+_MAX_MISATTRIBUTED_FRAGMENT_WORDS = 8
+
+
+def _looks_like_mid_sentence_misattribution(
+    current_entry: DialogueEntry, entry: DialogueEntry
+) -> bool:
+    """True if `entry` looks like a mis-diarised continuation of `current_entry`.
+
+    See the module-level comment above for the reasoning behind each check.
+    """
+    gap = entry.start_time - current_entry.end_time
+    if not (_MIN_MID_SENTENCE_GAP_SECONDS <= gap <= _MAX_MID_SENTENCE_GAP_SECONDS):
+        return False
+    if current_entry.text.rstrip().endswith(_SENTENCE_TERMINATORS):
+        return False
+    return len(entry.text.split()) <= _MAX_MISATTRIBUTED_FRAGMENT_WORDS
+
+
 def group_dialogue_entries_by_speaker(
     entries: list[DialogueEntry],
 ) -> list[DialogueEntry]:
@@ -79,20 +116,12 @@ def group_dialogue_entries_by_speaker(
     current_entry: DialogueEntry | None = None
 
     for entry in entries:
-        if entry.speaker != current_speaker:
-            if current_entry:
-                grouped.append(current_entry)
-            current_speaker = entry.speaker
-            current_entry = DialogueEntry(
-                speaker=current_speaker,
-                text=entry.text,
-                start_time=entry.start_time,
-                end_time=entry.end_time,
-                confidence=entry.confidence,
-                words=entry.words,
-                alternatives=entry.alternatives,
-            )
-        elif current_entry:
+        is_continuation = current_entry is not None and (
+            entry.speaker == current_speaker
+            or _looks_like_mid_sentence_misattribution(current_entry, entry)
+        )
+
+        if is_continuation and current_entry is not None:
             current_entry.confidence = _merged_confidence(
                 current_entry.text, current_entry.confidence, entry.text, entry.confidence
             )
@@ -107,7 +136,27 @@ def group_dialogue_entries_by_speaker(
             )
             current_entry.words = current_entry.words + entry.words if words_aligned else None
             current_entry.text += f" {entry.text}"
-            current_entry.end_time = entry.end_time
+            # The small negative gap tolerated by the mid-sentence heuristic
+            # means `entry` can occasionally overlap and end slightly
+            # earlier than the current segment already does — never let a
+            # merge shrink the segment's time range.
+            current_entry.end_time = max(current_entry.end_time, entry.end_time)
+        else:
+            if current_entry:
+                grouped.append(current_entry)
+            # Keep the running speaker label as-is; a mis-attributed
+            # fragment (handled above) never reaches this branch, so
+            # current_speaker only ever changes here on a genuine handover.
+            current_speaker = entry.speaker
+            current_entry = DialogueEntry(
+                speaker=current_speaker,
+                text=entry.text,
+                start_time=entry.start_time,
+                end_time=entry.end_time,
+                confidence=entry.confidence,
+                words=entry.words,
+                alternatives=entry.alternatives,
+            )
 
     if current_entry:
         grouped.append(current_entry)

@@ -27,12 +27,14 @@ def _entry(
     confidence: float | None = None,
     words: list[WordInfo] | None = None,
     alternatives: list[PhraseAlternatives] | None = None,
+    start_time: float = 0.0,
+    end_time: float = 1.0,
 ) -> DialogueEntry:
     return DialogueEntry(
         speaker=speaker,
         text=text,
-        start_time=0.0,
-        end_time=1.0,
+        start_time=start_time,
+        end_time=end_time,
         confidence=confidence,
         words=words,
         alternatives=alternatives,
@@ -210,6 +212,134 @@ class TestGroupDialogueEntriesBySpeaker:
         result = group_dialogue_entries_by_speaker(entries)
         assert len(result) == 1
         assert result[0].words is None
+
+
+class TestMidSentenceMisattribution:
+    """DIAAT-237: Azure occasionally flips the raw speaker id for the tail
+    end of a sentence — often just the last few words — even though the
+    same person kept speaking right through. These fixtures reconstruct
+    that pattern (near-zero gap, no sentence-ending punctuation yet, a
+    short trailing fragment) and check it gets reattributed to the speaker
+    who said the rest of the sentence, alongside guards that stop the same
+    heuristic from swallowing genuinely different speakers.
+    """
+
+    def test_merges_a_clipped_sentence_tail_back_into_the_original_speaker(self):
+        # "I think we should go to the shop now." split across a phrase
+        # boundary, with the last two words mis-diarised as speaker "1".
+        entries = [
+            _entry(
+                "0",
+                "I think we should go to the",
+                confidence=0.9,
+                start_time=0.0,
+                end_time=2.0,
+            ),
+            _entry(
+                "1",
+                "shop now.",
+                confidence=0.8,
+                start_time=2.05,  # 50ms gap — continuous speech, not a pause
+                end_time=2.6,
+            ),
+        ]
+        result = group_dialogue_entries_by_speaker(entries)
+        assert len(result) == 1
+        assert result[0].speaker == "0"
+        assert result[0].text == "I think we should go to the shop now."
+
+    def test_full_pipeline_reattributes_clipped_tail_to_a_single_speaker_label(self):
+        entries = [
+            _entry(
+                "0",
+                "I think we should go to the",
+                confidence=0.9,
+                start_time=0.0,
+                end_time=2.0,
+            ),
+            _entry("1", "shop now.", confidence=0.8, start_time=2.05, end_time=2.6),
+            # Genuine continuation from the same speaker after a real pause.
+            _entry("0", "And get some milk.", confidence=0.9, start_time=4.0, end_time=5.5),
+        ]
+        result = process_speakers(entries)
+        assert len(result) == 1
+        assert result[0].speaker == "Speaker 0"
+        assert result[0].text == "I think we should go to the shop now. And get some milk."
+
+    def test_does_not_merge_when_the_speaker_change_follows_a_real_pause(self):
+        entries = [
+            _entry("0", "I think we should go", confidence=0.9, start_time=0.0, end_time=2.0),
+            _entry("1", "Sounds good to me.", confidence=0.9, start_time=3.5, end_time=4.8),
+        ]
+        result = group_dialogue_entries_by_speaker(entries)
+        assert len(result) == 2
+        assert result[0].speaker == "0"
+        assert result[1].speaker == "1"
+
+    def test_does_not_merge_across_a_sentence_boundary_even_with_a_tiny_gap(self):
+        # The first speaker actually finished their sentence — a quick
+        # back-and-forth exchange right after shouldn't be treated as a
+        # mid-sentence artifact just because the gap is small.
+        entries = [
+            _entry("0", "Are you ready?", confidence=0.9, start_time=0.0, end_time=1.0),
+            _entry("1", "Yes, let's go.", confidence=0.9, start_time=1.05, end_time=2.0),
+        ]
+        result = group_dialogue_entries_by_speaker(entries)
+        assert len(result) == 2
+        assert result[0].speaker == "0"
+        assert result[1].speaker == "1"
+
+    def test_does_not_merge_a_long_fragment_even_with_a_tiny_gap(self):
+        # A substantial run of new text is far more likely to be a genuine
+        # (if fast) speaker handover than a clipped one- or two-word tail.
+        entries = [
+            _entry(
+                "0", "I think we should go to the", confidence=0.9, start_time=0.0, end_time=2.0
+            ),
+            _entry(
+                "1",
+                "shop and then head over to the market before it closes",
+                confidence=0.9,
+                start_time=2.05,
+                end_time=4.5,
+            ),
+        ]
+        result = group_dialogue_entries_by_speaker(entries)
+        assert len(result) == 2
+        assert result[0].speaker == "0"
+        assert result[1].speaker == "1"
+
+    def test_does_not_merge_a_large_timestamp_overlap(self):
+        # A gap far more negative than plausible timestamp jitter is
+        # crosstalk between two real speakers, not the same phrase.
+        entries = [
+            _entry(
+                "0", "I think we should go to the", confidence=0.9, start_time=0.0, end_time=2.0
+            ),
+            _entry("1", "shop now.", confidence=0.8, start_time=0.5, end_time=1.0),
+        ]
+        result = group_dialogue_entries_by_speaker(entries)
+        assert len(result) == 2
+
+    def test_merge_never_shrinks_the_segment_end_time(self):
+        # The small negative gap tolerated for jitter means a merged-in
+        # fragment can end slightly before the current segment already
+        # does — the merge must not let that pull end_time backwards.
+        entries = [
+            _entry(
+                "0", "I think we should go to the", confidence=0.9, start_time=0.0, end_time=2.5
+            ),
+            _entry(
+                "1",
+                "shop now.",
+                confidence=0.8,
+                start_time=2.4,  # overlaps, but within the tolerated jitter window
+                end_time=2.45,  # ends *before* the current segment's end_time
+            ),
+        ]
+        result = group_dialogue_entries_by_speaker(entries)
+        assert len(result) == 1
+        assert result[0].end_time == 2.5
 
 
 class TestNormalizeSpeakerLabels:
