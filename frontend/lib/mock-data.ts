@@ -176,6 +176,9 @@ export const MOCK_JOBS: TranscriptionJob[] = [
     segments: JOB_1_SEGMENTS,
     accuracy: JOB_1_ACCURACY,
     lowConfidenceSegments: JOB_1_LOW_CONFIDENCE,
+    audioDurationSeconds: 1920,
+    transcriptionDurationSeconds: 187,
+    modelIdentifier: "azure-speech-batch-transcription (en-GB)",
   },
   {
     id: "job-ea11042-2025",
@@ -195,6 +198,9 @@ export const MOCK_JOBS: TranscriptionJob[] = [
         startTime: 88,
       },
     ],
+    audioDurationSeconds: 1932,
+    transcriptionDurationSeconds: 154,
+    modelIdentifier: "azure-speech-batch-transcription (en-GB)",
   },
   {
     id: "job-rp00331-2026",
@@ -203,6 +209,7 @@ export const MOCK_JOBS: TranscriptionJob[] = [
     audioFileName: "RP_00331_2026_hearing.mp3",
     uploadedAt: "2026-06-30T08:00:00Z",
     status: "FAILED",
+    audioDurationSeconds: 2401,
   },
 ];
 
