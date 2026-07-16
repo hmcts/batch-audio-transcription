@@ -23,10 +23,12 @@ function tick(): void {
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   if (intervalId === null) {
-    // Refresh immediately so the first subscriber isn't stuck on a stale
-    // timestamp left over from a previous mount, then start the shared tick.
-    now = new Date();
     intervalId = setInterval(tick, TICK_INTERVAL_MS);
+    // Tick once right away so the first subscriber isn't left on a stale
+    // timestamp from a previous mount. This both refreshes `now` and notifies
+    // the just-added listener, so React re-reads the snapshot immediately
+    // rather than waiting up to a full second for the first interval tick.
+    tick();
   }
   return () => {
     listeners.delete(listener);
