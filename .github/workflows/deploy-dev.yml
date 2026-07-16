@@ -173,6 +173,17 @@ jobs:
           # dev for full feature coverage is a documented follow-up.
           E2E_EXPECT_EMPTY: "false"
 
+      # Surface which e2e tests ran (passed/failed) vs skipped right on the job
+      # page (DIAAT-241). Many feature specs are env-gated (E2E_*_JOB_ID) and
+      # skip against dev; without this, ran-vs-skipped is invisible unless you
+      # download the HTML report artifact. `if: always()` so skips AND failures
+      # are summarised; the script never exits non-zero, so this step stays
+      # informational and never changes the job's pass/fail (the e2e step above
+      # gates red/green).
+      - name: Summarise ran/skipped e2e tests
+        if: always()
+        run: node scripts/e2e-summary.mjs playwright-report/results.json >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
         if: always()

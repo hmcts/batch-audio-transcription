@@ -9,7 +9,13 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
-  reporter: [["html", { open: "never" }]],
+  reporter: [
+    ["html", { open: "never" }],
+    // Machine-readable report consumed by scripts/e2e-summary.mjs to build the
+    // GitHub Actions job summary (DIAAT-241). Lands inside playwright-report/
+    // so it's also captured by the report artifact upload.
+    ["json", { outputFile: "playwright-report/results.json" }],
+  ],
   use: {
     baseURL: BASE_URL,
     trace: "on-first-retry",
