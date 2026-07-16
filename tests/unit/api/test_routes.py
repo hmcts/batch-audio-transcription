@@ -64,6 +64,33 @@ class TestHealth:
         assert response.status_code == 200
 
 
+class TestVersion:
+    def test_defaults_to_unknown(self, client, monkeypatch):
+        # No GIT_SHA in the environment -> the "unknown" default.
+        monkeypatch.delenv("GIT_SHA", raising=False)
+        from transcription_svc.config.settings import get_settings
+
+        get_settings.cache_clear()
+        response = client.get("/api/v1/version")
+        assert response.status_code == 200
+        assert response.json() == {"version": "unknown"}
+        get_settings.cache_clear()
+
+    def test_returns_baked_git_sha(self, client, monkeypatch):
+        monkeypatch.setenv("GIT_SHA", "abc123def456")
+        from transcription_svc.config.settings import get_settings
+
+        get_settings.cache_clear()
+        response = client.get("/api/v1/version")
+        assert response.status_code == 200
+        assert response.json() == {"version": "abc123def456"}
+        get_settings.cache_clear()
+
+    def test_no_auth_required(self, client):
+        response = client.get("/api/v1/version")
+        assert response.status_code == 200
+
+
 class TestUploadAudio:
     def _mock_blob_manager(self, mocker, *, upload_ok=True, blob_url="https://x/y.wav"):
         manager = mocker.AsyncMock()
@@ -507,6 +534,78 @@ class TestSubmitJob:
         )
         assert response.status_code == 422
 
+    def test_passes_audio_duration_seconds_through_to_submission(self, client, as_caller, mocker):
+        job = _make_job()
+        submit_mock = mocker.patch(
+            "transcription_svc.api.routes.submit_and_queue_batch_job",
+            return_value=job,
+        )
+        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+
+        response = client.post(
+            "/api/v1/jobs",
+            json={
+                "audio_url": "https://storage.example.com/audio.wav?sig=token",
+                "audio_duration_seconds": 9360.0,
+            },
+        )
+        assert response.status_code == 201
+        assert submit_mock.call_args.kwargs["audio_duration_seconds"] == 9360.0
+
+    def test_audio_duration_seconds_is_optional(self, client, as_caller, mocker):
+        job = _make_job()
+        submit_mock = mocker.patch(
+            "transcription_svc.api.routes.submit_and_queue_batch_job",
+            return_value=job,
+        )
+        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+
+        response = client.post(
+            "/api/v1/jobs",
+            json={"audio_url": "https://storage.example.com/audio.wav?sig=token"},
+        )
+        assert response.status_code == 201
+        assert submit_mock.call_args.kwargs["audio_duration_seconds"] is None
+
+    def test_rejects_negative_audio_duration_seconds(self, client, as_caller, mocker):
+        mocker.patch(
+            "transcription_svc.api.routes.submit_and_queue_batch_job",
+            return_value=_make_job(),
+        )
+        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+
+        response = client.post(
+            "/api/v1/jobs",
+            json={
+                "audio_url": "https://storage.example.com/audio.wav?sig=token",
+                "audio_duration_seconds": -1.0,
+            },
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.parametrize("bad_value", ["NaN", "Infinity", "-Infinity"])
+    def test_rejects_non_finite_audio_duration_seconds(self, client, as_caller, mocker, bad_value):
+        # Python's json module accepts these tokens and Pydantic coerces them to
+        # float, so they must be rejected explicitly — they can't be serialised
+        # back in a JSON response.
+        mocker.patch(
+            "transcription_svc.api.routes.submit_and_queue_batch_job",
+            return_value=_make_job(),
+        )
+        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+
+        response = client.post(
+            "/api/v1/jobs",
+            # Sent as a raw JSON body so the non-finite literals reach Pydantic
+            # exactly as a permissive client would send them.
+            content=(
+                '{"audio_url": "https://storage.example.com/audio.wav?sig=token", '
+                f'"audio_duration_seconds": {bad_value}}}'
+            ),
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 422
+
 
 class TestGetJob:
     def test_returns_job(self, client, as_caller, mocker):
@@ -517,6 +616,18 @@ class TestGetJob:
 
         response = client.get(f"/api/v1/jobs/{job.id}")
         assert response.status_code == 200
+
+    def test_includes_owning_caller_name(self, client, as_caller, mocker):
+        # The modification-history table (DIAAT-230) uses caller_name as the
+        # "who made the change" attribution; every job response must carry it.
+        job = _make_job()
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        assert response.status_code == 200
+        # The as_caller fixture authenticates as "test-caller".
+        assert response.json()["caller_name"] == "test-caller"
 
     def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
@@ -564,6 +675,308 @@ class TestGetJob:
 
         assert body["accuracy"] is None
         assert body["needs_review"] is None
+
+    def test_includes_audio_duration_seconds_when_known(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.RUNNING)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.audio_duration_seconds = 9360.0
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        assert response.json()["audio_duration_seconds"] == 9360.0
+
+    def test_audio_duration_seconds_is_none_when_unknown(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.RUNNING)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        assert response.json()["audio_duration_seconds"] is None
+
+    def test_round_trips_nbest_alternatives(self, client, as_caller, mocker):
+        # DIAAT-232: the full nBest array persisted per phrase (not just
+        # Azure's top choice, already covered by text/confidence/words)
+        # must survive storage and come back out through the API untouched.
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "Hello world.",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.56,
+                "words": _words_payload("hello", "world"),
+                "alternatives": [
+                    {
+                        "start_word_index": 0,
+                        "end_word_index": 1,
+                        "candidates": [
+                            {"text": "Hello world.", "confidence": 0.56, "lexical": "hello world"},
+                            {"text": "helloworld", "confidence": 0.18, "lexical": "helloworld"},
+                            {
+                                "text": "hello worlds",
+                                "confidence": 0.5,
+                                "lexical": "hello worlds",
+                            },
+                        ],
+                    }
+                ],
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        entry = response.json()["dialogue_entries"][0]
+
+        assert entry["alternatives"] == [
+            {
+                "start_word_index": 0,
+                "end_word_index": 1,
+                "candidates": [
+                    {"text": "Hello world.", "confidence": 0.56, "lexical": "hello world"},
+                    {"text": "helloworld", "confidence": 0.18, "lexical": "helloworld"},
+                    {"text": "hello worlds", "confidence": 0.5, "lexical": "hello worlds"},
+                ],
+            }
+        ]
+
+    def test_alternatives_is_none_when_not_present(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        entry = response.json()["dialogue_entries"][0]
+
+        assert entry["alternatives"] is None
+
+    # DIAAT-235: LOW_CONFIDENCE_THRESHOLD lets ops override the review
+    # threshold per environment without a code change; previously declared
+    # in Settings but never actually wired into the accuracy computation.
+    def test_low_confidence_threshold_setting_overrides_the_default(
+        self, client, as_caller, mocker, monkeypatch
+    ):
+        from transcription_svc.config.settings import get_settings
+
+        monkeypatch.setenv("LOW_CONFIDENCE_THRESHOLD", "0.9")
+        get_settings.cache_clear()
+        try:
+            job = _make_job(status=JobStatus.SUCCEEDED)
+            job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+            job.dialogue_entries = [
+                {
+                    "speaker": "0",
+                    "text": "hello there",
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    # Above the 0.65 code default but below the 0.9 override —
+                    # only flagged once the setting is actually applied.
+                    "confidence": 0.75,
+                }
+            ]
+            mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+            response = client.get(f"/api/v1/jobs/{job.id}")
+            body = response.json()
+
+            assert body["accuracy"]["confidence_threshold"] == 90.0
+            assert len(body["needs_review"]) == 1
+        finally:
+            get_settings.cache_clear()
+
+    def test_includes_run_metadata_for_completed_job(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.audio_duration_seconds = 754.2
+        job.transcription_duration_seconds = 41.8
+        job.model_identifier = "https://eastus.example.com/models/base/xyz"
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        body = response.json()
+
+        assert body["audio_duration_seconds"] == 754.2
+        assert body["transcription_duration_seconds"] == 41.8
+        assert body["model_identifier"] == "https://eastus.example.com/models/base/xyz"
+
+    def test_run_metadata_defaults_to_null_before_completion(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUBMITTED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        body = response.json()
+
+        assert body["audio_duration_seconds"] is None
+        assert body["transcription_duration_seconds"] is None
+        assert body["model_identifier"] is None
+
+
+class TestUploadBaselineTranscript:
+    def _patch_session(self, client, mocker):
+        from transcription_svc.database.engine import get_session
+
+        mock_session = MagicMock()
+        client.app.dependency_overrides[get_session] = lambda: mock_session
+        return mock_session
+
+    def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
+        response = client.post(
+            f"/api/v1/jobs/{uuid.uuid4()}/baseline",
+            files={"file": ("baseline.txt", b"hello world", "text/plain")},
+        )
+        assert response.status_code == 404
+
+    def test_returns_404_for_other_callers_job(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.uuid4()
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(
+            f"/api/v1/jobs/{job.id}/baseline",
+            files={"file": ("baseline.txt", b"hello world", "text/plain")},
+        )
+        assert response.status_code == 404
+
+    def test_returns_422_when_job_not_succeeded(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUBMITTED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(
+            f"/api/v1/jobs/{job.id}/baseline",
+            files={"file": ("baseline.txt", b"hello world", "text/plain")},
+        )
+        assert response.status_code == 422
+
+    def test_rejects_unsupported_extension(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(
+            f"/api/v1/jobs/{job.id}/baseline",
+            files={"file": ("baseline.pdf", b"hello world", "application/pdf")},
+        )
+        assert response.status_code == 422
+
+    def test_rejects_missing_extension(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(
+            f"/api/v1/jobs/{job.id}/baseline",
+            files={"file": ("baseline", b"hello world", "text/plain")},
+        )
+        assert response.status_code == 422
+
+    def test_rejects_empty_file(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(
+            f"/api/v1/jobs/{job.id}/baseline",
+            files={"file": ("baseline.txt", b"   ", "text/plain")},
+        )
+        assert response.status_code == 422
+
+    def test_rejects_non_utf8_content(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(
+            f"/api/v1/jobs/{job.id}/baseline",
+            files={"file": ("baseline.txt", b"\xff\xfe\x00\x01", "text/plain")},
+        )
+        assert response.status_code == 422
+
+    def test_stores_baseline_and_returns_wer(self, client, as_caller, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.9,
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mock_session = self._patch_session(client, mocker)
+
+        try:
+            response = client.post(
+                f"/api/v1/jobs/{job.id}/baseline",
+                files={"file": ("baseline.txt", b"the slow brown fox", "text/plain")},
+            )
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["accuracy"]["has_baseline"] is True
+        assert body["accuracy"]["baseline_word_error_rate"] == 25.0
+        assert job.baseline_transcript == "the slow brown fox"
+        mock_session.commit.assert_called_once()
+
+    def test_strips_utf8_bom_from_baseline(self, client, as_caller, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.9,
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        self._patch_session(client, mocker)
+
+        # A Windows-exported .txt often starts with a UTF-8 BOM; it must be
+        # stripped so it isn't glued onto the first word (which would make an
+        # otherwise-identical baseline report a non-zero WER).
+        try:
+            response = client.post(
+                f"/api/v1/jobs/{job.id}/baseline",
+                files={
+                    "file": (
+                        "baseline.txt",
+                        b"\xef\xbb\xbf" + b"the quick brown fox",  # UTF-8 BOM + text
+                        "text/plain",
+                    )
+                },
+            )
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        assert job.baseline_transcript == "the quick brown fox"
+        assert response.json()["accuracy"]["baseline_word_error_rate"] == 0.0
+
+    def test_requires_auth(self, client):
+        response = client.post(
+            f"/api/v1/jobs/{uuid.uuid4()}/baseline",
+            files={"file": ("baseline.txt", b"hello world", "text/plain")},
+        )
+        assert response.status_code in (401, 422)
 
 
 class TestCorrectSegment:
@@ -643,6 +1056,94 @@ class TestCorrectSegment:
         assert body["dialogue_entries"][0]["corrected_text"] == "the slow brown fox"
         assert body["dialogue_entries"][0]["text"] == "the quick brown fox"
         assert body["accuracy"]["has_corrections"] is True
+        mock_session.commit.assert_called_once()
+
+    def test_does_not_write_dataset_entry_when_flag_disabled(
+        self, client, as_caller, mocker, monkeypatch
+    ):
+        """DIAAT-231: default-off flag means no row in correction_dataset_entry."""
+        from transcription_svc.config.settings import get_settings
+        from transcription_svc.database.engine import get_session
+        from transcription_svc.database.models import CorrectionDatasetEntry
+
+        monkeypatch.setenv("CORRECTIONS_DATASET_EXPORT_ENABLED", "false")
+        get_settings.cache_clear()
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.9,
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mock_session = self._patch_session(client, mocker)
+
+        try:
+            client.patch(
+                f"/api/v1/jobs/{job.id}/segments/0",
+                json={"corrected_text": "the slow brown fox"},
+            )
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        dataset_rows = [
+            call.args[0]
+            for call in mock_session.add.call_args_list
+            if isinstance(call.args[0], CorrectionDatasetEntry)
+        ]
+        assert dataset_rows == []
+
+    def test_writes_dataset_entry_when_flag_enabled(self, client, as_caller, mocker, monkeypatch):
+        """DIAAT-231: enabling the flag stages a row capturing the correction."""
+        from transcription_svc.config.settings import get_settings
+        from transcription_svc.database.engine import get_session
+        from transcription_svc.database.models import CorrectionDatasetEntry
+
+        monkeypatch.setenv("CORRECTIONS_DATASET_EXPORT_ENABLED", "true")
+        get_settings.cache_clear()
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.9,
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mock_session = self._patch_session(client, mocker)
+
+        try:
+            response = client.patch(
+                f"/api/v1/jobs/{job.id}/segments/0",
+                json={"corrected_text": "the slow brown fox"},
+            )
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        dataset_rows = [
+            call.args[0]
+            for call in mock_session.add.call_args_list
+            if isinstance(call.args[0], CorrectionDatasetEntry)
+        ]
+        assert len(dataset_rows) == 1
+        row = dataset_rows[0]
+        assert row.job_id == job.id
+        assert row.caller_id == job.caller_id
+        assert row.segment_index == 0
+        assert row.correction_kind == "segment"
+        assert row.original_text == "the quick brown fox"
+        assert row.corrected_text == "the slow brown fox"
+        assert row.confidence == 0.9
+        assert row.speaker == "0"
+        # Staged in the same commit as the job update — atomic with it.
         mock_session.commit.assert_called_once()
 
     def test_rejects_empty_correction(self, client, as_caller, mocker):
@@ -857,6 +1358,96 @@ class TestCorrectWordRange:
         assert entry["correction_history"][0]["new_phrase"] == "slow"
         mock_session.commit.assert_called_once()
 
+    def test_does_not_write_dataset_entry_when_flag_disabled(
+        self, client, as_caller, mocker, monkeypatch
+    ):
+        """DIAAT-231: default-off flag means no row in correction_dataset_entry."""
+        from transcription_svc.config.settings import get_settings
+        from transcription_svc.database.engine import get_session
+        from transcription_svc.database.models import CorrectionDatasetEntry
+
+        monkeypatch.setenv("CORRECTIONS_DATASET_EXPORT_ENABLED", "false")
+        get_settings.cache_clear()
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.9,
+                "words": _words_payload("the", "quick", "brown", "fox"),
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mock_session = self._patch_session(client, mocker)
+
+        try:
+            client.patch(
+                f"/api/v1/jobs/{job.id}/segments/0/words",
+                json={"start_word_index": 1, "end_word_index": 1, "corrected_text": "slow"},
+            )
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        dataset_rows = [
+            call.args[0]
+            for call in mock_session.add.call_args_list
+            if isinstance(call.args[0], CorrectionDatasetEntry)
+        ]
+        assert dataset_rows == []
+
+    def test_writes_dataset_entry_when_flag_enabled(self, client, as_caller, mocker, monkeypatch):
+        """DIAAT-231: enabling the flag stages a row with the original lexical
+
+        phrase (from entry.words, not any prior correction) paired with the
+        clerk's corrected phrase and the per-word confidence for that range.
+        """
+        from transcription_svc.config.settings import get_settings
+        from transcription_svc.database.engine import get_session
+        from transcription_svc.database.models import CorrectionDatasetEntry
+
+        monkeypatch.setenv("CORRECTIONS_DATASET_EXPORT_ENABLED", "true")
+        get_settings.cache_clear()
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.9,
+                "words": _words_payload("the", "quick", "brown", "fox"),
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mock_session = self._patch_session(client, mocker)
+
+        try:
+            response = client.patch(
+                f"/api/v1/jobs/{job.id}/segments/0/words",
+                json={"start_word_index": 1, "end_word_index": 1, "corrected_text": "slow"},
+            )
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        dataset_rows = [
+            call.args[0]
+            for call in mock_session.add.call_args_list
+            if isinstance(call.args[0], CorrectionDatasetEntry)
+        ]
+        assert len(dataset_rows) == 1
+        row = dataset_rows[0]
+        assert row.correction_kind == "word_range"
+        assert row.original_text == "quick"
+        assert row.corrected_text == "slow"
+        assert row.start_word_index == 1
+        assert row.end_word_index == 1
+        assert row.confidence == 0.9
+
     def test_new_range_supersedes_overlapping_existing_correction(self, client, as_caller, mocker):
         from transcription_svc.database.engine import get_session
 
@@ -927,6 +1518,139 @@ class TestCorrectWordRange:
         assert history[0]["previous_phrase"] == "slow"
         assert history[0]["new_phrase"] == "sluggish"
         mock_session.commit.assert_called_once()
+
+
+class TestAcceptSegment:
+    def _patch_session(self, client, mocker):
+        from transcription_svc.database.engine import get_session
+
+        mock_session = MagicMock()
+        client.app.dependency_overrides[get_session] = lambda: mock_session
+        return mock_session
+
+    def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
+        response = client.post(f"/api/v1/jobs/{uuid.uuid4()}/segments/0/accept")
+        assert response.status_code == 404
+
+    def test_returns_404_for_other_callers_job(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.uuid4()
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(f"/api/v1/jobs/{job.id}/segments/0/accept")
+        assert response.status_code == 404
+
+    def test_returns_422_when_job_not_succeeded(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUBMITTED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(f"/api/v1/jobs/{job.id}/segments/0/accept")
+        assert response.status_code == 422
+
+    def test_returns_404_for_out_of_range_index(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(f"/api/v1/jobs/{job.id}/segments/5/accept")
+        assert response.status_code == 404
+
+    def test_marks_segment_accepted_without_changing_text(self, client, as_caller, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.4,
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mock_session = self._patch_session(client, mocker)
+
+        try:
+            response = client.post(f"/api/v1/jobs/{job.id}/segments/0/accept")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        body = response.json()
+        entry = body["dialogue_entries"][0]
+        # Underlying text is never touched by an accept-all action.
+        assert entry["text"] == "the quick brown fox"
+        assert entry["corrected_text"] is None
+        assert entry["word_corrections"] is None
+        assert entry["accepted"] is True
+
+        # Recorded via the same correction_history mechanism as a real
+        # correction, but with a distinguishing kind and no actual change.
+        history = entry["correction_history"]
+        assert history[0]["kind"] == "accept_all"
+        assert history[0]["previous_text"] == "the quick brown fox"
+        assert history[0]["new_text"] == "the quick brown fox"
+
+        # An accept-all action is not a correction: it must not remove the
+        # segment from needs_review by way of has_corrections()/WER.
+        assert body["accuracy"]["has_corrections"] is False
+        assert body["accuracy"]["word_error_rate"] is None
+
+        # But it does clear the segment from the needs-review list.
+        assert body["needs_review"] == []
+        mock_session.commit.assert_called_once()
+
+    def test_returns_422_when_already_accepted(self, client, as_caller, mocker):
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.4,
+                "accepted": True,
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(f"/api/v1/jobs/{job.id}/segments/0/accept")
+        assert response.status_code == 422
+
+    def test_high_confidence_segment_not_in_needs_review_after_accept(
+        self, client, as_caller, mocker
+    ):
+        """Accepting a segment that was never low-confidence is harmless."""
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.99,
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        self._patch_session(client, mocker)
+
+        try:
+            response = client.post(f"/api/v1/jobs/{job.id}/segments/0/accept")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        assert response.json()["dialogue_entries"][0]["accepted"] is True
 
 
 class TestRollbackSegment:
@@ -1029,6 +1753,46 @@ class TestRollbackSegment:
         assert entry["corrected_text"] is None
         assert entry["word_corrections"] is None
         assert entry["correction_history"] is None
+        mock_session.commit.assert_called_once()
+
+    def test_rolls_back_an_accepted_segment(self, client, as_caller, mocker):
+        """A hard reset also un-accepts a segment, restoring it to needs_review."""
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job(status=JobStatus.SUCCEEDED)
+        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        job.dialogue_entries = [
+            {
+                "speaker": "0",
+                "text": "the quick brown fox",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "confidence": 0.4,
+                "accepted": True,
+                "correction_history": [
+                    {
+                        "timestamp": "2026-01-01T00:00:00+00:00",
+                        "kind": "accept_all",
+                        "previous_text": "the quick brown fox",
+                        "new_text": "the quick brown fox",
+                    }
+                ],
+            }
+        ]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mock_session = self._patch_session(client, mocker)
+
+        try:
+            response = client.post(f"/api/v1/jobs/{job.id}/segments/0/rollback")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
+        body = response.json()
+        entry = body["dialogue_entries"][0]
+        assert entry["accepted"] is False
+        assert entry["correction_history"] is None
+        assert body["needs_review"] == [{"speaker": "0", "start_time": 0.0, "confidence": 0.4}]
         mock_session.commit.assert_called_once()
 
 

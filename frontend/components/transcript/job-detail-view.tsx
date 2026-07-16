@@ -1,16 +1,18 @@
 "use client";
 
-import { ChevronLeft } from "lucide-react";
+import { ChevronDown, ChevronLeft, History } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { JobProgress } from "@/components/job-status/job-progress";
 import { JobStatusBadge } from "@/components/job-status/job-status-badge";
 import { AudioPlayerBar } from "@/components/transcript/audio-player-bar";
+import { ModificationHistoryTable } from "@/components/transcript/modification-history-table";
 import { NeedsReviewPanel } from "@/components/transcript/needs-review-panel";
 import { TranscriptAccuracy } from "@/components/transcript/transcript-accuracy";
 import { TranscriptSegment } from "@/components/transcript/transcript-segment";
-import { Progress } from "@/components/ui/progress";
 import { apiPath } from "@/lib/base-path";
 import type { TranscriptionJob } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -30,6 +32,7 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
   const [position, setPosition] = useState(0);
   const [audioDuration, setAudioDuration] = useState(0);
   const [audioAvailable, setAudioAvailable] = useState(true);
+  const [showModificationHistory, setShowModificationHistory] = useState(false);
 
   // A callback ref (rather than an effect) so listeners attach exactly when
   // the <audio> element mounts — which happens on first render if the job is
@@ -160,6 +163,18 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
     setJob(body.job as TranscriptionJob);
   };
 
+  const acceptSegment = async (index: number) => {
+    const response = await fetch(
+      apiPath(`/api/jobs/${jobId}/segments/${index}/accept`),
+      { method: "POST" }
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to accept segment: ${response.status}`);
+    }
+    const body = await response.json();
+    setJob(body.job as TranscriptionJob);
+  };
+
   const rollbackToHistoryEntry = async (
     index: number,
     historyIndex: number
@@ -172,6 +187,24 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
     );
     if (!response.ok) {
       throw new Error(`Failed to roll back: ${response.status}`);
+    }
+    const body = await response.json();
+    setJob(body.job as TranscriptionJob);
+  };
+
+  const uploadBaseline = async (file: File) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    const response = await fetch(apiPath(`/api/jobs/${jobId}/baseline`), {
+      method: "POST",
+      body: form,
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw new Error(
+        body?.error ??
+          `Failed to upload baseline transcript: ${response.status}`
+      );
     }
     const body = await response.json();
     setJob(body.job as TranscriptionJob);
@@ -212,6 +245,14 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
   if (job.status === "COMPLETED" && job.segments) {
     const totalDuration = job.segments.reduce(
       (max, s) => Math.max(max, s.startTime + s.duration),
+      0
+    );
+    // Cheap count — just sum the per-segment history lengths. Avoids the
+    // full flatten+sort (buildModificationHistory) on every render, since
+    // this runs even while the section is collapsed and the transcript page
+    // re-renders frequently (audio position updates).
+    const modificationCount = job.segments.reduce(
+      (n, s) => n + (s.correctionHistory?.length ?? 0),
       0
     );
 
@@ -276,8 +317,18 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
                       onRollbackToHistory={(historyIndex) =>
                         rollbackToHistoryEntry(index, historyIndex)
                       }
+                      onAccept={() => acceptSegment(index)}
                       isActive={isActive}
                       getCurrentTime={getCurrentTime}
+                      // Backend threshold is a 0-100 percent; the per-word
+                      // highlight compares against a 0-1 ratio. Keep them in
+                      // sync so highlights match the backend "needs review"
+                      // list even under an env override.
+                      lowConfidenceThreshold={
+                        job.accuracy
+                          ? job.accuracy.confidenceThreshold / 100
+                          : undefined
+                      }
                     />
                   );
                 })}
@@ -286,10 +337,21 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
 
             {/* Sidebar (right) — omitted when the backend hasn't returned
                 any confidence-scored segments (e.g. an older job predating
-                this feature). */}
+                this feature). Sticky so it stays in view while scrolling a
+                long transcript (potentially ~15,000 words): the `top`
+                offset clears the sticky audio player bar above it, and
+                `max-h`/`overflow-y-auto` keep the panel itself from
+                spilling past the bottom of the viewport if it ever has more
+                content than fits (e.g. many low-confidence segments). It
+                naturally un-sticks once its flex-row parent (as tall as the
+                transcript column) runs out, so it doesn't float past the
+                end of the transcript. */}
             {job.accuracy && (
-              <aside className="w-72 shrink-0 space-y-4">
-                <TranscriptAccuracy accuracy={job.accuracy} />
+              <aside className="w-72 shrink-0 space-y-4 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto">
+                <TranscriptAccuracy
+                  accuracy={job.accuracy}
+                  onUploadBaseline={uploadBaseline}
+                />
                 {job.lowConfidenceSegments &&
                   job.lowConfidenceSegments.length > 0 && (
                     <NeedsReviewPanel
@@ -301,6 +363,46 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
               </aside>
             )}
           </div>
+
+          {/* Job-level modification history — every correction, rollback and
+              accept-all action across all segments in one auditable table
+              (DIAAT-230), so the whole transcript's edit history can be
+              scanned in one place rather than segment by segment. Collapsed
+              by default to keep the transcript the focus. */}
+          <section className="mt-8">
+            <button
+              type="button"
+              onClick={() => setShowModificationHistory((v) => !v)}
+              aria-expanded={showModificationHistory}
+              className="flex items-center gap-2 text-lg font-semibold hover:text-primary"
+            >
+              <History className="size-5" />
+              Modification history
+              <span className="text-sm font-normal text-muted-foreground">
+                ({modificationCount})
+              </span>
+              <ChevronDown
+                className={cn(
+                  "size-4 transition-transform",
+                  showModificationHistory && "rotate-180"
+                )}
+              />
+            </button>
+            {showModificationHistory && (
+              <div className="mt-3">
+                <p className="text-sm text-muted-foreground mb-3">
+                  All correction, rollback and accept-all actions taken on this
+                  transcript, newest first.
+                </p>
+                <ModificationHistoryTable
+                  job={job}
+                  onSeekToSegment={
+                    audioAvailable ? seekAndScrollToSegment : undefined
+                  }
+                />
+              </div>
+            )}
+          </section>
         </div>
       </main>
     );
@@ -327,14 +429,7 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
               Transcription is still in progress. This page updates
               automatically — no need to refresh.
             </p>
-            {job.progressPercent !== undefined && (
-              <div className="flex items-center gap-3 max-w-sm">
-                <Progress value={job.progressPercent} className="flex-1" />
-                <span className="text-sm text-muted-foreground tabular-nums">
-                  {job.progressPercent}%
-                </span>
-              </div>
-            )}
+            <JobProgress job={job} />
           </div>
         )}
 

@@ -11,8 +11,21 @@ export async function POST(request: Request) {
 
   const filename = file instanceof File ? file.name : "audio";
 
+  // Number() (unlike parseFloat) rejects partially-numeric strings like
+  // "123abc" as NaN, so only a fully-numeric, positive value is accepted;
+  // anything else is dropped and the duration is simply omitted.
+  const rawDuration = form.get("audio_duration_seconds");
+  const parsedDuration =
+    typeof rawDuration === "string" && rawDuration.trim() !== ""
+      ? Number(rawDuration)
+      : Number.NaN;
+  const audioDurationSeconds =
+    Number.isFinite(parsedDuration) && parsedDuration > 0
+      ? parsedDuration
+      : undefined;
+
   try {
-    const job = await uploadAndSubmit(file, filename);
+    const job = await uploadAndSubmit(file, filename, audioDurationSeconds);
     return NextResponse.json({ job }, { status: 201 });
   } catch (err) {
     console.error("Failed to upload and submit job", err);

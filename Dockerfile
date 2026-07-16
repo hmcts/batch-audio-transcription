@@ -19,6 +19,12 @@ COPY alembic.ini .
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
+# Git commit SHA baked in at build time (passed via --build-arg GIT_SHA in
+# ci-build-image.yml). Read at runtime by GET /api/v1/version. Defaults to
+# "unknown" so local builds without the arg still work.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
+
 ENV PYTHONPATH=/app/src
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1

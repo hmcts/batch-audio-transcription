@@ -35,7 +35,7 @@ const JOB_1_SEGMENTS: TranscriptSegment[] = [
     text: "Good morning, Judge. My name is Adeyemi, of counsel, instructed by Whitfield Law. I appear on behalf of the appellant.",
     startTime: 19,
     duration: 11,
-    confidence: 0.73,
+    confidence: 0.58,
     flaggedForReview: true,
   },
   {
@@ -75,7 +75,7 @@ const JOB_1_SEGMENTS: TranscriptSegment[] = [
     text: "I confirm that I can understand the interpreter clearly.",
     startTime: 64,
     duration: 8,
-    confidence: 0.78,
+    confidence: 0.61,
     flaggedForReview: true,
   },
 ];
@@ -84,35 +84,38 @@ const JOB_1_ACCURACY: TranscriptAccuracy = {
   confidenceScore: 95.3,
   wordsTranscribed: 2284,
   lowConfidenceCount: 6,
-  confidenceThreshold: 85,
+  confidenceThreshold: 65,
   hasCorrections: true,
   wordErrorRate: 4.7,
   correctedPercent: 12,
+  hasBaseline: false,
 };
 
+// All entries sit below the 65% threshold (see JOB_1_ACCURACY) — the
+// "needs review" list only contains genuinely low-confidence segments.
 const JOB_1_LOW_CONFIDENCE: LowConfidenceSegment[] = [
   {
     speaker: "Counsel",
     speakerColor: color("Counsel"),
-    confidence: 0.73,
+    confidence: 0.58,
     startTime: 19,
   },
   {
     speaker: "Appellant",
     speakerColor: color("Appellant"),
-    confidence: 0.78,
+    confidence: 0.61,
     startTime: 159,
   },
   {
     speaker: "Appellant",
     speakerColor: color("Appellant"),
-    confidence: 0.74,
+    confidence: 0.55,
     startTime: 178,
   },
   {
     speaker: "Appellant",
     speakerColor: color("Appellant"),
-    confidence: 0.71,
+    confidence: 0.52,
     startTime: 220,
   },
   {
@@ -124,7 +127,7 @@ const JOB_1_LOW_CONFIDENCE: LowConfidenceSegment[] = [
   {
     speaker: "Appellant",
     speakerColor: color("Appellant"),
-    confidence: 0.8,
+    confidence: 0.64,
     startTime: 264,
   },
 ];
@@ -156,10 +159,12 @@ const JOB_2_ACCURACY: TranscriptAccuracy = {
   confidenceScore: 97.8,
   wordsTranscribed: 1456,
   lowConfidenceCount: 1,
-  confidenceThreshold: 85,
+  confidenceThreshold: 65,
   hasCorrections: true,
   wordErrorRate: 2.1,
   correctedPercent: 15,
+  hasBaseline: true,
+  baselineWordErrorRate: 6.3,
 };
 
 export const MOCK_JOBS: TranscriptionJob[] = [
@@ -174,6 +179,9 @@ export const MOCK_JOBS: TranscriptionJob[] = [
     segments: JOB_1_SEGMENTS,
     accuracy: JOB_1_ACCURACY,
     lowConfidenceSegments: JOB_1_LOW_CONFIDENCE,
+    audioDurationSeconds: 1920,
+    transcriptionDurationSeconds: 187,
+    modelIdentifier: "azure-speech-batch-transcription (en-GB)",
   },
   {
     id: "job-ea11042-2025",
@@ -189,10 +197,13 @@ export const MOCK_JOBS: TranscriptionJob[] = [
       {
         speaker: "Counsel",
         speakerColor: color("Counsel"),
-        confidence: 0.81,
+        confidence: 0.6,
         startTime: 88,
       },
     ],
+    audioDurationSeconds: 1932,
+    transcriptionDurationSeconds: 154,
+    modelIdentifier: "azure-speech-batch-transcription (en-GB)",
   },
   {
     id: "job-rp00331-2026",
@@ -201,6 +212,7 @@ export const MOCK_JOBS: TranscriptionJob[] = [
     audioFileName: "RP_00331_2026_hearing.mp3",
     uploadedAt: "2026-06-30T08:00:00Z",
     status: "FAILED",
+    audioDurationSeconds: 2401,
   },
 ];
 

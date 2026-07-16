@@ -188,8 +188,12 @@ describe("TranscriptSegment", () => {
     );
     const lowConfWord = Array.from(
       wordsParagraph(container).querySelectorAll("span")
-    ).find((el) => el.textContent?.trim() === "morning.");
-    expect(lowConfWord?.className).toContain("bg-orange-100");
+    ).find(
+      (el) =>
+        el.textContent?.trim() === "morning." &&
+        el.className.includes("bg-orange-100")
+    );
+    expect(lowConfWord).toBeDefined();
   });
 
   it("does not flag a high-confidence word as low-confidence", () => {
@@ -200,6 +204,64 @@ describe("TranscriptSegment", () => {
       wordsParagraph(container).querySelectorAll("span")
     ).find((el) => el.textContent?.trim() === "Good");
     expect(goodWord?.className).not.toContain("bg-orange-100");
+  });
+
+  // DIAAT-235: the highlight threshold was lowered from 0.85 to 0.65 so
+  // correct-but-imperfectly-confident common words stop being flagged,
+  // while genuinely uncertain words still are.
+  it("does not flag a word between the old (0.85) and new (0.65) threshold as low-confidence", () => {
+    const wordsWithMidConfidence: SegmentType["words"] = WORDS.map((w) =>
+      w.text === "morning" ? { ...w, confidence: 0.75 } : w
+    );
+    const { container } = render(
+      <TranscriptSegment
+        segment={{ ...SEGMENT, words: wordsWithMidConfidence }}
+      />
+    );
+    const word = Array.from(
+      wordsParagraph(container).querySelectorAll("span")
+    ).find((el) => el.textContent?.trim() === "morning.");
+    expect(word?.className).not.toContain("bg-orange-100");
+  });
+
+  it("still flags a word below the new 0.65 threshold as low-confidence", () => {
+    const wordsWithLowConfidence: SegmentType["words"] = WORDS.map((w) =>
+      w.text === "morning" ? { ...w, confidence: 0.5 } : w
+    );
+    const { container } = render(
+      <TranscriptSegment
+        segment={{ ...SEGMENT, words: wordsWithLowConfidence }}
+      />
+    );
+    const word = Array.from(
+      wordsParagraph(container).querySelectorAll("span")
+    ).find(
+      (el) =>
+        el.textContent?.trim() === "morning." &&
+        el.className.includes("bg-orange-100")
+    );
+    expect(word).toBeDefined();
+  });
+
+  // DIAAT-235: the per-word highlight cutoff follows the backend-derived
+  // threshold (passed as a 0-1 ratio) so highlights stay consistent with the
+  // "needs review" list even when ops override the threshold.
+  it("respects an explicit lowConfidenceThreshold prop over the default", () => {
+    // "morning" is 0.6 — below the default 0.65 (would normally highlight),
+    // but a 0.5 override should leave it un-highlighted.
+    const wordsMid: SegmentType["words"] = WORDS.map((w) =>
+      w.text === "morning" ? { ...w, confidence: 0.6 } : w
+    );
+    const { container } = render(
+      <TranscriptSegment
+        segment={{ ...SEGMENT, words: wordsMid }}
+        lowConfidenceThreshold={0.5}
+      />
+    );
+    const word = Array.from(
+      wordsParagraph(container).querySelectorAll("span")
+    ).find((el) => el.textContent?.trim() === "morning.");
+    expect(word?.className).not.toContain("bg-orange-100");
   });
 
   it("highlights the word matching the current playback position", async () => {
@@ -527,11 +589,16 @@ describe("TranscriptSegment", () => {
       );
       await user.click(screen.getByLabelText(/show change history/i));
 
-      // "morning." is low-confidence, so it's nested inside an outer orange
-      // wrapper span — query the inner (leaf) word span specifically.
+      // "morning." is low-confidence, so it sits inside a positioning wrapper
+      // and an orange trigger span — the ring highlight lands on the innermost
+      // (leaf) token span, so target the one with no nested spans.
       const morningWord = Array.from(
-        wordsParagraph(container).querySelectorAll("span span")
-      ).find((el) => el.textContent?.trim() === "morning.");
+        wordsParagraph(container).querySelectorAll("span")
+      ).find(
+        (el) =>
+          el.textContent?.trim() === "morning." &&
+          el.querySelector("span") === null
+      );
       expect(morningWord?.className).not.toContain("ring-amber-500");
 
       const historyItem = screen.getByText(/phrase correction/i).closest("li");
@@ -540,6 +607,574 @@ describe("TranscriptSegment", () => {
 
       await user.unhover(historyItem as Element);
       expect(morningWord?.className).not.toContain("ring-amber-500");
+    });
+  });
+
+  describe("accept as-is", () => {
+    // A low-confidence segment (< 85%) that hasn't been edited — the only
+    // state in which the accept control is offered.
+    const LOW_CONF: SegmentType = {
+      ...SEGMENT,
+      confidence: 0.5,
+      words: WORDS,
+    };
+
+    it("does not show an accept button without an onAccept handler", () => {
+      render(<TranscriptSegment segment={LOW_CONF} />);
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    it("shows an accept button for a low-confidence, uncorrected segment", () => {
+      render(<TranscriptSegment segment={LOW_CONF} onAccept={vi.fn()} />);
+      expect(screen.getByLabelText(/accept segment as-is/i)).toBeDefined();
+    });
+
+    it("does not offer accept for a high-confidence segment", () => {
+      render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, confidence: 0.98, words: WORDS }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    it("does not offer accept once the segment has been corrected", () => {
+      render(
+        <TranscriptSegment
+          segment={{ ...LOW_CONF, correctedText: "fixed text" }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    it("does not offer accept once the segment has already been accepted", () => {
+      render(
+        <TranscriptSegment
+          segment={{ ...LOW_CONF, accepted: true }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    it("calls onAccept when the accept button is clicked", async () => {
+      const onAccept = vi.fn().mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      render(<TranscriptSegment segment={LOW_CONF} onAccept={onAccept} />);
+      await user.click(screen.getByLabelText(/accept segment as-is/i));
+      expect(onAccept).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows an Accepted badge and clears low-confidence highlighting once accepted", () => {
+      const { container } = render(
+        <TranscriptSegment
+          segment={{ ...LOW_CONF, accepted: true }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.getByText(/^Accepted$/)).toBeDefined();
+      // "morning." was the low-confidence word — after accepting it must no
+      // longer carry the orange highlight, without its text being altered.
+      const morningWord = Array.from(
+        wordsParagraph(container).querySelectorAll("span")
+      ).find((el) => el.textContent?.trim() === "morning.");
+      expect(morningWord).toBeDefined();
+      expect(morningWord?.className ?? "").not.toContain("bg-orange-100");
+    });
+
+    it("still highlights low-confidence words before acceptance", () => {
+      const { container } = render(
+        <TranscriptSegment segment={LOW_CONF} onAccept={vi.fn()} />
+      );
+      const morningWord = Array.from(
+        wordsParagraph(container).querySelectorAll("span")
+      ).find(
+        (el) =>
+          el.textContent?.trim() === "morning." &&
+          el.className.includes("bg-orange-100")
+      );
+      expect(morningWord).toBeDefined();
+    });
+  });
+
+  describe("low-confidence hover popup (DIAAT-233)", () => {
+    // "morning" (index 1, confidence 0.6) is the low-confidence word.
+    // The alternatives group covers the whole phrase and offers one
+    // alternate reading beyond the top choice.
+    const WITH_ALTERNATIVES: SegmentType = {
+      ...SEGMENT,
+      words: WORDS,
+      alternatives: [
+        {
+          startWordIndex: 0,
+          endWordIndex: 6,
+          candidates: [
+            { text: "Good morning. We are on the record." },
+            { text: "Good mourning. We are on the record.", confidence: 0.48 },
+          ],
+        },
+      ],
+    };
+
+    function lowConfidenceRun(container: HTMLElement) {
+      const run = Array.from(
+        wordsParagraph(container).querySelectorAll("span")
+      ).find(
+        (el) =>
+          el.className.includes("bg-orange-100") &&
+          el.textContent?.includes("morning")
+      );
+      if (!run) throw new Error("low-confidence run not found");
+      return run;
+    }
+
+    it("does not render the popup until the word is hovered", () => {
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      expect(container.querySelector('[role="tooltip"]')).toBeNull();
+    });
+
+    it("shows the word's confidence score on hover", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      await user.hover(lowConfidenceRun(container));
+      const popup = screen.getByRole("tooltip");
+      expect(popup.textContent).toMatch(/60%/);
+    });
+
+    it("shows alternate readings Azure also heard on hover", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      await user.hover(lowConfidenceRun(container));
+      expect(screen.getByText(/azure also heard/i)).toBeDefined();
+      expect(screen.getByText(/Good mourning/)).toBeDefined();
+      expect(screen.getByText("48%")).toBeDefined();
+    });
+
+    it("dismisses the popup cleanly on mouse-out", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      const run = lowConfidenceRun(container);
+      await user.hover(run);
+      expect(screen.getByRole("tooltip")).toBeDefined();
+      await user.unhover(run);
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    it("degrades gracefully when the word has no alternative data", async () => {
+      const user = userEvent.setup();
+      // WORDS has per-word confidence but no alternatives at all.
+      const { container } = render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, words: WORDS }}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      await user.hover(lowConfidenceRun(container));
+      const popup = screen.getByRole("tooltip");
+      // Still shows the confidence and a short explanation, not an empty popup.
+      expect(popup.textContent).toMatch(/60%/);
+      expect(
+        screen.getByText(/suggested no alternative readings/i)
+      ).toBeDefined();
+      expect(screen.queryByText(/azure also heard/i)).toBeNull();
+    });
+
+    it("takes no action on hover — the inline editor never opens", async () => {
+      const onCorrectRange = vi.fn();
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={onCorrectRange}
+        />
+      );
+      await user.hover(lowConfidenceRun(container));
+      expect(screen.queryByRole("textbox")).toBeNull();
+      expect(onCorrectRange).not.toHaveBeenCalled();
+    });
+
+    it("opens the resolve menu on click (DIAAT-234), from which Edit is reachable", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      const run = lowConfidenceRun(container);
+      await user.hover(run);
+      // With alternatives present, click now opens the resolve menu rather
+      // than the inline editor directly. The editor is one step away via Edit.
+      await user.click(run);
+      expect(screen.queryByRole("textbox")).toBeNull();
+      await user.click(screen.getByRole("menuitem", { name: /edit/i }));
+      expect(screen.getByRole("textbox")).toBeDefined();
+    });
+
+    it("shows the popup on keyboard focus and links it via aria-describedby", () => {
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      const run = lowConfidenceRun(container);
+      fireEvent.focus(run);
+      const popup = screen.getByRole("tooltip");
+      // The focused element describes itself with the popup, and focus stays
+      // on the run itself — the popup is not focusable, so it can't trap focus.
+      expect(run.getAttribute("aria-describedby")).toBe(popup.id);
+      expect(popup.querySelector("[tabindex]")).toBeNull();
+      fireEvent.blur(run);
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
+
+  describe("click-to-resolve menu (DIAAT-234)", () => {
+    // "morning" (index 1, confidence 0.6) is the low-confidence word. The
+    // alternatives group covers the whole phrase (words 0-6) and offers one
+    // alternate reading beyond the top choice.
+    const WITH_ALTERNATIVES: SegmentType = {
+      ...SEGMENT,
+      words: WORDS,
+      alternatives: [
+        {
+          startWordIndex: 0,
+          endWordIndex: 6,
+          candidates: [
+            { text: "Good morning. We are on the record." },
+            { text: "Good mourning. We are on the record.", confidence: 0.48 },
+          ],
+        },
+      ],
+    };
+
+    function lowConfidenceRun(container: HTMLElement) {
+      const run = Array.from(
+        wordsParagraph(container).querySelectorAll("span")
+      ).find(
+        (el) =>
+          el.className.includes("bg-orange-100") &&
+          el.textContent?.includes("morning")
+      );
+      if (!run) throw new Error("low-confidence run not found");
+      return run;
+    }
+
+    it("opens a menu with Edit and Suggested options on click", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      await user.click(lowConfidenceRun(container));
+      expect(screen.getByRole("menu", { name: /resolve/i })).toBeDefined();
+      expect(screen.getByRole("menuitem", { name: /edit/i })).toBeDefined();
+      expect(
+        screen.getByRole("menuitem", { name: /suggested/i })
+      ).toBeDefined();
+    });
+
+    it("toggles the menu closed when the highlighted word is clicked again", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      const run = lowConfidenceRun(container);
+      await user.click(run);
+      expect(screen.getByRole("menu", { name: /resolve/i })).toBeDefined();
+      // Clicking the same word again closes it (a toggle), rather than the
+      // outside-click churning it closed-then-open.
+      await user.click(run);
+      expect(screen.queryByRole("menu", { name: /resolve/i })).toBeNull();
+    });
+
+    it("Edit from the menu opens the inline editor pre-filled with the run's text", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      await user.click(lowConfidenceRun(container));
+      await user.click(screen.getByRole("menuitem", { name: /edit/i }));
+      const input = screen.getByRole("textbox") as HTMLInputElement;
+      expect(input.value).toBe("morning.");
+    });
+
+    it("lists suggested candidates in Azure's order, never re-sorted by confidence", async () => {
+      const user = userEvent.setup();
+      // candidates[1:] are, in Azure order, a lower-confidence reading first
+      // then a higher-confidence one — a re-sort would flip them.
+      const segment: SegmentType = {
+        ...SEGMENT,
+        words: WORDS,
+        alternatives: [
+          {
+            startWordIndex: 0,
+            endWordIndex: 6,
+            candidates: [
+              { text: "top reading" },
+              { text: "first alternate", confidence: 0.3 },
+              { text: "second alternate", confidence: 0.7 },
+            ],
+          },
+        ],
+      };
+      const { container } = render(
+        <TranscriptSegment segment={segment} onCorrectRange={vi.fn()} />
+      );
+      await user.click(lowConfidenceRun(container));
+      await user.click(screen.getByRole("menuitem", { name: /suggested/i }));
+
+      const suggestions = screen
+        .getByRole("menu", { name: /suggested alternatives/i })
+        .querySelectorAll('[role="menuitem"]');
+      const texts = Array.from(suggestions).map((el) => el.textContent ?? "");
+      expect(texts[0]).toContain("first alternate");
+      expect(texts[1]).toContain("second alternate");
+      // The current top reading (candidates[0]) is never offered as an option.
+      expect(texts.some((t) => t.includes("top reading"))).toBe(false);
+    });
+
+    it("applies a chosen candidate as a word-range correction over the phrase range", async () => {
+      const onCorrectRange = vi.fn().mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={onCorrectRange}
+        />
+      );
+      await user.click(lowConfidenceRun(container));
+      await user.click(screen.getByRole("menuitem", { name: /suggested/i }));
+      await user.click(
+        screen.getByRole("menuitem", { name: /good mourning/i })
+      );
+
+      // The phrase group covers words 0-6, and the whole alternate reading is
+      // applied over that range — exactly as typing it into the editor would.
+      expect(onCorrectRange).toHaveBeenCalledWith(
+        0,
+        6,
+        "Good mourning. We are on the record."
+      );
+    });
+
+    it("skips the menu and opens Edit directly when the word has no alternatives", async () => {
+      const user = userEvent.setup();
+      // WORDS has per-word confidence but no alternatives at all.
+      const { container } = render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, words: WORDS }}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      await user.click(lowConfidenceRun(container));
+      // No resolve menu — straight to the inline editor, preserving today's
+      // behaviour (scoped by name so it's specific to the resolve menu).
+      expect(screen.queryByRole("menu", { name: /resolve/i })).toBeNull();
+      const input = screen.getByRole("textbox") as HTMLInputElement;
+      expect(input.value).toBe("morning.");
+    });
+
+    it("does not open a resolve menu on another word while a correction is being applied", async () => {
+      const user = userEvent.setup();
+      // Two non-adjacent low-confidence words ("bravo" idx 1, "delta" idx 3),
+      // both covered by one alternatives group, so each is its own clickable
+      // low-confidence run with a Suggested option.
+      const twoLowConf: SegmentType = {
+        ...SEGMENT,
+        text: "alpha bravo charlie delta echo",
+        words: [
+          { text: "alpha", startTime: 0, endTime: 0.5, confidence: 0.95 },
+          { text: "bravo", startTime: 0.5, endTime: 1.0, confidence: 0.3 },
+          { text: "charlie", startTime: 1.0, endTime: 1.5, confidence: 0.95 },
+          { text: "delta", startTime: 1.5, endTime: 2.0, confidence: 0.3 },
+          { text: "echo", startTime: 2.0, endTime: 2.5, confidence: 0.95 },
+        ],
+        alternatives: [
+          {
+            startWordIndex: 0,
+            endWordIndex: 4,
+            candidates: [
+              { text: "alpha bravo charlie delta echo" },
+              { text: "alpha bravo charlie delta ECHO", confidence: 0.4 },
+            ],
+          },
+        ],
+      };
+      // A correction that never settles, so applyingCandidate stays true.
+      const onCorrectRange = vi.fn(
+        () =>
+          new Promise<void>(() => {
+            // intentionally never resolves
+          })
+      );
+      const { container } = render(
+        <TranscriptSegment
+          segment={twoLowConf}
+          onCorrectRange={onCorrectRange}
+        />
+      );
+      const runFor = (word: string) => {
+        const run = Array.from(container.querySelectorAll("span")).find(
+          (el) =>
+            el.className.includes("bg-orange-100") &&
+            el.textContent?.trim() === word
+        );
+        if (!run) throw new Error(`run for ${word} not found`);
+        return run;
+      };
+
+      await user.click(runFor("bravo"));
+      await user.click(screen.getByRole("menuitem", { name: /suggested/i }));
+      await user.click(
+        screen.getByRole("menuitem", {
+          name: /alpha bravo charlie delta ECHO/i,
+        })
+      );
+      expect(onCorrectRange).toHaveBeenCalledTimes(1);
+
+      // Correction still in flight — clicking a different low-confidence word
+      // must not open a second resolve menu (concurrent PATCHes unsupported).
+      await user.click(runFor("delta"));
+      expect(screen.queryByRole("menu", { name: /resolve/i })).toBeNull();
+      expect(onCorrectRange).toHaveBeenCalledTimes(1);
+    });
+
+    it("focuses the first option on open and moves focus with arrow keys", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      await user.click(lowConfidenceRun(container));
+      const editItem = screen.getByRole("menuitem", { name: /edit/i });
+      const suggestedItem = screen.getByRole("menuitem", {
+        name: /suggested/i,
+      });
+      // Focus lands inside the menu on the first option, not the trigger word.
+      expect(document.activeElement).toBe(editItem);
+      await user.keyboard("{ArrowDown}");
+      expect(document.activeElement).toBe(suggestedItem);
+      // ArrowDown wraps back to the first item from the last.
+      await user.keyboard("{ArrowDown}");
+      expect(document.activeElement).toBe(editItem);
+      await user.keyboard("{ArrowUp}");
+      expect(document.activeElement).toBe(suggestedItem);
+    });
+
+    it("dismisses the menu on Escape without taking any action", async () => {
+      const onCorrectRange = vi.fn();
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={onCorrectRange}
+        />
+      );
+      const run = lowConfidenceRun(container);
+      await user.click(run);
+      expect(screen.getByRole("menu", { name: /resolve/i })).toBeDefined();
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(onCorrectRange).not.toHaveBeenCalled();
+      expect(screen.queryByRole("textbox")).toBeNull();
+      // Focus returns to the trigger word so the clerk keeps their place.
+      expect(document.activeElement).toBe(run);
+    });
+
+    it("suppresses the informational hover popup while the resolve menu is open", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={WITH_ALTERNATIVES}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      const run = lowConfidenceRun(container);
+      await user.hover(run);
+      expect(screen.getByRole("tooltip")).toBeDefined();
+      await user.click(run);
+      // Menu takes over; the tooltip must not linger overlapping it.
+      expect(screen.getByRole("menu", { name: /resolve/i })).toBeDefined();
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    it("suppresses the hover popup on other runs while a resolve menu is open", async () => {
+      const user = userEvent.setup();
+      // Two low-confidence runs ("bravo", "delta") both covered by alternatives.
+      const twoLowConf: SegmentType = {
+        ...SEGMENT,
+        text: "alpha bravo charlie delta echo",
+        words: [
+          { text: "alpha", startTime: 0, endTime: 0.5, confidence: 0.95 },
+          { text: "bravo", startTime: 0.5, endTime: 1.0, confidence: 0.3 },
+          { text: "charlie", startTime: 1.0, endTime: 1.5, confidence: 0.95 },
+          { text: "delta", startTime: 1.5, endTime: 2.0, confidence: 0.3 },
+          { text: "echo", startTime: 2.0, endTime: 2.5, confidence: 0.95 },
+        ],
+        alternatives: [
+          {
+            startWordIndex: 0,
+            endWordIndex: 4,
+            candidates: [
+              { text: "alpha bravo charlie delta echo" },
+              { text: "alpha bravo charlie delta ECHO", confidence: 0.4 },
+            ],
+          },
+        ],
+      };
+      const { container } = render(
+        <TranscriptSegment segment={twoLowConf} onCorrectRange={vi.fn()} />
+      );
+      const runFor = (word: string) => {
+        const run = Array.from(container.querySelectorAll("span")).find(
+          (el) =>
+            el.className.includes("bg-orange-100") &&
+            el.textContent?.trim() === word
+        );
+        if (!run) throw new Error(`run for ${word} not found`);
+        return run;
+      };
+
+      await user.click(runFor("bravo"));
+      expect(screen.getByRole("menu", { name: /resolve/i })).toBeDefined();
+      // Hovering a different low-confidence run must not open a tooltip that
+      // would overlap the open menu.
+      await user.hover(runFor("delta"));
+      expect(screen.queryByRole("tooltip")).toBeNull();
     });
   });
 });

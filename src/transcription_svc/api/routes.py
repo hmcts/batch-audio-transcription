@@ -1,6 +1,7 @@
 import ipaddress
 import json
 import logging
+import math
 import mimetypes
 import re
 import socket
@@ -30,7 +31,7 @@ from sqlmodel import Session
 
 from transcription_svc.api.dependencies import get_caller
 from transcription_svc.audio import local_storage
-from transcription_svc.audio.accuracy import compute_accuracy
+from transcription_svc.audio.accuracy import DEFAULT_CONFIDENCE_THRESHOLD, compute_accuracy
 from transcription_svc.audio.azure_utils import AsyncAzureBlobManager
 from transcription_svc.audio.submission import submit_and_queue_batch_job
 from transcription_svc.config.settings import get_settings
@@ -39,6 +40,7 @@ from transcription_svc.database.interface import (
     get_job_by_id,
     get_job_by_idempotency_key,
     list_jobs_for_caller,
+    record_correction_dataset_entry,
 )
 from transcription_svc.database.models import (
     Caller,
@@ -61,6 +63,10 @@ _MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 _ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".mp4", ".m4a", ".ogg", ".flac"}
 _UNSAFE_FILENAME_CHARS_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+# A plain-text reference transcript for even a multi-hour hearing is at most
+# a few hundred KB; 5MB is generous headroom without allowing an abusive upload.
+_MAX_BASELINE_BYTES = 5 * 1024 * 1024
+_ALLOWED_BASELINE_EXTENSIONS = {".txt"}
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -178,7 +184,22 @@ class SubmitJobRequest(BaseModel):
     enable_diarization: bool = True
     callback_url: str | None = None
     idempotency_key: str | None = None
+    # Total duration of the source audio, in seconds — supplied by the caller
+    # (the frontend reads it client-side from the file before upload) since
+    # Azure only reports it back once the batch job has already succeeded,
+    # too late to show "Transcribing 2h 36m of audio" while still PROCESSING.
+    audio_duration_seconds: float | None = None
     metadata: dict = Field(default_factory=dict)
+
+    @field_validator("audio_duration_seconds")
+    @classmethod
+    def validate_audio_duration_seconds(cls, v: float | None) -> float | None:
+        # Reject non-finite values (NaN/±Infinity) as well as negatives: Postgres
+        # would store them but they can't be serialised back in a JSON response,
+        # so they must not cross the API boundary in the first place.
+        if v is not None and (not math.isfinite(v) or v < 0):
+            raise ValueError("audio_duration_seconds must be a finite, non-negative number")
+        return v
 
     @field_validator("audio_url")
     @classmethod
@@ -230,6 +251,18 @@ class WordCorrectionResponse(BaseModel):
     text: str
 
 
+class NBestCandidateResponse(BaseModel):
+    text: str
+    confidence: float | None = None
+    lexical: str | None = None
+
+
+class PhraseAlternativesResponse(BaseModel):
+    start_word_index: int | None = None
+    end_word_index: int | None = None
+    candidates: list[NBestCandidateResponse]
+
+
 class CorrectionEntryResponse(BaseModel):
     timestamp: str
     kind: str
@@ -251,6 +284,8 @@ class DialogueEntryResponse(BaseModel):
     word_corrections: list[WordCorrectionResponse] | None = None
     correction_history: list[CorrectionEntryResponse] | None = None
     words: list[WordInfoResponse] | None = None
+    alternatives: list[PhraseAlternativesResponse] | None = None
+    accepted: bool = False
 
 
 class NeedsReviewItemResponse(BaseModel):
@@ -267,6 +302,8 @@ class AccuracyResponse(BaseModel):
     has_corrections: bool
     word_error_rate: float | None = None
     corrected_percent: float | None = None
+    has_baseline: bool = False
+    baseline_word_error_rate: float | None = None
 
 
 class JobResponse(BaseModel):
@@ -279,6 +316,20 @@ class JobResponse(BaseModel):
     needs_review: list[NeedsReviewItemResponse] | None = None
     error_message: str | None = None
     metadata: dict = Field(default_factory=dict)
+    # The caller (API client / clerk identity) that owns this job. Every
+    # correction endpoint enforces job.caller_id == caller.id, so all
+    # modification-history entries on the job were made by this caller — it's
+    # the best available "who made the change" attribution. Note this is
+    # job-level, not per-action: CorrectionEntry does not record a separate
+    # identity per correction, so it cannot distinguish two people editing
+    # under the same caller. In local dev this is always "local-dev".
+    caller_name: str | None = None
+    # Run metadata (DIAAT-227): audio length, how long the transcription
+    # itself took, and which model/engine produced it. audio_duration is
+    # known from submission; the other two only once the job succeeds.
+    audio_duration_seconds: float | None = None
+    transcription_duration_seconds: float | None = None
+    model_identifier: str | None = None
 
 
 class ListJobsResponse(BaseModel):
@@ -341,17 +392,30 @@ def _to_dialogue_entries(job: TranscriptionJob) -> list[DialogueEntry] | None:
             word_corrections=_entry_field(e, "word_corrections"),
             correction_history=_entry_field(e, "correction_history"),
             words=_entry_field(e, "words"),
+            alternatives=_entry_field(e, "alternatives"),
+            accepted=_entry_field(e, "accepted", False),
         )
         for e in job.dialogue_entries
     ]
 
 
-def _to_response(job: TranscriptionJob) -> JobResponse:
+def _to_response(job: TranscriptionJob, caller_name: str | None = None) -> JobResponse:
     entries = _to_dialogue_entries(job)
     accuracy = None
     needs_review = None
     if entries is not None:
-        summary = compute_accuracy(entries)
+        # LOW_CONFIDENCE_THRESHOLD lets ops tune the review-highlighting
+        # cutoff per environment (e.g. via Key Vault) without a code change;
+        # unset (the common case) falls back to the code default. Use an
+        # explicit None check so an intentional 0.0 (flag nothing) is honoured
+        # rather than treated as unset. Settings validates the 0-1 range.
+        configured = get_settings().LOW_CONFIDENCE_THRESHOLD
+        threshold = configured if configured is not None else DEFAULT_CONFIDENCE_THRESHOLD
+        summary = compute_accuracy(
+            entries,
+            confidence_threshold=threshold,
+            baseline_transcript=job.baseline_transcript,
+        )
         accuracy = AccuracyResponse(
             confidence_score=summary.confidence_score,
             words_transcribed=summary.words_transcribed,
@@ -360,6 +424,8 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
             has_corrections=summary.has_corrections,
             word_error_rate=summary.word_error_rate,
             corrected_percent=summary.corrected_percent,
+            has_baseline=summary.has_baseline,
+            baseline_word_error_rate=summary.baseline_word_error_rate,
         )
         needs_review = [
             NeedsReviewItemResponse(
@@ -417,6 +483,22 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
                 ]
                 if e.words
                 else None,
+                alternatives=[
+                    PhraseAlternativesResponse(
+                        start_word_index=pa.start_word_index,
+                        end_word_index=pa.end_word_index,
+                        candidates=[
+                            NBestCandidateResponse(
+                                text=c.text, confidence=c.confidence, lexical=c.lexical
+                            )
+                            for c in pa.candidates
+                        ],
+                    )
+                    for pa in e.alternatives
+                ]
+                if e.alternatives
+                else None,
+                accepted=e.accepted,
             )
             for e in entries
         ]
@@ -426,6 +508,10 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
         needs_review=needs_review,
         error_message=job.error_message,
         metadata=job.metadata_,
+        caller_name=caller_name,
+        audio_duration_seconds=job.audio_duration_seconds,
+        transcription_duration_seconds=job.transcription_duration_seconds,
+        model_identifier=job.model_identifier,
     )
 
 
@@ -439,7 +525,23 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
-async def _read_upload_capped(file: UploadFile, max_bytes: int) -> bytes:
+@router.get("/version")
+async def version() -> dict:
+    """Return the git commit SHA baked into the image at build time.
+
+    Used by the post-deploy version-gated check (DIAAT-241) to confirm the
+    newly built container is live before running e2e tests. Returns "unknown"
+    when GIT_SHA was not passed as a build arg (e.g. local development).
+    """
+    return {"version": get_settings().GIT_SHA}
+
+
+async def _read_upload_capped(
+    file: UploadFile,
+    max_bytes: int,
+    *,
+    error_detail: str = "Audio file exceeds the maximum upload size",
+) -> bytes:
     """Read in chunks, aborting as soon as max_bytes is exceeded.
 
     Bounds worst-case memory use to roughly max_bytes rather than reading an
@@ -450,9 +552,7 @@ async def _read_upload_capped(file: UploadFile, max_bytes: int) -> bytes:
     while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
         total += len(chunk)
         if total > max_bytes:
-            raise HTTPException(
-                status_code=413, detail="Audio file exceeds the maximum upload size"
-            )
+            raise HTTPException(status_code=413, detail=error_detail)
         chunks.append(chunk)
     return b"".join(chunks)
 
@@ -527,7 +627,7 @@ async def submit_job(
     if body.idempotency_key:
         existing = get_job_by_idempotency_key(session, body.idempotency_key, caller.id)
         if existing:
-            return _to_response(existing)
+            return _to_response(existing, caller.name)
 
     # blob_name is later trusted by GET /jobs/{id}/audio to read straight from
     # storage — without this check a caller could point it at another
@@ -546,6 +646,7 @@ async def submit_job(
             callback_url=body.callback_url,
             idempotency_key=body.idempotency_key,
             metadata=body.metadata,
+            audio_duration_seconds=body.audio_duration_seconds,
             audio_blob_path=body.blob_name,
         )
     except IntegrityError:
@@ -556,12 +657,12 @@ async def submit_job(
         if body.idempotency_key:
             existing = get_job_by_idempotency_key(session, body.idempotency_key, caller.id)
             if existing:
-                return _to_response(existing)
+                return _to_response(existing, caller.name)
         raise HTTPException(
             status_code=409, detail="Concurrent submission conflict; retry"
         ) from None
 
-    return _to_response(job)
+    return _to_response(job, caller.name)
 
 
 @router.get("/jobs", response_model=ListJobsResponse)
@@ -600,7 +701,69 @@ async def get_job(
     job = get_job_by_id(session, job_id)
     if not job or job.caller_id != caller.id:
         raise HTTPException(status_code=404, detail="Job not found")
-    return _to_response(job)
+    return _to_response(job, caller.name)
+
+
+@router.post("/jobs/{job_id}/baseline", response_model=JobResponse)
+async def upload_baseline_transcript(
+    job_id: UUID,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+    caller: Caller = Depends(get_caller),
+) -> JobResponse:
+    """Store a clerk-supplied reference transcript to compute a real WER against.
+
+    Distinct from the correction-based WER (audio/accuracy.py), which only
+    measures the segments a clerk has actually corrected in this app: this
+    compares the *entire* auto-generated transcription against an
+    independent reference transcript the clerk already has (e.g. a court
+    reporter's transcript), so it stays meaningful even for segments nobody
+    has reviewed yet, and is completely unaffected by corrections made here.
+    Uploading again replaces any previously stored baseline.
+    """
+    job = get_job_by_id(session, job_id)
+    if not job or job.caller_id != caller.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
+        raise HTTPException(
+            status_code=422, detail="Job has no transcript to compare a baseline against"
+        )
+
+    # Require a recognised extension (matching the audio upload endpoint):
+    # a missing extension is rejected too, rather than silently accepted.
+    extension = PurePosixPath(file.filename or "").suffix.lower()
+    if extension not in _ALLOWED_BASELINE_EXTENSIONS:
+        allowed = ", ".join(sorted(_ALLOWED_BASELINE_EXTENSIONS))
+        detail = (
+            f"File has no extension. Allowed: {allowed}"
+            if not extension
+            else f"Unsupported file type '{extension}'. Allowed: {allowed}"
+        )
+        raise HTTPException(status_code=422, detail=detail)
+
+    content = await _read_upload_capped(
+        file,
+        _MAX_BASELINE_BYTES,
+        error_detail="Baseline transcript exceeds the maximum upload size",
+    )
+    try:
+        # utf-8-sig strips a leading BOM if present (common in Windows-exported
+        # .txt files) so it isn't glued onto the first token and skewing the WER;
+        # it decodes plain UTF-8 without a BOM identically.
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=422, detail="Baseline transcript must be UTF-8 encoded text"
+        ) from None
+    if not text.strip():
+        raise HTTPException(status_code=422, detail="Baseline transcript file is empty")
+
+    job.baseline_transcript = text
+    job.updated_datetime = datetime.now(UTC)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+    return _to_response(job, caller.name)
 
 
 def _load_entry_for_correction(
@@ -625,6 +788,8 @@ def _load_entry_for_correction(
         word_corrections=_entry_field(raw, "word_corrections"),
         correction_history=_entry_field(raw, "correction_history"),
         words=_entry_field(raw, "words"),
+        alternatives=_entry_field(raw, "alternatives"),
+        accepted=_entry_field(raw, "accepted", False),
     )
     return job, entry
 
@@ -675,8 +840,24 @@ async def correct_segment(
         ),
     ]
 
+    # Dataset copy for future model training/eval (DIAAT-231) — gated behind
+    # CORRECTIONS_DATASET_EXPORT_ENABLED, see record_correction_dataset_entry.
+    # original_text is entry.text (the never-mutated ASR output), not
+    # previous_text, so the training pair is always (ASR text, clerk text)
+    # rather than (previous correction, latest correction).
+    record_correction_dataset_entry(
+        session,
+        job=job,
+        segment_index=index,
+        correction_kind="segment",
+        original_text=entry.text,
+        corrected_text=body.corrected_text,
+        confidence=entry.confidence,
+        speaker=entry.speaker,
+    )
+
     _save_corrected_entry(session, job, index, entry)
-    return _to_response(job)
+    return _to_response(job, caller.name)
 
 
 @router.patch("/jobs/{job_id}/segments/{index}/words", response_model=JobResponse)
@@ -758,8 +939,38 @@ async def correct_word_range(
         ),
     ]
 
+    # Dataset copy for future model training/eval (DIAAT-231) — gated behind
+    # CORRECTIONS_DATASET_EXPORT_ENABLED, see record_correction_dataset_entry.
+    # original_lexical_phrase is recomputed from entry.words (the never-
+    # mutated original words) rather than reusing previous_phrase, which may
+    # itself be a prior correction when the clerk is re-editing the same
+    # range — the dataset always wants (ASR text, latest clerk text).
+    original_lexical_phrase = " ".join(
+        w.text for w in entry.words[body.start_word_index : body.end_word_index + 1]
+    )
+    range_confidences = [
+        w.confidence
+        for w in entry.words[body.start_word_index : body.end_word_index + 1]
+        if w.confidence is not None
+    ]
+    range_confidence = (
+        sum(range_confidences) / len(range_confidences) if range_confidences else entry.confidence
+    )
+    record_correction_dataset_entry(
+        session,
+        job=job,
+        segment_index=index,
+        correction_kind="word_range",
+        original_text=original_lexical_phrase,
+        corrected_text=body.corrected_text,
+        confidence=range_confidence,
+        speaker=entry.speaker,
+        start_word_index=body.start_word_index,
+        end_word_index=body.end_word_index,
+    )
+
     _save_corrected_entry(session, job, index, entry)
-    return _to_response(job)
+    return _to_response(job, caller.name)
 
 
 @router.post("/jobs/{job_id}/segments/{index}/rollback", response_model=JobResponse)
@@ -780,15 +991,60 @@ async def rollback_segment(
     job, entry = _load_entry_for_correction(session, job_id, index, caller)
 
     previous_text = entry.effective_text()
-    if previous_text == entry.text:
+    if previous_text == entry.text and not entry.accepted:
         raise HTTPException(status_code=422, detail="Segment has no corrections to roll back")
 
     entry.corrected_text = None
     entry.word_corrections = None
     entry.correction_history = None
+    entry.accepted = False
 
     _save_corrected_entry(session, job, index, entry)
-    return _to_response(job)
+    return _to_response(job, caller.name)
+
+
+@router.post("/jobs/{job_id}/segments/{index}/accept", response_model=JobResponse)
+async def accept_segment(
+    job_id: UUID,
+    index: int,
+    session: Session = Depends(get_session),
+    caller: Caller = Depends(get_caller),
+) -> JobResponse:
+    """Mark a segment as reviewed/accepted without editing its text.
+
+    Lets a clerk clear a low-confidence segment's "needs review" status by
+    confirming the transcribed text is correct as spoken, instead of having
+    to retype it verbatim just to satisfy has_corrections(). Recorded via
+    the same correction_history audit trail as a real edit — kind=
+    "accept_all" distinguishes it from an actual correction ("segment" /
+    "word_range") or a rollback. previous_text/new_text are identical since
+    nothing about the text changes.
+
+    Unlike correct_segment/correct_word_range, this never sets
+    corrected_text/word_corrections, so it never contributes to the
+    word-error-rate calculation in audio/accuracy.py (there is nothing to
+    compare against — no correction was made). needs_review filtering
+    additionally excludes entries with accepted=True (see compute_accuracy).
+    """
+    job, entry = _load_entry_for_correction(session, job_id, index, caller)
+
+    if entry.accepted:
+        raise HTTPException(status_code=422, detail="Segment has already been accepted")
+
+    current_text = entry.effective_text()
+    entry.accepted = True
+    entry.correction_history = [
+        *(entry.correction_history or []),
+        CorrectionEntry(
+            timestamp=datetime.now(UTC).isoformat(),
+            kind="accept_all",
+            previous_text=current_text,
+            new_text=current_text,
+        ),
+    ]
+
+    _save_corrected_entry(session, job, index, entry)
+    return _to_response(job, caller.name)
 
 
 @router.post(
@@ -905,7 +1161,7 @@ async def rollback_to_history_entry(
         ]
 
     _save_corrected_entry(session, job, index, entry)
-    return _to_response(job)
+    return _to_response(job, caller.name)
 
 
 @router.get("/jobs/{job_id}/audio")

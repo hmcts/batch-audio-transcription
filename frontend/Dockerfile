@@ -39,6 +39,13 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# Git commit SHA baked in at build time (passed via --build-arg GIT_SHA in
+# ci-build-image.yml). Read at runtime by the /batch/api/version route (which
+# is force-dynamic, so it reads this container env var per request). Defaults
+# to "unknown" so local builds without the arg still work.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
+
 RUN apk add --no-cache caddy supervisor
 
 RUN addgroup --system --gid 1001 nodejs

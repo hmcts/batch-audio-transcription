@@ -3,6 +3,7 @@ import type {
   CorrectionEntry,
   JobStatus,
   LowConfidenceSegment,
+  PhraseAlternatives,
   TranscriptAccuracy,
   TranscriptionJob,
   TranscriptSegment,
@@ -39,6 +40,18 @@ interface BackendCorrectionEntry {
   new_phrase?: string | null;
 }
 
+interface BackendNBestCandidate {
+  text: string;
+  confidence?: number | null;
+  lexical?: string | null;
+}
+
+interface BackendPhraseAlternatives {
+  start_word_index?: number | null;
+  end_word_index?: number | null;
+  candidates: BackendNBestCandidate[];
+}
+
 interface BackendDialogueEntry {
   speaker: string;
   text: string;
@@ -49,6 +62,8 @@ interface BackendDialogueEntry {
   word_corrections?: BackendWordCorrection[] | null;
   correction_history?: BackendCorrectionEntry[] | null;
   words?: BackendWordInfo[] | null;
+  alternatives?: BackendPhraseAlternatives[] | null;
+  accepted?: boolean;
 }
 
 interface BackendAccuracy {
@@ -59,6 +74,8 @@ interface BackendAccuracy {
   has_corrections: boolean;
   word_error_rate: number | null;
   corrected_percent: number | null;
+  has_baseline: boolean;
+  baseline_word_error_rate: number | null;
 }
 
 interface BackendNeedsReviewItem {
@@ -77,6 +94,10 @@ interface BackendJob {
   needs_review: BackendNeedsReviewItem[] | null;
   error_message: string | null;
   metadata: Record<string, unknown>;
+  caller_name?: string | null;
+  audio_duration_seconds: number | null;
+  transcription_duration_seconds: number | null;
+  model_identifier: string | null;
 }
 
 interface BackendJobList {
@@ -227,6 +248,25 @@ function toCorrectionHistory(
   }));
 }
 
+function toAlternatives(
+  alternatives: BackendPhraseAlternatives[] | null | undefined
+): PhraseAlternatives[] | undefined {
+  if (!alternatives || alternatives.length === 0) return undefined;
+  return alternatives.map((group) => ({
+    startWordIndex: group.start_word_index ?? undefined,
+    endWordIndex: group.end_word_index ?? undefined,
+    // Candidate order is Azure-authoritative (index 0 = top reading) — map
+    // it through verbatim without re-sorting. `confidence` is genuinely
+    // optional on non-top candidates, so preserve its absence as undefined
+    // rather than coercing it to 0 (which would read as "0% confidence").
+    candidates: group.candidates.map((c) => ({
+      text: c.text,
+      confidence: c.confidence ?? undefined,
+      lexical: c.lexical ?? undefined,
+    })),
+  }));
+}
+
 function toSegments(
   entries: BackendDialogueEntry[] | null
 ): TranscriptSegment[] | undefined {
@@ -245,6 +285,8 @@ function toSegments(
     duration: Math.max(0, entry.end_time - entry.start_time),
     confidence: entry.confidence ?? undefined,
     words: toWords(entry.words),
+    alternatives: toAlternatives(entry.alternatives),
+    accepted: entry.accepted ?? false,
   }));
 }
 
@@ -260,6 +302,8 @@ function toAccuracy(
     hasCorrections: accuracy.has_corrections,
     wordErrorRate: accuracy.word_error_rate ?? undefined,
     correctedPercent: accuracy.corrected_percent ?? undefined,
+    hasBaseline: accuracy.has_baseline,
+    baselineWordErrorRate: accuracy.baseline_word_error_rate ?? undefined,
   };
 }
 
@@ -302,6 +346,11 @@ function toTranscriptionJob(job: BackendJob): TranscriptionJob {
     segments: toSegments(job.dialogue_entries),
     accuracy: toAccuracy(job.accuracy),
     lowConfidenceSegments: toLowConfidenceSegments(job.needs_review),
+    caller: job.caller_name ?? undefined,
+    audioDurationSeconds: job.audio_duration_seconds ?? undefined,
+    transcriptionDurationSeconds:
+      job.transcription_duration_seconds ?? undefined,
+    modelIdentifier: job.model_identifier ?? undefined,
   };
 }
 
@@ -385,7 +434,8 @@ export interface SubmitJobMetadata {
 export async function submitJob(
   audioUrl: string,
   metadata: SubmitJobMetadata,
-  blobName?: string
+  blobName?: string,
+  audioDurationSeconds?: number
 ): Promise<TranscriptionJob> {
   const response = await backendFetch("/api/v1/jobs", {
     method: "POST",
@@ -393,6 +443,7 @@ export async function submitJob(
     body: JSON.stringify({
       audio_url: audioUrl,
       blob_name: blobName,
+      audio_duration_seconds: audioDurationSeconds,
       metadata: {
         case_reference: metadata.caseReference,
         tribunal: metadata.tribunal,
@@ -456,6 +507,18 @@ export async function rollbackSegment(
   return toTranscriptionJob(body);
 }
 
+export async function acceptSegment(
+  jobId: string,
+  index: number
+): Promise<TranscriptionJob> {
+  const response = await backendFetch(
+    `/api/v1/jobs/${jobId}/segments/${index}/accept`,
+    { method: "POST" }
+  );
+  const body: BackendJob = await response.json();
+  return toTranscriptionJob(body);
+}
+
 export async function rollbackToHistoryEntry(
   jobId: string,
   index: number,
@@ -469,9 +532,26 @@ export async function rollbackToHistoryEntry(
   return toTranscriptionJob(body);
 }
 
-export async function uploadAndSubmit(
+export async function uploadBaselineTranscript(
+  jobId: string,
   file: Blob,
   filename: string
+): Promise<TranscriptionJob> {
+  const form = new FormData();
+  form.append("file", file, filename);
+
+  const response = await backendFetch(`/api/v1/jobs/${jobId}/baseline`, {
+    method: "POST",
+    body: form,
+  });
+  const body: BackendJob = await response.json();
+  return toTranscriptionJob(body);
+}
+
+export async function uploadAndSubmit(
+  file: Blob,
+  filename: string,
+  audioDurationSeconds?: number
 ): Promise<TranscriptionJob> {
   const { audio_url, blob_name } = await uploadAudio(file, filename);
   const caseReference = filename.replace(/\.[^.]+$/, "").replace(/_/g, "/");
@@ -482,6 +562,7 @@ export async function uploadAndSubmit(
       tribunal: "First-tier Tribunal — Immigration and Asylum Chamber",
       audioFileName: filename,
     },
-    blob_name
+    blob_name,
+    audioDurationSeconds
   );
 }

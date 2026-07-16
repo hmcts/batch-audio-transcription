@@ -18,12 +18,40 @@ export interface WordCorrection {
   text: string;
 }
 
+// One alternate whole-phrase reading Azure returned for a recognised
+// phrase (an entry in its nBest array). Azure exposes alternatives only at
+// the phrase level, never per word (DIAAT-232 spike) — so each candidate is
+// a complete re-reading of the phrase, not a single-word swap. `text` is the
+// display form (British-spelling-normalised); `confidence` is this reading's
+// own score (0-1) and is sometimes absent on non-top candidates; `lexical`
+// is the raw, unformatted recognition form when present.
+export interface NBestCandidate {
+  text: string;
+  confidence?: number;
+  lexical?: string;
+}
+
+// The nBest alternatives for one recognised phrase, persisted by DIAAT-232.
+// `candidates[0]` is the reading already shown as the segment text (Azure's
+// top choice) and is authoritative for ordering — never re-sort candidates.
+// The optional inclusive [startWordIndex, endWordIndex] locates which words
+// of this entry the group covers, in the same lexical `words` index space as
+// WordCorrection; it is undefined when speaker-turn merging lost the word
+// alignment (the candidates are still kept — see the DIAAT-232 spike).
+export interface PhraseAlternatives {
+  startWordIndex?: number;
+  endWordIndex?: number;
+  candidates: NBestCandidate[];
+}
+
 // One logged change to a segment's text — part of an append-only audit
 // trail. A "rollback" is just another entry (kind "rollback") rather than
-// a destructive edit, so the full history always stays visible.
+// a destructive edit, so the full history always stays visible. An
+// "accept_all" entry means a clerk confirmed the segment's text is correct
+// as transcribed without editing it — previousText/newText are identical.
 export interface CorrectionEntry {
   timestamp: string;
-  kind: "segment" | "word_range" | "rollback";
+  kind: "segment" | "word_range" | "rollback" | "accept_all";
   // Whole-segment text before/after — always present, needed to restore
   // state on a "roll back to before this" action.
   previousText: string;
@@ -58,6 +86,16 @@ export interface TranscriptSegment {
   // Per-word timing/confidence for the original text — undefined if Azure
   // didn't return word-level detail for this phrase.
   words?: Word[];
+  // Azure's nBest alternate readings for the phrase(s) in this entry
+  // (DIAAT-232). One group per original phrase; used to explain why a
+  // low-confidence word was flagged and, in DIAAT-234, to offer alternate
+  // readings. Undefined when Azure returned only the top reading.
+  alternatives?: PhraseAlternatives[];
+  // Set once a clerk clicks "accept" to confirm this segment's text is
+  // correct as transcribed, without editing it. Clears the segment from
+  // "needs review" but — unlike correctedText/wordCorrections — never
+  // affects the word-error-rate calculation, since nothing was corrected.
+  accepted?: boolean;
 }
 
 export interface LowConfidenceSegment {
@@ -79,6 +117,12 @@ export interface TranscriptAccuracy {
   hasCorrections: boolean;
   wordErrorRate?: number;
   correctedPercent?: number;
+  // True once a clerk has uploaded an independent reference transcript
+  // (e.g. a court reporter's transcript). Unlike wordErrorRate above, this
+  // WER is measured against the *entire* auto-generated transcription and
+  // is unaffected by any corrections made in this app.
+  hasBaseline: boolean;
+  baselineWordErrorRate?: number;
 }
 
 export interface TranscriptionJob {
@@ -94,4 +138,17 @@ export interface TranscriptionJob {
   segments?: TranscriptSegment[];
   accuracy?: TranscriptAccuracy;
   lowConfidenceSegments?: LowConfidenceSegment[];
+  // The caller (API client / clerk identity) that owns this job. Every
+  // correction is made under this caller, so it's the "who made the change"
+  // attribution for the modification-history table. Job-level, not
+  // per-action: the audit trail records no separate identity per correction.
+  // In local dev this is always "local-dev".
+  caller?: string;
+  // Run metadata (DIAAT-227) — surfaced on the dashboard via the file name,
+  // on hover/click, without needing to open the transcript. audioDuration is
+  // known as soon as the file is submitted; the other two are only known
+  // once the job has actually completed.
+  audioDurationSeconds?: number;
+  transcriptionDurationSeconds?: number;
+  modelIdentifier?: string;
 }
