@@ -116,4 +116,63 @@ describe("JobsTable run metadata popover", () => {
     ).toBeNull();
     expect(screen.getByText(jobWithoutMetadata.audioFileName)).toBeDefined();
   });
+
+  it("gives the metadata dialog an accessible name", async () => {
+    const user = userEvent.setup();
+    render(<JobsTable jobs={[jobWithMetadata]} />);
+
+    await user.click(
+      screen.getByRole("button", {
+        name: new RegExp(
+          `transcription run details for ${jobWithMetadata.audioFileName}`,
+          "i"
+        ),
+      })
+    );
+
+    const dialog = screen.getByRole("dialog", {
+      name: new RegExp(
+        `transcription run details for ${jobWithMetadata.audioFileName}`,
+        "i"
+      ),
+    });
+    expect(dialog).toBeDefined();
+  });
+
+  it("shows a terminal placeholder (not 'In progress…') for a FAILED job missing run details", async () => {
+    const failedJob = {
+      ...MOCK_JOBS[2], // FAILED
+      audioDurationSeconds: 2401,
+      transcriptionDurationSeconds: undefined,
+      modelIdentifier: undefined,
+    };
+    const user = userEvent.setup();
+    render(<JobsTable jobs={[failedJob]} />);
+
+    await user.click(
+      screen.getByRole("button", { name: /transcription run details/i })
+    );
+
+    expect(screen.queryByText(/in progress/i)).toBeNull();
+    // Audio length is still known; the two unknown terminal values render "—".
+    expect(screen.getAllByText("—").length).toBe(2);
+  });
+
+  it("shows 'In progress…' for a still-processing job missing run details", async () => {
+    const processingJob = {
+      ...MOCK_JOBS[0],
+      status: "PROCESSING" as const,
+      audioDurationSeconds: 1200,
+      transcriptionDurationSeconds: undefined,
+      modelIdentifier: undefined,
+    };
+    const user = userEvent.setup();
+    render(<JobsTable jobs={[processingJob]} />);
+
+    await user.click(
+      screen.getByRole("button", { name: /transcription run details/i })
+    );
+
+    expect(screen.getAllByText(/in progress/i).length).toBe(2);
+  });
 });

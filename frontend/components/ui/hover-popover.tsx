@@ -80,6 +80,9 @@ export function HoverPopover({
         <div
           id={panelId}
           role="dialog"
+          // Reuse the trigger's descriptive name so screen readers announce
+          // what the dialog is about (e.g. "Transcription run details for …").
+          aria-label={ariaLabel}
           className={cn(
             "absolute left-0 top-full z-20 mt-2 w-64 rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-md",
             panelClassName

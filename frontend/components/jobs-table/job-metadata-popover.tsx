@@ -25,6 +25,14 @@ export function hasRunMetadata(job: TranscriptionJob): boolean {
  * transcript itself (DIAAT-227).
  */
 export function JobMetadataPopover({ job }: JobMetadataPopoverProps) {
+  // Transcription time and model are only known once the job succeeds. Show
+  // "In progress…" while the job can still produce them, but a terminal
+  // placeholder ("—") once it has reached a terminal state without them
+  // (e.g. a FAILED job) — otherwise "In progress…" is misleading for a
+  // value that will never arrive.
+  const isTerminal = job.status === "COMPLETED" || job.status === "FAILED";
+  const missingPlaceholder = isTerminal ? "—" : "In progress…";
+
   return (
     <HoverPopover
       ariaLabel={`Transcription run details for ${job.audioFileName}`}
@@ -47,7 +55,7 @@ export function JobMetadataPopover({ job }: JobMetadataPopoverProps) {
           <dd className="font-medium tabular-nums">
             {job.transcriptionDurationSeconds !== undefined
               ? formatDuration(job.transcriptionDurationSeconds)
-              : "In progress…"}
+              : missingPlaceholder}
           </dd>
         </div>
         <div className="flex items-baseline justify-between gap-3">
@@ -56,7 +64,7 @@ export function JobMetadataPopover({ job }: JobMetadataPopoverProps) {
             className="truncate font-medium"
             title={job.modelIdentifier ?? undefined}
           >
-            {job.modelIdentifier ?? "In progress…"}
+            {job.modelIdentifier ?? missingPlaceholder}
           </dd>
         </div>
       </dl>
