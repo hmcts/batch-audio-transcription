@@ -341,8 +341,11 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
     if entries is not None:
         # LOW_CONFIDENCE_THRESHOLD lets ops tune the review-highlighting
         # cutoff per environment (e.g. via Key Vault) without a code change;
-        # unset (the common case) falls back to the code default.
-        threshold = get_settings().LOW_CONFIDENCE_THRESHOLD or DEFAULT_CONFIDENCE_THRESHOLD
+        # unset (the common case) falls back to the code default. Use an
+        # explicit None check so an intentional 0.0 (flag nothing) is honoured
+        # rather than treated as unset. Settings validates the 0-1 range.
+        configured = get_settings().LOW_CONFIDENCE_THRESHOLD
+        threshold = configured if configured is not None else DEFAULT_CONFIDENCE_THRESHOLD
         summary = compute_accuracy(entries, confidence_threshold=threshold)
         accuracy = AccuracyResponse(
             confidence_score=summary.confidence_score,

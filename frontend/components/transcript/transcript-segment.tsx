@@ -60,11 +60,12 @@ type Run = OriginalRun | CorrectedRun;
 function groupByConfidence(
   tokens: DisplayToken[],
   from: number,
-  to: number
+  to: number,
+  threshold: number
 ): OriginalRun[] {
   const runs: OriginalRun[] = [];
   for (let i = from; i <= to; i++) {
-    const lowConfidence = tokens[i].confidence < LOW_CONFIDENCE_THRESHOLD;
+    const lowConfidence = tokens[i].confidence < threshold;
     const last = runs[runs.length - 1];
     if (last && last.lowConfidence === lowConfidence) {
       last.end = i;
@@ -121,7 +122,8 @@ function mergeOverlappingCorrectionRanges(
 
 function buildRuns(
   tokens: DisplayToken[],
-  corrections: WordCorrectionList | undefined
+  corrections: WordCorrectionList | undefined,
+  threshold: number
 ): Run[] {
   const correctionRanges = mergeOverlappingCorrectionRanges(
     (corrections ?? [])
@@ -148,7 +150,7 @@ function buildRuns(
   let cursor = 0;
   for (const c of correctionRanges) {
     if (c.start > cursor) {
-      runs.push(...groupByConfidence(tokens, cursor, c.start - 1));
+      runs.push(...groupByConfidence(tokens, cursor, c.start - 1, threshold));
     }
     runs.push({
       kind: "corrected",
@@ -161,7 +163,7 @@ function buildRuns(
     cursor = c.end + 1;
   }
   if (cursor < tokens.length) {
-    runs.push(...groupByConfidence(tokens, cursor, tokens.length - 1));
+    runs.push(...groupByConfidence(tokens, cursor, tokens.length - 1, threshold));
   }
   return runs;
 }
@@ -170,6 +172,10 @@ interface WordsProps {
   text: string;
   words: WordList;
   wordCorrections?: WordCorrectionList;
+  // Confidence cutoff (0-1) below which a word is highlighted for review.
+  // Threaded from the backend-derived threshold so per-word highlights stay
+  // consistent with the "needs review" list even under an env override.
+  lowConfidenceThreshold: number;
   isActive?: boolean;
   getCurrentTime?: () => number;
   // Corrects just the clicked run (a low-confidence phrase, or an existing
@@ -190,6 +196,7 @@ function Words({
   text,
   words,
   wordCorrections,
+  lowConfidenceThreshold,
   isActive,
   getCurrentTime,
   onCorrectRange,
@@ -294,7 +301,7 @@ function Words({
     );
   }
 
-  const runs = buildRuns(tokens, wordCorrections);
+  const runs = buildRuns(tokens, wordCorrections, lowConfidenceThreshold);
   const highlightDisplayRange = highlightRange
     ? displayRangeForWordRange(tokens, highlightRange.start, highlightRange.end)
     : null;
@@ -578,6 +585,10 @@ interface TranscriptSegmentProps {
   // isActive, to highlight the word currently being spoken in sync with
   // playback without waiting on the coarser timeupdate event.
   getCurrentTime?: () => number;
+  // Confidence cutoff (0-1) below which a word is highlighted for review.
+  // Defaults to LOW_CONFIDENCE_THRESHOLD; callers should pass the
+  // backend-derived value so highlights match the "needs review" list.
+  lowConfidenceThreshold?: number;
 }
 
 export function TranscriptSegment({
@@ -589,6 +600,7 @@ export function TranscriptSegment({
   onRollbackToHistory,
   isActive,
   getCurrentTime,
+  lowConfidenceThreshold = LOW_CONFIDENCE_THRESHOLD,
 }: TranscriptSegmentProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(segment.correctedText ?? segment.text);
@@ -750,6 +762,7 @@ export function TranscriptSegment({
             text={segment.text}
             words={segment.words}
             wordCorrections={segment.wordCorrections}
+            lowConfidenceThreshold={lowConfidenceThreshold}
             isActive={isActive}
             getCurrentTime={getCurrentTime}
             onCorrectRange={onCorrectRange}
