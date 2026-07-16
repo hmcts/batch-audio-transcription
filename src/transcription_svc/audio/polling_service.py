@@ -71,10 +71,11 @@ def _extract_model_identifier(status_data: dict, locale: str) -> str:
     mocked responses) fall back to a locale-qualified label identifying the
     engine in use.
     """
-    model = status_data.get("model") or {}
-    model_self = model.get("self")
-    if isinstance(model_self, str) and model_self:
-        return model_self
+    model = status_data.get("model")
+    if isinstance(model, dict):
+        model_self = model.get("self")
+        if isinstance(model_self, str) and model_self:
+            return model_self
     return f"azure-speech-batch-transcription ({locale})"
 
 

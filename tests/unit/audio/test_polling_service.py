@@ -59,6 +59,16 @@ class TestExtractModelIdentifier:
             == "azure-speech-batch-transcription (fr-FR)"
         )
 
+    def test_falls_back_when_model_is_not_a_dict(self):
+        from transcription_svc.audio.polling_service import _extract_model_identifier
+
+        # Azure (or a mock) could return a non-object here; must not raise.
+        for bad in ("some-string", ["a", "b"], 123, None):
+            assert (
+                _extract_model_identifier({"model": bad}, "en-GB")
+                == "azure-speech-batch-transcription (en-GB)"
+            )
+
 
 class TestExtractTranscriptionDurationSeconds:
     def test_uses_azure_timestamps_when_both_present(self):
