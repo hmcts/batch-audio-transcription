@@ -19,14 +19,21 @@ const JOB_ID = process.env.E2E_RESOLVE_JOB_ID;
 const NO_ALT_JOB_ID = process.env.E2E_RESOLVE_NO_ALT_JOB_ID;
 
 test.describe("Low-confidence click-to-resolve menu", () => {
+  // Skip the whole suite only when neither job is configured; each test then
+  // skips itself based on the specific job it needs, so setting just one env
+  // var still runs the test that uses it.
   test.skip(
-    !JOB_ID,
-    "Set E2E_RESOLVE_JOB_ID to a job with a low-confidence word that has alternatives to run this test"
+    !JOB_ID && !NO_ALT_JOB_ID,
+    "Set E2E_RESOLVE_JOB_ID and/or E2E_RESOLVE_NO_ALT_JOB_ID to run these tests"
   );
 
   test("clicking a low-confidence word with alternatives opens a menu offering Edit and Suggested", async ({
     page,
   }) => {
+    test.skip(
+      !JOB_ID,
+      "Set E2E_RESOLVE_JOB_ID to a job with a low-confidence word that has alternatives"
+    );
     await page.goto(`/batch/jobs/${JOB_ID}`);
     await expect(
       page.getByRole("heading", { name: "Transcript", exact: true })
@@ -58,6 +65,10 @@ test.describe("Low-confidence click-to-resolve menu", () => {
   test("picking a suggested alternative applies it as a correction that persists in history", async ({
     page,
   }) => {
+    test.skip(
+      !JOB_ID,
+      "Set E2E_RESOLVE_JOB_ID to a job with a low-confidence word that has alternatives"
+    );
     await page.goto(`/batch/jobs/${JOB_ID}`);
     await expect(
       page.getByRole("heading", { name: "Transcript", exact: true })

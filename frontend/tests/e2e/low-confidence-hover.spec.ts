@@ -57,7 +57,10 @@ test.describe("Low-confidence hover popup", () => {
     // accept either outcome here.
     await lowConfidenceWord.click();
     const resolveMenu = page.getByRole("menu", { name: /resolve/i });
-    if (await resolveMenu.isVisible().catch(() => false)) {
+    // Wait for the click to settle into either outcome before branching, so
+    // the isVisible() check isn't racing React's render.
+    await expect(resolveMenu.or(page.getByRole("textbox"))).toBeVisible();
+    if (await resolveMenu.isVisible()) {
       await page.getByRole("menuitem", { name: /edit/i }).click();
     }
     await expect(page.getByRole("textbox")).toBeVisible();
