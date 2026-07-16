@@ -58,6 +58,7 @@ const BACKEND_JOB = {
   audio_duration_seconds: 754.2,
   transcription_duration_seconds: 41.8,
   model_identifier: "https://eastus.example.com/models/base/xyz",
+  model_display_name: "20240614 Base — en-GB",
 };
 
 describe("listJobs", () => {
@@ -89,6 +90,7 @@ describe("listJobs", () => {
     expect(jobs[0].modelIdentifier).toBe(
       "https://eastus.example.com/models/base/xyz"
     );
+    expect(jobs[0].modelDisplayName).toBe("20240614 Base — en-GB");
   });
 
   it("leaves run metadata undefined when the backend hasn't populated it yet", async () => {
@@ -97,6 +99,7 @@ describe("listJobs", () => {
       status: "submitted",
       transcription_duration_seconds: null,
       model_identifier: null,
+      model_display_name: null,
     };
     mockFetchOnce({ jobs: [pendingJob] });
 
@@ -105,6 +108,7 @@ describe("listJobs", () => {
     expect(jobs[0].audioDurationSeconds).toBe(754.2);
     expect(jobs[0].transcriptionDurationSeconds).toBeUndefined();
     expect(jobs[0].modelIdentifier).toBeUndefined();
+    expect(jobs[0].modelDisplayName).toBeUndefined();
   });
 
   it("sends the bearer token from TRANSCRIPTION_API_KEY", async () => {

@@ -150,5 +150,11 @@ export interface TranscriptionJob {
   // once the job has actually completed.
   audioDurationSeconds?: number;
   transcriptionDurationSeconds?: number;
+  // Raw Azure model.self URL / fallback label. Kept as the fallback the
+  // popover shows when a resolved friendly name isn't available.
   modelIdentifier?: string;
+  // Human-readable model name resolved server-side (DIAAT-243), e.g.
+  // "Base model — en-GB". Preferred over modelIdentifier in the UI;
+  // undefined for historical jobs or when resolution failed.
+  modelDisplayName?: string;
 }

@@ -283,6 +283,13 @@ class TranscriptionJob(BaseTable, table=True):
     # model produced it" without opening the transcript.
     transcription_duration_seconds: float | None = Field(default=None)
     model_identifier: str | None = Field(default=None)
+    # Human-readable model name (DIAAT-243) resolved server-side by
+    # dereferencing the Azure `model.self` URL held in model_identifier via
+    # the Speech API (using the backend's existing Speech credentials). NULL
+    # for historical jobs, jobs whose model_identifier is a non-URL fallback,
+    # or when resolution failed — the dashboard falls back to
+    # model_identifier in those cases. Never contains the subscription key.
+    model_display_name: str | None = Field(default=None)
 
     # Cleanup
     needs_cleanup: bool = Field(default=False)

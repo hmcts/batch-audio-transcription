@@ -321,6 +321,11 @@ class JobResponse(BaseModel):
     audio_duration_seconds: float | None = None
     transcription_duration_seconds: float | None = None
     model_identifier: str | None = None
+    # Human-readable model name resolved server-side (DIAAT-243) from the
+    # Azure model.self URL. Null for historical jobs or when resolution
+    # failed; the dashboard falls back to model_identifier. Contains only the
+    # non-sensitive display name — never the Speech subscription key.
+    model_display_name: str | None = None
 
 
 class JobListResponse(BaseModel):
@@ -500,6 +505,7 @@ def _to_response(job: TranscriptionJob, caller_name: str | None = None) -> JobRe
         audio_duration_seconds=job.audio_duration_seconds,
         transcription_duration_seconds=job.transcription_duration_seconds,
         model_identifier=job.model_identifier,
+        model_display_name=job.model_display_name,
     )
 
 

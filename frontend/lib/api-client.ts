@@ -98,6 +98,7 @@ interface BackendJob {
   audio_duration_seconds: number | null;
   transcription_duration_seconds: number | null;
   model_identifier: string | null;
+  model_display_name: string | null;
 }
 
 interface BackendJobList {
@@ -348,6 +349,7 @@ function toTranscriptionJob(job: BackendJob): TranscriptionJob {
     transcriptionDurationSeconds:
       job.transcription_duration_seconds ?? undefined,
     modelIdentifier: job.model_identifier ?? undefined,
+    modelDisplayName: job.model_display_name ?? undefined,
   };
 }
 

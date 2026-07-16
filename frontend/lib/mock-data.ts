@@ -181,7 +181,9 @@ export const MOCK_JOBS: TranscriptionJob[] = [
     lowConfidenceSegments: JOB_1_LOW_CONFIDENCE,
     audioDurationSeconds: 1920,
     transcriptionDurationSeconds: 187,
-    modelIdentifier: "azure-speech-batch-transcription (en-GB)",
+    modelIdentifier:
+      "https://uksouth.cognitiveservices.azure.com/speechtotext/v3.2/models/base/ab0dcc7d-2f9f-4f4d-9c2d-2b6f0e2b1a11",
+    modelDisplayName: "20240614 Base — en-GB",
   },
   {
     id: "job-ea11042-2025",

@@ -500,6 +500,65 @@ class TestGetBatchResults:
         assert len(entries) == 1
 
 
+class TestGetModelDetails:
+    @pytest.mark.asyncio
+    async def test_returns_parsed_json_with_auth_header(self):
+        import os
+
+        from transcription_svc.audio.batch_client import get_model_details
+        from transcription_svc.config.settings import get_settings
+
+        os.environ["AZURE_SPEECH_KEY"] = "super-secret-key"
+        get_settings.cache_clear()
+
+        model_url = (
+            "https://my-resource.cognitiveservices.azure.com/speechtotext/v3.2/models/base/abc"
+        )
+        mock_response = _make_response(
+            status_code=200,
+            body={"displayName": "20240614 Base", "locale": "en-GB"},
+        )
+        captured = {}
+
+        async def capture_get(url, headers):
+            captured["url"] = url
+            captured["headers"] = headers
+            return mock_response
+
+        try:
+            with patch("httpx.AsyncClient") as mock_client_cls:
+                mock_client = AsyncMock()
+                mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+                mock_client.get = capture_get
+
+                result = await get_model_details(model_url)
+        finally:
+            get_settings.cache_clear()
+
+        assert result == {"displayName": "20240614 Base", "locale": "en-GB"}
+        assert captured["url"] == model_url
+        # The subscription key travels only in the server-side request header.
+        assert captured["headers"]["Ocp-Apim-Subscription-Key"] == "super-secret-key"
+
+    @pytest.mark.asyncio
+    async def test_raises_for_status_on_error(self):
+        from transcription_svc.audio.batch_client import get_model_details
+
+        mock_response = _make_response(status_code=401)
+        mock_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError("401", request=MagicMock(), response=mock_response)
+        )
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(return_value=mock_response)
+
+            with pytest.raises(httpx.HTTPStatusError):
+                await get_model_details("https://model-url")
+
+
 class TestDeleteBatchJob:
     @pytest.mark.asyncio
     async def test_non_fatal_on_404(self):
