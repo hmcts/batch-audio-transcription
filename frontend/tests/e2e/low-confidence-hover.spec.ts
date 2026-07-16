@@ -46,7 +46,9 @@ test.describe("Low-confidence hover popup", () => {
     await expect(page.getByRole("textbox")).toHaveCount(0);
 
     // Dismisses cleanly on mouse-out.
-    await page.getByRole("heading", { name: "Transcript", exact: true }).hover();
+    await page
+      .getByRole("heading", { name: "Transcript", exact: true })
+      .hover();
     await expect(page.getByRole("tooltip")).toHaveCount(0);
 
     // Click-to-edit is still intact after hovering.
