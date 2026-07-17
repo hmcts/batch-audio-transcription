@@ -37,6 +37,12 @@ services:
     networks:
       - app-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/api/v1/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   frontend:
     build:
@@ -46,14 +52,28 @@ services:
       - "3000:3000"
     environment:
       - BACKEND_INTERNAL_URL=http://api:8001
-      # Must match the api service's FRONTEND_SERVICE_API_KEY (see .env) —
-      # that's what migration 004 hashes into the frontend-service Caller row.
-      - TRANSCRIPTION_API_KEY=${FRONTEND_SERVICE_API_KEY:-local-dev-key-change-me}
+      - TRANSCRIPTION_API_KEY=${LOCAL_API_KEY:-local-dev-key-change-me}
     depends_on:
       - api
     networks:
       - app-network
     restart: unless-stopped
+
+  seed:
+    image: python:3.12-slim
+    command: >
+      sh -c "pip install psycopg2-binary -q && python /scripts/seed_local_db.py"
+    volumes:
+      - ./scripts:/scripts:ro
+    environment:
+      - DATABASE_CONNECTION_STRING=postgresql://dev:devpass@postgres:5432/transcription_svc
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - app-network
+    profiles:
+      - seed
 
   frontend-dev:
     build:
@@ -67,7 +87,7 @@ services:
     environment:
       - PORT=3001
       - BACKEND_INTERNAL_URL=http://api:8001
-      - TRANSCRIPTION_API_KEY=${FRONTEND_SERVICE_API_KEY:-local-dev-key-change-me}
+      - TRANSCRIPTION_API_KEY=${LOCAL_API_KEY:-local-dev-key-change-me}
     depends_on:
       - api
     networks:

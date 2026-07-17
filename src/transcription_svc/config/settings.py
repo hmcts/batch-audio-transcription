@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,15 +31,10 @@ class Settings(BaseSettings):
     # Leave unset in deployed envs — DefaultAzureCredential uses Managed Identity.
     AZURE_STORAGE_CONNECTION_STRING: str | None = None
 
-    # Dev-only alternative to Azure Blob Storage — see audio/local_storage.py.
-    # Never set to "local" in deployed environments; it exists purely so the
-    # upload -> Speech Batch pipeline can be exercised without Storage Blob
-    # Data Contributor rights on the local developer's Azure identity.
-    AUDIO_STORAGE_BACKEND: str = "azure"
-    LOCAL_AUDIO_STORAGE_DIR: str = "./local-audio-storage"
-    # Public URL (e.g. an ngrok tunnel to this API) Azure Speech Batch can use
-    # to fetch locally-stored audio. Required when AUDIO_STORAGE_BACKEND=local.
-    LOCAL_AUDIO_BASE_URL: str | None = None
+    # Local audio storage (dev only — never set in deployed envs)
+    AUDIO_STORAGE_BACKEND: Literal["azure", "local"] = "azure"
+    LOCAL_AUDIO_STORAGE_DIR: str = "/tmp/local-audio"  # noqa: S108  # nosec B108
+    LOCAL_AUDIO_BASE_URL: str = ""
 
     # Polling
     BATCH_POLL_INTERVAL_SECONDS: int = 30
@@ -85,13 +81,6 @@ class Settings(BaseSettings):
     def validate_threshold(cls, v: float) -> float:
         if v <= 0:
             raise ValueError("BATCH_TRANSCRIPTION_THRESHOLD_HOURS must be greater than 0")
-        return v
-
-    @field_validator("AUDIO_STORAGE_BACKEND")
-    @classmethod
-    def validate_audio_storage_backend(cls, v: str) -> str:
-        if v not in ("azure", "local"):
-            raise ValueError("AUDIO_STORAGE_BACKEND must be 'azure' or 'local'")
         return v
 
     @field_validator("LOW_CONFIDENCE_THRESHOLD")

@@ -24,10 +24,6 @@ coverage.xml
 credentials.json
 .azure/
 
-# Dev-only local audio storage backend (AUDIO_STORAGE_BACKEND=local) — never
-# committed, may contain real uploaded audio.
-local-audio-storage/
-
 # IDE
 .vscode/
 .idea/

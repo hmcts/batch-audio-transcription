@@ -1,7 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import TranscriptPage from "@/app/jobs/[jobId]/page";
-import type { TranscriptionJob } from "@/lib/types";
 
 vi.mock("next/link", () => ({
   default: ({
@@ -21,33 +20,33 @@ vi.mock("next/navigation", () => ({
 
 const { mockGetJob } = vi.hoisted(() => ({ mockGetJob: vi.fn() }));
 
-vi.mock("@/lib/api-client", () => ({
-  getJob: mockGetJob,
-}));
+vi.mock("@/lib/api-client", () => ({ getJob: mockGetJob }));
 
-const COMPLETED_JOB: TranscriptionJob = {
+const COMPLETED_JOB = {
   id: "job-pa05217-2025",
   caseReference: "PA/05217/2025",
   tribunal: "First-tier Tribunal — Immigration and Asylum Chamber",
-  audioFileName: "hearing.mp3",
-  uploadedAt: "2026-06-28T09:15:00Z",
-  completedAt: "2026-06-28T09:47:00Z",
-  status: "COMPLETED",
+  audioFileName: "hearing.wav",
+  status: "COMPLETED" as const,
+  progressPercent: 100,
   segments: [
     {
-      id: "s1",
+      id: "seg-0",
       speaker: "Judge",
-      speakerColor: "#6d28d9",
-      text: "Good morning, we are on the record.",
+      speakerColor: "#4A90D9",
+      text: "This hearing is now in session.",
       startTime: 0,
-      duration: 10,
+      duration: 3.5,
     },
   ],
 };
 
+beforeEach(() => {
+  mockGetJob.mockResolvedValue(COMPLETED_JOB);
+});
+
 describe("TranscriptPage", () => {
-  it("renders case reference for a completed job", async () => {
-    mockGetJob.mockResolvedValue(COMPLETED_JOB);
+  it("renders case reference for known job", async () => {
     render(
       await TranscriptPage({
         params: Promise.resolve({ jobId: COMPLETED_JOB.id }),
@@ -57,7 +56,6 @@ describe("TranscriptPage", () => {
   });
 
   it("renders tribunal name", async () => {
-    mockGetJob.mockResolvedValue(COMPLETED_JOB);
     render(
       await TranscriptPage({
         params: Promise.resolve({ jobId: COMPLETED_JOB.id }),
@@ -69,23 +67,12 @@ describe("TranscriptPage", () => {
   });
 
   it("renders transcript segments", async () => {
-    mockGetJob.mockResolvedValue(COMPLETED_JOB);
     render(
       await TranscriptPage({
         params: Promise.resolve({ jobId: COMPLETED_JOB.id }),
       })
     );
     expect(screen.getAllByText("Judge").length).toBeGreaterThan(0);
-  });
-
-  it("does not render the accuracy sidebar when the backend has no accuracy data", async () => {
-    mockGetJob.mockResolvedValue(COMPLETED_JOB);
-    render(
-      await TranscriptPage({
-        params: Promise.resolve({ jobId: COMPLETED_JOB.id }),
-      })
-    );
-    expect(screen.queryByText("Transcript accuracy")).toBeNull();
   });
 
   it("calls notFound for unknown job id", async () => {

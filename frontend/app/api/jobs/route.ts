@@ -3,8 +3,8 @@ import { listJobs } from "@/lib/api-client";
 
 export async function GET() {
   try {
-    const jobs = await listJobs();
-    return NextResponse.json({ jobs });
+    const result = await listJobs();
+    return NextResponse.json(result);
   } catch (err) {
     console.error("Failed to list jobs", err);
     return NextResponse.json(

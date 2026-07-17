@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def _sanitize_for_log(value: object) -> str:
-    """Escape control characters so a crafted blob/container name can't forge log lines."""
+    """Stringify and repr-wrap value to prevent log injection via control characters."""
     return repr(str(value))
 
 
