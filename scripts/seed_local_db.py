@@ -129,7 +129,7 @@ def seed(conn):
             (
                 str(job_id),
                 str(LOCAL_DEV_CALLER_ID),
-                "succeeded",
+                "SUCCEEDED",  # SQLAlchemy stores enum member names, not values
                 "http://local-placeholder/audio.wav",
                 "en-GB",
                 True,
