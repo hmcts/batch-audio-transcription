@@ -685,7 +685,7 @@ async def list_jobs(
 
     jobs, total = list_jobs_for_caller(session, caller.id, parsed_status, limit, offset)
     return ListJobsResponse(
-        jobs=[_to_response(j) for j in jobs],
+        jobs=[_to_response(j, caller.name) for j in jobs],
         total=total,
         limit=limit,
         offset=offset,
