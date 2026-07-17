@@ -18,7 +18,7 @@ dependencies = [
     # passlib 1.7.4 lost bcrypt.__about__ in bcrypt 4.0 (trapped, non-fatal).
     # Pin to <5 so an unconstrained resolve can't pull in a bcrypt major that
     # may break hash/verify before passlib ships a compatible release.
-    "bcrypt>=4.0,<5",
+    "bcrypt>=4.0,<6",
     "cryptography>=42.0",
     "alembic>=1.13",
     "psycopg2-binary>=2.9",
