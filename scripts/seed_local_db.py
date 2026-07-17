@@ -129,7 +129,7 @@ def seed(conn):
             (
                 str(job_id),
                 str(LOCAL_DEV_CALLER_ID),
-                "SUCCEEDED",
+                "succeeded",
                 "http://local-placeholder/audio.wav",
                 "en-GB",
                 True,
