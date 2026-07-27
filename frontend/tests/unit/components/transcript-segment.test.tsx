@@ -264,6 +264,9 @@ describe("TranscriptSegment", () => {
     const token = Array.from(container.querySelectorAll("span")).find(
       (el) => el.textContent?.trim() === "PA/0475"
     );
+    // Fail clearly if the token never rendered, rather than passing vacuously
+    // on `undefined?.className`.
+    expect(token).toBeDefined();
     // mean = (0.95 + 0.9 + 0.5 + 0.92 + 0.88) / 5 = 0.83 > 0.65: not flagged.
     expect(token?.className).not.toContain("bg-orange-100");
   });

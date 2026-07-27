@@ -287,6 +287,25 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
       0
     );
 
+    // Whether the transcript actually renders at least one low-confidence
+    // highlight, mirroring TranscriptSegment's own gating: a segment only
+    // highlights words when it renders word-by-word (no whole-segment
+    // correctedText), hasn't been accepted as-is, and has a word below the
+    // threshold. Gate the "review" caption on this — not merely on job.accuracy
+    // — so it never shows when nothing is highlighted (segments without words,
+    // or all highlights cleared/accepted/corrected) (DIAAT-249 review).
+    const highlightThreshold = job.accuracy
+      ? job.accuracy.confidenceThreshold / 100
+      : undefined;
+    const hasLowConfidenceHighlights =
+      highlightThreshold !== undefined &&
+      job.segments.some(
+        (s) =>
+          s.correctedText === undefined &&
+          !s.accepted &&
+          (s.words?.some((w) => w.confidence < highlightThreshold) ?? false)
+      );
+
     return (
       <main className="min-h-screen bg-background">
         <audio
@@ -333,9 +352,11 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
               </div>
               {/* Reframe the highlighting as "review", not "error" (DIAAT-249):
                   a highlighted word had lower recognition confidence, not a
-                  confirmed mistake. Only shown for confidence-scored jobs (those
-                  with accuracy data), so clean/older transcripts don't show it. */}
-              {job.accuracy && (
+                  confirmed mistake. Only shown when the transcript actually
+                  renders at least one low-confidence highlight, so clean/older
+                  transcripts (or ones where every highlight was cleared) don't
+                  show a caption referring to highlights that aren't there. */}
+              {hasLowConfidenceHighlights && (
                 <p className="text-sm text-muted-foreground mb-3">
                   Highlighted words had lower recognition confidence — review
                   and confirm or edit.
@@ -368,11 +389,7 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
                       // highlight compares against a 0-1 ratio. Keep them in
                       // sync so highlights match the backend "needs review"
                       // list even under an env override.
-                      lowConfidenceThreshold={
-                        job.accuracy
-                          ? job.accuracy.confidenceThreshold / 100
-                          : undefined
-                      }
+                      lowConfidenceThreshold={highlightThreshold}
                     />
                   );
                 })}
