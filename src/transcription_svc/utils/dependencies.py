@@ -49,7 +49,7 @@ def _resolve_user(azure_user_id: str, email: str, roles: list[str]) -> Authentic
             session.add(user)
             session.commit()
             session.refresh(user)
-            logger.info("Created new user: %s", email)
+            logger.info("Created new user for azure_user_id=%s", azure_user_id)
         else:
             if primary_role and user.role != primary_role:
                 logger.info(
