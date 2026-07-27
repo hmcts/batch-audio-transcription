@@ -18,18 +18,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
         with:
-          python-version: '3.12'
-          cache: pip
+          enable-cache: false
 
       - name: Install runtime dependencies
-        run: pip install -e "."
+        run: uv sync
 
       - name: Generate CycloneDX SBOM
         run: |
-          pip install cyclonedx-bom
-          cyclonedx-py environment \
+          uv pip install cyclonedx-bom
+          uv run cyclonedx-py environment \
             --output-format JSON \
             --output-file sbom.cdx.json
 

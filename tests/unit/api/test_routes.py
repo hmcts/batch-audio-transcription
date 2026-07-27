@@ -126,7 +126,7 @@ class TestUploadAudio:
         mocker.patch("transcription_svc.api.routes.AsyncAzureBlobManager", return_value=manager)
         return manager
 
-    def test_returns_201_with_audio_url(self, client, as_caller, mocker):
+    def test_returns_201_with_audio_url(self, client, as_current_user, mocker):
         self._mock_blob_manager(mocker)
 
         response = client.post(
@@ -138,14 +138,14 @@ class TestUploadAudio:
         assert body["audio_url"] == "https://x/y.wav"
         assert "hearing.wav" in body["blob_name"]
 
-    def test_rejects_unsupported_extension(self, client, as_caller):
+    def test_rejects_unsupported_extension(self, client, as_current_user):
         response = client.post(
             "/api/v1/uploads",
             files={"file": ("notes.txt", b"hello", "text/plain")},
         )
         assert response.status_code == 422
 
-    def test_returns_502_when_storage_upload_fails(self, client, as_caller, mocker):
+    def test_returns_502_when_storage_upload_fails(self, client, as_current_user, mocker):
         self._mock_blob_manager(mocker, upload_ok=False)
 
         response = client.post(
@@ -174,7 +174,7 @@ class TestUploadAudioLocalBackend:
         yield
         get_settings.cache_clear()
 
-    def test_stores_locally_and_returns_tunnel_url(self, client, as_caller):
+    def test_stores_locally_and_returns_tunnel_url(self, client, as_current_user):
         response = client.post(
             "/api/v1/uploads",
             files={"file": ("hearing.wav", b"fake-audio-bytes", "audio/wav")},
@@ -187,7 +187,7 @@ class TestUploadAudioLocalBackend:
         assert get_response.status_code == 200
         assert get_response.content == b"fake-audio-bytes"
 
-    def test_never_touches_azure_blob_manager(self, client, as_caller, mocker):
+    def test_never_touches_azure_blob_manager(self, client, as_current_user, mocker):
         blob_manager_cls = mocker.patch("transcription_svc.api.routes.AsyncAzureBlobManager")
 
         client.post(
@@ -217,20 +217,20 @@ class TestLocalAudio:
 
 
 class TestGetJobAudio:
-    def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
+    def test_returns_404_for_unknown_job(self, client, as_current_user, mocker):
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
         response = client.get(f"/api/v1/jobs/{uuid.uuid4()}/audio")
         assert response.status_code == 404
 
-    def test_returns_404_for_other_callers_job(self, client, as_caller, mocker):
+    def test_returns_404_for_other_callers_job(self, client, as_current_user, mocker):
         job = _make_job()
-        job.caller_id = uuid.uuid4()
+        job.user_id = uuid.uuid4()
         job.audio_blob_path = "uploads/x/hearing.wav"
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
         response = client.get(f"/api/v1/jobs/{job.id}/audio")
         assert response.status_code == 404
 
-    def test_returns_404_when_job_has_no_blob_path(self, client, as_caller, mocker):
+    def test_returns_404_when_job_has_no_blob_path(self, client, as_current_user, mocker):
         job = _make_job()
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.audio_blob_path = None
@@ -239,7 +239,7 @@ class TestGetJobAudio:
         assert response.status_code == 404
 
     def test_streams_full_content_from_local_backend(
-        self, client, as_caller, mocker, tmp_path, monkeypatch
+        self, client, as_current_user, mocker, tmp_path, monkeypatch
     ):
         from transcription_svc.audio import local_storage
         from transcription_svc.config.settings import get_settings
@@ -265,7 +265,7 @@ class TestGetJobAudio:
         assert response.headers["content-length"] == "16"
 
     def test_streams_partial_range_from_local_backend(
-        self, client, as_caller, mocker, tmp_path, monkeypatch
+        self, client, as_current_user, mocker, tmp_path, monkeypatch
     ):
         from transcription_svc.audio import local_storage
         from transcription_svc.config.settings import get_settings
@@ -291,7 +291,7 @@ class TestGetJobAudio:
         assert response.headers["content-length"] == "3"
 
     def test_returns_404_when_local_file_missing(
-        self, client, as_caller, mocker, tmp_path, monkeypatch
+        self, client, as_current_user, mocker, tmp_path, monkeypatch
     ):
         from transcription_svc.config.settings import get_settings
 
@@ -310,7 +310,7 @@ class TestGetJobAudio:
         assert response.status_code == 404
 
     def test_supports_suffix_range_for_the_last_n_bytes(
-        self, client, as_caller, mocker, tmp_path, monkeypatch
+        self, client, as_current_user, mocker, tmp_path, monkeypatch
     ):
         from transcription_svc.audio import local_storage
         from transcription_svc.config.settings import get_settings
@@ -336,7 +336,7 @@ class TestGetJobAudio:
         assert response.headers["content-range"] == "bytes 7-9/10"
 
     def test_returns_416_for_a_malformed_range_header(
-        self, client, as_caller, mocker, tmp_path, monkeypatch
+        self, client, as_current_user, mocker, tmp_path, monkeypatch
     ):
         from transcription_svc.audio import local_storage
         from transcription_svc.config.settings import get_settings
@@ -362,7 +362,7 @@ class TestGetJobAudio:
         assert response.headers["content-range"] == "bytes */10"
 
     def test_returns_416_for_an_out_of_bounds_range(
-        self, client, as_caller, mocker, tmp_path, monkeypatch
+        self, client, as_current_user, mocker, tmp_path, monkeypatch
     ):
         from transcription_svc.audio import local_storage
         from transcription_svc.config.settings import get_settings
@@ -386,7 +386,7 @@ class TestGetJobAudio:
         assert response.headers["content-range"] == "bytes */10"
 
     def test_returns_200_with_empty_body_for_a_zero_byte_file(
-        self, client, as_caller, mocker, tmp_path, monkeypatch
+        self, client, as_current_user, mocker, tmp_path, monkeypatch
     ):
         from transcription_svc.audio import local_storage
         from transcription_svc.config.settings import get_settings
@@ -411,7 +411,7 @@ class TestGetJobAudio:
         assert response.headers["content-length"] == "0"
 
     def test_returns_416_for_a_range_request_against_a_zero_byte_file(
-        self, client, as_caller, mocker, tmp_path, monkeypatch
+        self, client, as_current_user, mocker, tmp_path, monkeypatch
     ):
         from transcription_svc.audio import local_storage
         from transcription_svc.config.settings import get_settings
@@ -434,7 +434,7 @@ class TestGetJobAudio:
         assert response.status_code == 416
         assert response.headers["content-range"] == "bytes */0"
 
-    def test_streams_partial_range_from_azure_backend(self, client, as_caller, mocker):
+    def test_streams_partial_range_from_azure_backend(self, client, as_current_user, mocker):
         async def achunks(chunks):
             for c in chunks:
                 yield c
@@ -460,7 +460,7 @@ class TestGetJobAudio:
         manager.stream_blob_range.assert_called_once_with("uploads/x/hearing.wav", 10, 21)
         manager.close.assert_awaited_once()
 
-    def test_returns_404_when_azure_blob_missing(self, client, as_caller, mocker):
+    def test_returns_404_when_azure_blob_missing(self, client, as_current_user, mocker):
         job = _make_job()
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.audio_blob_path = "uploads/x/missing.wav"
@@ -478,13 +478,15 @@ class TestGetJobAudio:
 
 
 class TestSubmitJob:
-    def test_returns_201_on_success(self, client, as_caller, mocker):
+    def test_returns_201_on_success(self, client, as_current_user, mocker):
         job = _make_job()
         mocker.patch(
             "transcription_svc.api.routes.submit_and_queue_batch_job",
             return_value=job,
         )
-        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+        mocker.patch(
+            "transcription_svc.api.routes.get_job_by_idempotency_key_for_user", return_value=None
+        )
 
         response = client.post(
             "/api/v1/jobs",
@@ -496,10 +498,11 @@ class TestSubmitJob:
         assert response.status_code == 201
         assert "job_id" in response.json()
 
-    def test_returns_existing_job_on_idempotency_hit(self, client, as_caller, mocker):
+    def test_returns_existing_job_on_idempotency_hit(self, client, as_current_user, mocker):
         existing = _make_job(status=JobStatus.SUCCEEDED)
         mocker.patch(
-            "transcription_svc.api.routes.get_job_by_idempotency_key", return_value=existing
+            "transcription_svc.api.routes.get_job_by_idempotency_key_for_user",
+            return_value=existing,
         )
 
         response = client.post(
@@ -520,16 +523,18 @@ class TestSubmitJob:
         )
         assert response.status_code in (401, 422)
 
-    def test_accepts_blob_name_under_callers_own_prefix(self, client, as_caller, mocker):
+    def test_accepts_blob_name_under_callers_own_prefix(self, client, as_current_user, mocker):
         job = _make_job()
         submit_mock = mocker.patch(
             "transcription_svc.api.routes.submit_and_queue_batch_job",
             return_value=job,
         )
-        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+        mocker.patch(
+            "transcription_svc.api.routes.get_job_by_idempotency_key_for_user", return_value=None
+        )
 
-        # as_caller's id is 00000000-0000-0000-0000-000000000001 (see _make_caller).
-        own_blob_name = "uploads/00000000-0000-0000-0000-000000000001/audio.wav"
+        # as_current_user's id is 00000000-0000-0000-0000-000000000002 (see _make_user).
+        own_blob_name = "uploads/00000000-0000-0000-0000-000000000002/audio.wav"
         response = client.post(
             "/api/v1/jobs",
             json={
@@ -540,7 +545,7 @@ class TestSubmitJob:
         assert response.status_code == 201
         assert submit_mock.call_args.kwargs["audio_blob_path"] == own_blob_name
 
-    def test_rejects_blob_name_belonging_to_another_caller(self, client, as_caller, mocker):
+    def test_rejects_blob_name_belonging_to_another_caller(self, client, as_current_user, mocker):
         # blob_name is later trusted by GET /jobs/{id}/audio to read straight
         # from storage — without this check a caller could read another
         # caller's audio by guessing/observing their blob path.
@@ -548,7 +553,9 @@ class TestSubmitJob:
             "transcription_svc.api.routes.submit_and_queue_batch_job",
             return_value=_make_job(),
         )
-        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+        mocker.patch(
+            "transcription_svc.api.routes.get_job_by_idempotency_key_for_user", return_value=None
+        )
 
         response = client.post(
             "/api/v1/jobs",
@@ -559,13 +566,17 @@ class TestSubmitJob:
         )
         assert response.status_code == 422
 
-    def test_passes_audio_duration_seconds_through_to_submission(self, client, as_caller, mocker):
+    def test_passes_audio_duration_seconds_through_to_submission(
+        self, client, as_current_user, mocker
+    ):
         job = _make_job()
         submit_mock = mocker.patch(
             "transcription_svc.api.routes.submit_and_queue_batch_job",
             return_value=job,
         )
-        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+        mocker.patch(
+            "transcription_svc.api.routes.get_job_by_idempotency_key_for_user", return_value=None
+        )
 
         response = client.post(
             "/api/v1/jobs",
@@ -577,13 +588,15 @@ class TestSubmitJob:
         assert response.status_code == 201
         assert submit_mock.call_args.kwargs["audio_duration_seconds"] == 9360.0
 
-    def test_audio_duration_seconds_is_optional(self, client, as_caller, mocker):
+    def test_audio_duration_seconds_is_optional(self, client, as_current_user, mocker):
         job = _make_job()
         submit_mock = mocker.patch(
             "transcription_svc.api.routes.submit_and_queue_batch_job",
             return_value=job,
         )
-        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+        mocker.patch(
+            "transcription_svc.api.routes.get_job_by_idempotency_key_for_user", return_value=None
+        )
 
         response = client.post(
             "/api/v1/jobs",
@@ -592,12 +605,14 @@ class TestSubmitJob:
         assert response.status_code == 201
         assert submit_mock.call_args.kwargs["audio_duration_seconds"] is None
 
-    def test_rejects_negative_audio_duration_seconds(self, client, as_caller, mocker):
+    def test_rejects_negative_audio_duration_seconds(self, client, as_current_user, mocker):
         mocker.patch(
             "transcription_svc.api.routes.submit_and_queue_batch_job",
             return_value=_make_job(),
         )
-        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+        mocker.patch(
+            "transcription_svc.api.routes.get_job_by_idempotency_key_for_user", return_value=None
+        )
 
         response = client.post(
             "/api/v1/jobs",
@@ -609,7 +624,9 @@ class TestSubmitJob:
         assert response.status_code == 422
 
     @pytest.mark.parametrize("bad_value", ["NaN", "Infinity", "-Infinity"])
-    def test_rejects_non_finite_audio_duration_seconds(self, client, as_caller, mocker, bad_value):
+    def test_rejects_non_finite_audio_duration_seconds(
+        self, client, as_current_user, mocker, bad_value
+    ):
         # Python's json module accepts these tokens and Pydantic coerces them to
         # float, so they must be rejected explicitly — they can't be serialised
         # back in a JSON response.
@@ -617,7 +634,9 @@ class TestSubmitJob:
             "transcription_svc.api.routes.submit_and_queue_batch_job",
             return_value=_make_job(),
         )
-        mocker.patch("transcription_svc.api.routes.get_job_by_idempotency_key", return_value=None)
+        mocker.patch(
+            "transcription_svc.api.routes.get_job_by_idempotency_key_for_user", return_value=None
+        )
 
         response = client.post(
             "/api/v1/jobs",
@@ -633,7 +652,7 @@ class TestSubmitJob:
 
 
 class TestGetJob:
-    def test_returns_job(self, client, as_caller, mocker):
+    def test_returns_job(self, client, as_current_user, mocker):
         job = _make_job()
         caller = _make_caller()
         job.caller_id = caller.id
@@ -652,20 +671,22 @@ class TestGetJob:
         assert response.status_code == 200
         assert "caller_name" not in response.json()
 
-    def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
+    def test_returns_404_for_unknown_job(self, client, as_current_user, mocker):
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
         response = client.get(f"/api/v1/jobs/{uuid.uuid4()}")
         assert response.status_code == 404
 
-    def test_returns_404_for_other_callers_job(self, client, as_caller, mocker):
+    def test_returns_404_for_other_callers_job(self, client, as_current_user, mocker):
         job = _make_job()
-        job.caller_id = uuid.uuid4()  # different caller
+        job.user_id = uuid.uuid4()  # different user
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
 
         response = client.get(f"/api/v1/jobs/{job.id}")
         assert response.status_code == 404
 
-    def test_includes_accuracy_and_needs_review_for_succeeded_job(self, client, as_caller, mocker):
+    def test_includes_accuracy_and_needs_review_for_succeeded_job(
+        self, client, as_current_user, mocker
+    ):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [
@@ -688,7 +709,7 @@ class TestGetJob:
         assert len(body["needs_review"]) == 1
         assert body["needs_review"][0]["speaker"] == "0"
 
-    def test_omits_accuracy_for_non_succeeded_job(self, client, as_caller, mocker):
+    def test_omits_accuracy_for_non_succeeded_job(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUBMITTED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
@@ -699,7 +720,7 @@ class TestGetJob:
         assert body["accuracy"] is None
         assert body["needs_review"] is None
 
-    def test_includes_audio_duration_seconds_when_known(self, client, as_caller, mocker):
+    def test_includes_audio_duration_seconds_when_known(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.RUNNING)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.audio_duration_seconds = 9360.0
@@ -708,7 +729,7 @@ class TestGetJob:
         response = client.get(f"/api/v1/jobs/{job.id}")
         assert response.json()["audio_duration_seconds"] == 9360.0
 
-    def test_audio_duration_seconds_is_none_when_unknown(self, client, as_caller, mocker):
+    def test_audio_duration_seconds_is_none_when_unknown(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.RUNNING)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
@@ -716,7 +737,7 @@ class TestGetJob:
         response = client.get(f"/api/v1/jobs/{job.id}")
         assert response.json()["audio_duration_seconds"] is None
 
-    def test_round_trips_nbest_alternatives(self, client, as_caller, mocker):
+    def test_round_trips_nbest_alternatives(self, client, as_current_user, mocker):
         # DIAAT-232: the full nBest array persisted per phrase (not just
         # Azure's top choice, already covered by text/confidence/words)
         # must survive storage and come back out through the API untouched.
@@ -764,7 +785,7 @@ class TestGetJob:
             }
         ]
 
-    def test_alternatives_is_none_when_not_present(self, client, as_caller, mocker):
+    def test_alternatives_is_none_when_not_present(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
@@ -779,7 +800,7 @@ class TestGetJob:
     # threshold per environment without a code change; previously declared
     # in Settings but never actually wired into the accuracy computation.
     def test_low_confidence_threshold_setting_overrides_the_default(
-        self, client, as_caller, mocker, monkeypatch
+        self, client, as_current_user, mocker, monkeypatch
     ):
         from transcription_svc.config.settings import get_settings
 
@@ -809,7 +830,7 @@ class TestGetJob:
         finally:
             get_settings.cache_clear()
 
-    def test_includes_run_metadata_for_completed_job(self, client, as_caller, mocker):
+    def test_includes_run_metadata_for_completed_job(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.audio_duration_seconds = 754.2
@@ -826,7 +847,7 @@ class TestGetJob:
         assert body["model_identifier"] == "https://eastus.example.com/models/base/xyz"
         assert body["model_display_name"] == "20240614 Base — en-GB"
 
-    def test_run_metadata_defaults_to_null_before_completion(self, client, as_caller, mocker):
+    def test_run_metadata_defaults_to_null_before_completion(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUBMITTED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
@@ -848,7 +869,7 @@ class TestUploadBaselineTranscript:
         client.app.dependency_overrides[get_session] = lambda: mock_session
         return mock_session
 
-    def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
+    def test_returns_404_for_unknown_job(self, client, as_current_user, mocker):
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
         response = client.post(
             f"/api/v1/jobs/{uuid.uuid4()}/baseline",
@@ -856,9 +877,9 @@ class TestUploadBaselineTranscript:
         )
         assert response.status_code == 404
 
-    def test_returns_404_for_other_callers_job(self, client, as_caller, mocker):
+    def test_returns_404_for_other_callers_job(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
-        job.caller_id = uuid.uuid4()
+        job.user_id = uuid.uuid4()
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
 
@@ -868,7 +889,7 @@ class TestUploadBaselineTranscript:
         )
         assert response.status_code == 404
 
-    def test_returns_422_when_job_not_succeeded(self, client, as_caller, mocker):
+    def test_returns_422_when_job_not_succeeded(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUBMITTED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
@@ -879,7 +900,7 @@ class TestUploadBaselineTranscript:
         )
         assert response.status_code == 422
 
-    def test_rejects_unsupported_extension(self, client, as_caller, mocker):
+    def test_rejects_unsupported_extension(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
@@ -891,7 +912,7 @@ class TestUploadBaselineTranscript:
         )
         assert response.status_code == 422
 
-    def test_rejects_missing_extension(self, client, as_caller, mocker):
+    def test_rejects_missing_extension(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
@@ -903,7 +924,7 @@ class TestUploadBaselineTranscript:
         )
         assert response.status_code == 422
 
-    def test_rejects_empty_file(self, client, as_caller, mocker):
+    def test_rejects_empty_file(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
@@ -915,7 +936,7 @@ class TestUploadBaselineTranscript:
         )
         assert response.status_code == 422
 
-    def test_rejects_non_utf8_content(self, client, as_caller, mocker):
+    def test_rejects_non_utf8_content(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
@@ -927,7 +948,7 @@ class TestUploadBaselineTranscript:
         )
         assert response.status_code == 422
 
-    def test_stores_baseline_and_returns_wer(self, client, as_caller, mocker):
+    def test_stores_baseline_and_returns_wer(self, client, as_current_user, mocker):
         from transcription_svc.database.engine import get_session
 
         job = _make_job(status=JobStatus.SUCCEEDED)
@@ -959,7 +980,7 @@ class TestUploadBaselineTranscript:
         assert job.baseline_transcript == "the slow brown fox"
         mock_session.commit.assert_called_once()
 
-    def test_strips_utf8_bom_from_baseline(self, client, as_caller, mocker):
+    def test_strips_utf8_bom_from_baseline(self, client, as_current_user, mocker):
         from transcription_svc.database.engine import get_session
 
         job = _make_job(status=JobStatus.SUCCEEDED)
@@ -1013,16 +1034,16 @@ class TestCorrectSegment:
         client.app.dependency_overrides[get_session] = lambda: mock_session
         return mock_session
 
-    def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
+    def test_returns_404_for_unknown_job(self, client, as_current_user, mocker):
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
         response = client.patch(
             f"/api/v1/jobs/{uuid.uuid4()}/segments/0", json={"corrected_text": "fixed"}
         )
         assert response.status_code == 404
 
-    def test_returns_404_for_other_callers_job(self, client, as_caller, mocker):
+    def test_returns_404_for_other_callers_job(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
-        job.caller_id = uuid.uuid4()
+        job.user_id = uuid.uuid4()
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
 
@@ -1031,7 +1052,7 @@ class TestCorrectSegment:
         )
         assert response.status_code == 404
 
-    def test_returns_422_when_job_not_succeeded(self, client, as_caller, mocker):
+    def test_returns_422_when_job_not_succeeded(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUBMITTED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
@@ -1041,7 +1062,7 @@ class TestCorrectSegment:
         )
         assert response.status_code == 422
 
-    def test_returns_404_for_out_of_range_index(self, client, as_caller, mocker):
+    def test_returns_404_for_out_of_range_index(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
@@ -1052,7 +1073,7 @@ class TestCorrectSegment:
         )
         assert response.status_code == 404
 
-    def test_stores_correction_and_returns_updated_job(self, client, as_caller, mocker):
+    def test_stores_correction_and_returns_updated_job(self, client, as_current_user, mocker):
         from transcription_svc.database.engine import get_session
 
         job = _make_job(status=JobStatus.SUCCEEDED)
@@ -1085,7 +1106,7 @@ class TestCorrectSegment:
         mock_session.commit.assert_called_once()
 
     def test_does_not_write_dataset_entry_when_flag_disabled(
-        self, client, as_caller, mocker, monkeypatch
+        self, client, as_current_user, mocker, monkeypatch
     ):
         """DIAAT-231: default-off flag means no row in correction_dataset_entry."""
         from transcription_svc.config.settings import get_settings
@@ -1123,7 +1144,9 @@ class TestCorrectSegment:
         ]
         assert dataset_rows == []
 
-    def test_writes_dataset_entry_when_flag_enabled(self, client, as_caller, mocker, monkeypatch):
+    def test_writes_dataset_entry_when_flag_enabled(
+        self, client, as_current_user, mocker, monkeypatch
+    ):
         """DIAAT-231: enabling the flag stages a row capturing the correction."""
         from transcription_svc.config.settings import get_settings
         from transcription_svc.database.engine import get_session
@@ -1172,7 +1195,7 @@ class TestCorrectSegment:
         # Staged in the same commit as the job update — atomic with it.
         mock_session.commit.assert_called_once()
 
-    def test_rejects_empty_correction(self, client, as_caller, mocker):
+    def test_rejects_empty_correction(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
@@ -1181,7 +1204,7 @@ class TestCorrectSegment:
         response = client.patch(f"/api/v1/jobs/{job.id}/segments/0", json={"corrected_text": ""})
         assert response.status_code == 422
 
-    def test_rejects_whitespace_only_correction(self, client, as_caller, mocker):
+    def test_rejects_whitespace_only_correction(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
@@ -1206,7 +1229,7 @@ class TestCorrectWordRange:
         client.app.dependency_overrides[get_session] = lambda: mock_session
         return mock_session
 
-    def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
+    def test_returns_404_for_unknown_job(self, client, as_current_user, mocker):
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
         response = client.patch(
             f"/api/v1/jobs/{uuid.uuid4()}/segments/0/words",
@@ -1214,9 +1237,9 @@ class TestCorrectWordRange:
         )
         assert response.status_code == 404
 
-    def test_returns_404_for_other_callers_job(self, client, as_caller, mocker):
+    def test_returns_404_for_other_callers_job(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
-        job.caller_id = uuid.uuid4()
+        job.user_id = uuid.uuid4()
         job.dialogue_entries = [
             {
                 "speaker": "0",
@@ -1234,7 +1257,7 @@ class TestCorrectWordRange:
         )
         assert response.status_code == 404
 
-    def test_returns_422_when_job_not_succeeded(self, client, as_caller, mocker):
+    def test_returns_422_when_job_not_succeeded(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUBMITTED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
@@ -1245,7 +1268,7 @@ class TestCorrectWordRange:
         )
         assert response.status_code == 422
 
-    def test_returns_404_for_out_of_range_index(self, client, as_caller, mocker):
+    def test_returns_404_for_out_of_range_index(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
@@ -1257,7 +1280,7 @@ class TestCorrectWordRange:
         )
         assert response.status_code == 404
 
-    def test_returns_422_when_segment_has_no_words(self, client, as_caller, mocker):
+    def test_returns_422_when_segment_has_no_words(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [
@@ -1271,7 +1294,7 @@ class TestCorrectWordRange:
         )
         assert response.status_code == 422
 
-    def test_returns_422_for_invalid_range(self, client, as_caller, mocker):
+    def test_returns_422_for_invalid_range(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [
@@ -1297,7 +1320,7 @@ class TestCorrectWordRange:
         )
         assert response.status_code == 422
 
-    def test_rejects_whitespace_only_correction(self, client, as_caller, mocker):
+    def test_rejects_whitespace_only_correction(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [
@@ -1317,7 +1340,9 @@ class TestCorrectWordRange:
         )
         assert response.status_code == 422
 
-    def test_returns_422_when_whole_segment_already_corrected(self, client, as_caller, mocker):
+    def test_returns_422_when_whole_segment_already_corrected(
+        self, client, as_current_user, mocker
+    ):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [
@@ -1339,7 +1364,7 @@ class TestCorrectWordRange:
         assert response.status_code == 422
 
     def test_stores_word_range_correction_and_preserves_other_words(
-        self, client, as_caller, mocker
+        self, client, as_current_user, mocker
     ):
         from transcription_svc.database.engine import get_session
 
@@ -1385,7 +1410,7 @@ class TestCorrectWordRange:
         mock_session.commit.assert_called_once()
 
     def test_does_not_write_dataset_entry_when_flag_disabled(
-        self, client, as_caller, mocker, monkeypatch
+        self, client, as_current_user, mocker, monkeypatch
     ):
         """DIAAT-231: default-off flag means no row in correction_dataset_entry."""
         from transcription_svc.config.settings import get_settings
@@ -1424,7 +1449,9 @@ class TestCorrectWordRange:
         ]
         assert dataset_rows == []
 
-    def test_writes_dataset_entry_when_flag_enabled(self, client, as_caller, mocker, monkeypatch):
+    def test_writes_dataset_entry_when_flag_enabled(
+        self, client, as_current_user, mocker, monkeypatch
+    ):
         """DIAAT-231: enabling the flag stages a row with the original lexical
 
         phrase (from entry.words, not any prior correction) paired with the
@@ -1474,7 +1501,9 @@ class TestCorrectWordRange:
         assert row.end_word_index == 1
         assert row.confidence == 0.9
 
-    def test_new_range_supersedes_overlapping_existing_correction(self, client, as_caller, mocker):
+    def test_new_range_supersedes_overlapping_existing_correction(
+        self, client, as_current_user, mocker
+    ):
         from transcription_svc.database.engine import get_session
 
         job = _make_job(status=JobStatus.SUCCEEDED)
@@ -1510,7 +1539,7 @@ class TestCorrectWordRange:
         mock_session.commit.assert_called_once()
 
     def test_re_editing_the_same_range_logs_the_prior_correction_as_previous_phrase(
-        self, client, as_caller, mocker
+        self, client, as_current_user, mocker
     ):
         from transcription_svc.database.engine import get_session
 
@@ -1554,21 +1583,21 @@ class TestAcceptSegment:
         client.app.dependency_overrides[get_session] = lambda: mock_session
         return mock_session
 
-    def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
+    def test_returns_404_for_unknown_job(self, client, as_current_user, mocker):
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
         response = client.post(f"/api/v1/jobs/{uuid.uuid4()}/segments/0/accept")
         assert response.status_code == 404
 
-    def test_returns_404_for_other_callers_job(self, client, as_caller, mocker):
+    def test_returns_404_for_other_callers_job(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
-        job.caller_id = uuid.uuid4()
+        job.user_id = uuid.uuid4()
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
 
         response = client.post(f"/api/v1/jobs/{job.id}/segments/0/accept")
         assert response.status_code == 404
 
-    def test_returns_422_when_job_not_succeeded(self, client, as_caller, mocker):
+    def test_returns_422_when_job_not_succeeded(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUBMITTED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
@@ -1576,7 +1605,7 @@ class TestAcceptSegment:
         response = client.post(f"/api/v1/jobs/{job.id}/segments/0/accept")
         assert response.status_code == 422
 
-    def test_returns_404_for_out_of_range_index(self, client, as_caller, mocker):
+    def test_returns_404_for_out_of_range_index(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
@@ -1585,7 +1614,7 @@ class TestAcceptSegment:
         response = client.post(f"/api/v1/jobs/{job.id}/segments/5/accept")
         assert response.status_code == 404
 
-    def test_marks_segment_accepted_without_changing_text(self, client, as_caller, mocker):
+    def test_marks_segment_accepted_without_changing_text(self, client, as_current_user, mocker):
         from transcription_svc.database.engine import get_session
 
         job = _make_job(status=JobStatus.SUCCEEDED)
@@ -1632,7 +1661,7 @@ class TestAcceptSegment:
         assert body["needs_review"] == []
         mock_session.commit.assert_called_once()
 
-    def test_returns_422_when_already_accepted(self, client, as_caller, mocker):
+    def test_returns_422_when_already_accepted(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [
@@ -1651,7 +1680,7 @@ class TestAcceptSegment:
         assert response.status_code == 422
 
     def test_high_confidence_segment_not_in_needs_review_after_accept(
-        self, client, as_caller, mocker
+        self, client, as_current_user, mocker
     ):
         """Accepting a segment that was never low-confidence is harmless."""
         from transcription_svc.database.engine import get_session
@@ -1687,21 +1716,21 @@ class TestRollbackSegment:
         client.app.dependency_overrides[get_session] = lambda: mock_session
         return mock_session
 
-    def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
+    def test_returns_404_for_unknown_job(self, client, as_current_user, mocker):
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
         response = client.post(f"/api/v1/jobs/{uuid.uuid4()}/segments/0/rollback")
         assert response.status_code == 404
 
-    def test_returns_404_for_other_callers_job(self, client, as_caller, mocker):
+    def test_returns_404_for_other_callers_job(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
-        job.caller_id = uuid.uuid4()
+        job.user_id = uuid.uuid4()
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
 
         response = client.post(f"/api/v1/jobs/{job.id}/segments/0/rollback")
         assert response.status_code == 404
 
-    def test_returns_422_for_uncorrected_segment(self, client, as_caller, mocker):
+    def test_returns_422_for_uncorrected_segment(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [
@@ -1712,7 +1741,7 @@ class TestRollbackSegment:
         response = client.post(f"/api/v1/jobs/{job.id}/segments/0/rollback")
         assert response.status_code == 422
 
-    def test_rolls_back_whole_segment_correction(self, client, as_caller, mocker):
+    def test_rolls_back_whole_segment_correction(self, client, as_current_user, mocker):
         from transcription_svc.database.engine import get_session
 
         job = _make_job(status=JobStatus.SUCCEEDED)
@@ -1751,7 +1780,7 @@ class TestRollbackSegment:
         assert entry["correction_history"] is None
         mock_session.commit.assert_called_once()
 
-    def test_rolls_back_word_range_correction(self, client, as_caller, mocker):
+    def test_rolls_back_word_range_correction(self, client, as_current_user, mocker):
         from transcription_svc.database.engine import get_session
 
         job = _make_job(status=JobStatus.SUCCEEDED)
@@ -1781,7 +1810,7 @@ class TestRollbackSegment:
         assert entry["correction_history"] is None
         mock_session.commit.assert_called_once()
 
-    def test_rolls_back_an_accepted_segment(self, client, as_caller, mocker):
+    def test_rolls_back_an_accepted_segment(self, client, as_current_user, mocker):
         """A hard reset also un-accepts a segment, restoring it to needs_review."""
         from transcription_svc.database.engine import get_session
 
@@ -1830,21 +1859,21 @@ class TestRollbackToHistoryEntry:
         client.app.dependency_overrides[get_session] = lambda: mock_session
         return mock_session
 
-    def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
+    def test_returns_404_for_unknown_job(self, client, as_current_user, mocker):
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
         response = client.post(f"/api/v1/jobs/{uuid.uuid4()}/segments/0/history/0/rollback")
         assert response.status_code == 404
 
-    def test_returns_404_for_other_callers_job(self, client, as_caller, mocker):
+    def test_returns_404_for_other_callers_job(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
-        job.caller_id = uuid.uuid4()
+        job.user_id = uuid.uuid4()
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
 
         response = client.post(f"/api/v1/jobs/{job.id}/segments/0/history/0/rollback")
         assert response.status_code == 404
 
-    def test_returns_404_for_out_of_range_history_index(self, client, as_caller, mocker):
+    def test_returns_404_for_out_of_range_history_index(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUCCEEDED)
         job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         job.dialogue_entries = [
@@ -1869,7 +1898,7 @@ class TestRollbackToHistoryEntry:
         response = client.post(f"/api/v1/jobs/{job.id}/segments/0/history/5/rollback")
         assert response.status_code == 404
 
-    def test_rolls_back_to_a_specific_history_entry(self, client, as_caller, mocker):
+    def test_rolls_back_to_a_specific_history_entry(self, client, as_current_user, mocker):
         from transcription_svc.database.engine import get_session
 
         job = _make_job(status=JobStatus.SUCCEEDED)
@@ -1917,7 +1946,7 @@ class TestRollbackToHistoryEntry:
         assert entry["correction_history"][2]["new_text"] == "the slow brown fox"
         mock_session.commit.assert_called_once()
 
-    def test_rollback_to_original_clears_corrected_text(self, client, as_caller, mocker):
+    def test_rollback_to_original_clears_corrected_text(self, client, as_current_user, mocker):
         from transcription_svc.database.engine import get_session
 
         job = _make_job(status=JobStatus.SUCCEEDED)
@@ -1953,7 +1982,7 @@ class TestRollbackToHistoryEntry:
         mock_session.commit.assert_called_once()
 
     def test_surgically_reverts_a_word_range_entry_to_the_original_word(
-        self, client, as_caller, mocker
+        self, client, as_current_user, mocker
     ):
         from transcription_svc.database.engine import get_session
 
@@ -2007,7 +2036,7 @@ class TestRollbackToHistoryEntry:
         mock_session.commit.assert_called_once()
 
     def test_surgically_reverts_a_re_edited_range_to_the_prior_correction(
-        self, client, as_caller, mocker
+        self, client, as_current_user, mocker
     ):
         from transcription_svc.database.engine import get_session
 
@@ -2068,7 +2097,7 @@ class TestRollbackToHistoryEntry:
         mock_session.commit.assert_called_once()
 
     def test_falls_back_to_flat_rollback_when_range_was_since_overridden(
-        self, client, as_caller, mocker
+        self, client, as_current_user, mocker
     ):
         from transcription_svc.database.engine import get_session
 
@@ -2124,7 +2153,7 @@ class TestRollbackToHistoryEntry:
         mock_session.commit.assert_called_once()
 
     def test_surgically_reverts_an_undo_when_range_is_currently_untouched(
-        self, client, as_caller, mocker
+        self, client, as_current_user, mocker
     ):
         from transcription_svc.database.engine import get_session
 
@@ -2190,7 +2219,7 @@ class TestRollbackToHistoryEntry:
         mock_session.commit.assert_called_once()
 
     def test_falls_back_to_flat_rollback_when_history_entry_has_no_previous_phrase(
-        self, client, as_caller, mocker
+        self, client, as_current_user, mocker
     ):
         from transcription_svc.database.engine import get_session
 
@@ -2295,7 +2324,7 @@ class TestListJobs:
 
 
 class TestDeleteJob:
-    def test_returns_204(self, client, as_caller, mocker):
+    def test_returns_204(self, client, as_current_user, mocker):
         from transcription_svc.database.engine import get_session
 
         job = _make_job()
