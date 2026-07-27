@@ -667,8 +667,10 @@ describe("TranscriptSegment", () => {
   });
 
   describe("accept as-is", () => {
-    // A low-confidence segment (< 85%) that hasn't been edited — the only
-    // state in which the accept control is offered.
+    // An uncorrected segment that has a low-confidence WORD ("morning" @ 0.6 in
+    // WORDS, below the 0.65 highlight threshold) — the state in which the
+    // accept-all checkmark is offered. (The segment-level average is
+    // incidental; what matters is that a word is highlighted.)
     const LOW_CONF: SegmentType = {
       ...SEGMENT,
       confidence: 0.5,
@@ -685,10 +687,48 @@ describe("TranscriptSegment", () => {
       expect(screen.getByLabelText(/accept segment as-is/i)).toBeDefined();
     });
 
-    it("does not offer accept for a high-confidence segment", () => {
+    it("offers accept for a high-average segment that still has low-confidence words", () => {
+      // Regression (DIAAT-229): the segment-level average is high (98%) but a
+      // word ("morning" @ 0.6) is highlighted low-confidence. The accept-all
+      // checkmark must still be offered so those highlights can be cleared —
+      // previously it was hidden because the gate used the 85% segment average.
       render(
         <TranscriptSegment
           segment={{ ...SEGMENT, confidence: 0.98, words: WORDS }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.getByLabelText(/accept segment as-is/i)).toBeDefined();
+    });
+
+    it("offers accept when the segment-level confidence is unknown but a word is low-confidence", () => {
+      render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, confidence: undefined, words: WORDS }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.getByLabelText(/accept segment as-is/i)).toBeDefined();
+    });
+
+    it("does not offer accept when no words are highlighted, even at a low segment average", () => {
+      // All words above the 0.65 threshold -> nothing highlighted -> nothing to
+      // accept, regardless of the (low) segment-level average.
+      const cleanWords = WORDS.map((w) => ({ ...w, confidence: 0.9 }));
+      render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, confidence: 0.5, words: cleanWords }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    it("does not offer accept for a phrase-only segment with no per-word data", () => {
+      // No words array -> no per-word highlights -> nothing to accept.
+      render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, confidence: 0.5 }}
           onAccept={vi.fn()}
         />
       );
