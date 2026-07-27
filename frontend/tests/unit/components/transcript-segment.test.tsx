@@ -284,6 +284,62 @@ describe("TranscriptSegment", () => {
     });
   });
 
+  // DIAAT-246: readers can turn the per-word "spoken now" highlight off. When
+  // off, the word under the playhead must NOT get the bg-primary/30 highlight;
+  // when on (the default), it must.
+  describe("sync-highlight toggle", () => {
+    it("highlights the spoken word when syncHighlight is on", async () => {
+      const { container } = render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, words: WORDS }}
+          isActive
+          getCurrentTime={() => 1.2}
+          syncHighlight
+        />
+      );
+      await waitFor(() => {
+        const spokenWord = Array.from(
+          wordsParagraph(container).querySelectorAll("span")
+        ).find((el) => el.textContent?.trim() === "We");
+        expect(spokenWord?.className).toContain("bg-primary/30");
+      });
+    });
+
+    it("does not highlight the spoken word when syncHighlight is off", () => {
+      const { container } = render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, words: WORDS }}
+          isActive
+          getCurrentTime={() => 1.2}
+          syncHighlight={false}
+        />
+      );
+      // With syncHighlight off the rAF polling effect short-circuits and
+      // isSpoken is forced false, so the highlight can never appear — no async
+      // change to wait for, assert synchronously (no arbitrary sleep).
+      const spokenWord = Array.from(
+        wordsParagraph(container).querySelectorAll("span")
+      ).find((el) => el.textContent?.trim() === "We");
+      expect(spokenWord?.className ?? "").not.toContain("bg-primary/30");
+    });
+
+    it("defaults to on when the prop is omitted", async () => {
+      const { container } = render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, words: WORDS }}
+          isActive
+          getCurrentTime={() => 1.2}
+        />
+      );
+      await waitFor(() => {
+        const spokenWord = Array.from(
+          wordsParagraph(container).querySelectorAll("span")
+        ).find((el) => el.textContent?.trim() === "We");
+        expect(spokenWord?.className).toContain("bg-primary/30");
+      });
+    });
+  });
+
   it("falls back to plain text once the segment has been corrected, even with word data present", () => {
     render(
       <TranscriptSegment

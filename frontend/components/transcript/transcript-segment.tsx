@@ -211,6 +211,9 @@ interface WordsProps {
   lowConfidenceThreshold: number;
   isActive?: boolean;
   getCurrentTime?: () => number;
+  // When false, the per-word "spoken now" highlight is suppressed and its
+  // polling loop doesn't run (DIAAT-246). Defaults on.
+  syncHighlight?: boolean;
   // Corrects just the clicked run (a low-confidence phrase, or an existing
   // correction being re-edited). Indices are always in the original lexical
   // `words` array, matching the backend's word-range correction contract.
@@ -242,6 +245,7 @@ function Words({
   lowConfidenceThreshold,
   isActive,
   getCurrentTime,
+  syncHighlight = true,
   onCorrectRange,
   onCorrectSegment,
   highlightRange,
@@ -278,7 +282,9 @@ function Words({
   );
 
   useEffect(() => {
-    if (!isActive || !getCurrentTime) return;
+    // Skip the polling loop entirely while the sync highlight is off — no
+    // point advancing liveTime when nothing consumes it (DIAAT-246).
+    if (!isActive || !getCurrentTime || !syncHighlight) return;
     let frame: number;
     const tick = () => {
       setLiveTime(getCurrentTime());
@@ -286,7 +292,7 @@ function Words({
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [isActive, getCurrentTime]);
+  }, [isActive, getCurrentTime, syncHighlight]);
 
   const startEditingRun = (
     start: number,
@@ -376,6 +382,7 @@ function Words({
 
         if (run.kind === "corrected") {
           const isSpoken =
+            syncHighlight &&
             isActive &&
             liveTime >= tokens[run.start].startTime &&
             liveTime < tokens[run.end].endTime;
@@ -432,6 +439,7 @@ function Words({
           .map((token, offset) => {
             const i = run.start + offset;
             const isSpoken =
+              syncHighlight &&
               isActive &&
               liveTime >= token.startTime &&
               liveTime < token.endTime;
@@ -734,6 +742,9 @@ interface TranscriptSegmentProps {
   // isActive, to highlight the word currently being spoken in sync with
   // playback without waiting on the coarser timeupdate event.
   getCurrentTime?: () => number;
+  // Controls the per-word "spoken now" highlight (DIAAT-246). Defaults on so
+  // existing call sites and tests are unaffected.
+  syncHighlight?: boolean;
   // Confidence cutoff (0-1) below which a word is highlighted for review.
   // Defaults to LOW_CONFIDENCE_THRESHOLD; callers should pass the
   // backend-derived value so highlights match the "needs review" list.
@@ -750,6 +761,7 @@ export function TranscriptSegment({
   onAccept,
   isActive,
   getCurrentTime,
+  syncHighlight = true,
   lowConfidenceThreshold = LOW_CONFIDENCE_THRESHOLD,
 }: TranscriptSegmentProps) {
   const [editing, setEditing] = useState(false);
@@ -948,6 +960,7 @@ export function TranscriptSegment({
             lowConfidenceThreshold={lowConfidenceThreshold}
             isActive={isActive}
             getCurrentTime={getCurrentTime}
+            syncHighlight={syncHighlight}
             onCorrectRange={onCorrectRange}
             onCorrectSegment={onCorrect}
             highlightRange={highlightRange}

@@ -7,6 +7,7 @@ function setup(overrides: Partial<Parameters<typeof AudioPlayerBar>[0]> = {}) {
   const onTogglePlay = vi.fn();
   const onSeek = vi.fn();
   const onSpeedChange = vi.fn();
+  const onToggleSyncHighlight = vi.fn();
   render(
     <AudioPlayerBar
       duration={200}
@@ -15,10 +16,12 @@ function setup(overrides: Partial<Parameters<typeof AudioPlayerBar>[0]> = {}) {
       onTogglePlay={onTogglePlay}
       onSeek={onSeek}
       onSpeedChange={onSpeedChange}
+      syncHighlight={true}
+      onToggleSyncHighlight={onToggleSyncHighlight}
       {...overrides}
     />
   );
-  return { onTogglePlay, onSeek, onSpeedChange };
+  return { onTogglePlay, onSeek, onSpeedChange, onToggleSyncHighlight };
 }
 
 describe("AudioPlayerBar", () => {
@@ -115,5 +118,39 @@ describe("AudioPlayerBar", () => {
     const { onSpeedChange } = setup();
     await user.selectOptions(screen.getByLabelText("Playback speed"), "1.5");
     expect(onSpeedChange).toHaveBeenCalledWith(1.5);
+  });
+
+  describe("sync-highlight toggle (DIAAT-246)", () => {
+    it("renders the toggle", () => {
+      setup();
+      expect(
+        screen.getByRole("button", { name: /highlight words with audio/i })
+      ).toBeDefined();
+    });
+
+    it("reflects syncHighlight=true via aria-pressed", () => {
+      setup({ syncHighlight: true });
+      const toggle = screen.getByRole("button", {
+        name: /highlight words with audio/i,
+      });
+      expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("reflects syncHighlight=false via aria-pressed", () => {
+      setup({ syncHighlight: false });
+      const toggle = screen.getByRole("button", {
+        name: /highlight words with audio/i,
+      });
+      expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("calls onToggleSyncHighlight when clicked", async () => {
+      const user = userEvent.setup();
+      const { onToggleSyncHighlight } = setup();
+      await user.click(
+        screen.getByRole("button", { name: /highlight words with audio/i })
+      );
+      expect(onToggleSyncHighlight).toHaveBeenCalledOnce();
+    });
   });
 });

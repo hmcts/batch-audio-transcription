@@ -1,8 +1,9 @@
 "use client";
 
-import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
+import { Highlighter, Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatTime } from "@/lib/mock-data";
+import { cn } from "@/lib/utils";
 
 interface AudioPlayerBarProps {
   duration: number;
@@ -11,6 +12,11 @@ interface AudioPlayerBarProps {
   onTogglePlay: () => void;
   onSeek: (time: number) => void;
   onSpeedChange: (speed: number) => void;
+  // Whether the per-word "spoken now" highlight tracks playback (DIAAT-246).
+  // Reading a long transcript alongside the audio, that moving highlight can
+  // be tiring or look out of sync, so readers can turn it off here.
+  syncHighlight: boolean;
+  onToggleSyncHighlight: () => void;
 }
 
 export function AudioPlayerBar({
@@ -20,6 +26,8 @@ export function AudioPlayerBar({
   onTogglePlay,
   onSeek,
   onSpeedChange,
+  syncHighlight,
+  onToggleSyncHighlight,
 }: AudioPlayerBarProps) {
   return (
     <div className="sticky top-0 z-10 bg-white border-b border-border px-4 py-3 flex items-center gap-3">
@@ -100,6 +108,26 @@ export function AudioPlayerBar({
       <span className="text-sm font-mono text-muted-foreground w-10 text-right">
         {formatTime(duration)}
       </span>
+
+      {/* Sync-highlight toggle (DIAAT-246) — turns the per-word "spoken now"
+          highlight on/off. aria-pressed reflects the current state so screen
+          readers announce it as a toggle button. */}
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className={cn(
+          "h-8 gap-1 px-2 text-xs font-medium",
+          syncHighlight && "bg-primary/10 text-primary"
+        )}
+        onClick={onToggleSyncHighlight}
+        aria-pressed={syncHighlight}
+        aria-label="Highlight words with audio"
+        title="Highlight words with audio"
+      >
+        <Highlighter className="size-4" />
+        <span>Highlight</span>
+      </Button>
 
       {/* Speed selector */}
       <select

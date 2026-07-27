@@ -16,6 +16,10 @@ import { cn } from "@/lib/utils";
 
 const POLL_INTERVAL_MS = 5000;
 
+// Persists the reader's audio/transcript sync-highlight preference (DIAAT-246)
+// across visits and page reloads.
+const SYNC_HIGHLIGHT_STORAGE_KEY = "batch:syncHighlight";
+
 interface JobDetailViewProps {
   jobId: string;
   initialJob: TranscriptionJob;
@@ -33,6 +37,33 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
   const [audioDuration, setAudioDuration] = useState(0);
   const [audioAvailable, setAudioAvailable] = useState(true);
   const [showModificationHistory, setShowModificationHistory] = useState(false);
+  // The per-word "spoken now" highlight can be tiring to read alongside a long
+  // transcript (and can look out of sync), so readers can toggle it off
+  // (DIAAT-246). Defaults ON. Starts from the default rather than reading
+  // localStorage during render, so SSR and the first client render agree
+  // (no hydration mismatch); the stored choice is applied in an effect below.
+  const [syncHighlight, setSyncHighlight] = useState(true);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(SYNC_HIGHLIGHT_STORAGE_KEY);
+      if (stored !== null) setSyncHighlight(stored === "true");
+    } catch {
+      // Private-mode / storage-disabled browsers: just keep the default.
+    }
+  }, []);
+
+  const toggleSyncHighlight = useCallback(() => {
+    setSyncHighlight((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SYNC_HIGHLIGHT_STORAGE_KEY, String(next));
+      } catch {
+        // Ignore storage failures — the in-memory toggle still works.
+      }
+      return next;
+    });
+  }, []);
 
   // A callback ref (rather than an effect) so listeners attach exactly when
   // the <audio> element mounts — which happens on first render if the job is
@@ -277,6 +308,8 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
             onSpeedChange={(speed) => {
               if (audioElRef.current) audioElRef.current.playbackRate = speed;
             }}
+            syncHighlight={syncHighlight}
+            onToggleSyncHighlight={toggleSyncHighlight}
           />
         ) : (
           <div className="bg-white border-b border-border px-4 py-3 text-sm text-muted-foreground">
@@ -320,6 +353,7 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
                       onAccept={() => acceptSegment(index)}
                       isActive={isActive}
                       getCurrentTime={getCurrentTime}
+                      syncHighlight={syncHighlight}
                       // Backend threshold is a 0-100 percent; the per-word
                       // highlight compares against a 0-1 ratio. Keep them in
                       // sync so highlights match the backend "needs review"
