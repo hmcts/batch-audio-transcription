@@ -1,19 +1,22 @@
-import { NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { getJobAudio } from "@/lib/api-client";
+import { getEasyAuthToken } from "@/lib/auth-utils";
 
 interface RouteContext {
   params: Promise<{ jobId: string }>;
 }
 
-export async function GET(request: Request, { params }: RouteContext) {
+export async function GET(request: NextRequest, { params }: RouteContext) {
   const { jobId } = await params;
+  const accessToken = getEasyAuthToken(request);
   try {
     // Forward the browser's Range header so <audio> seeking works — without
     // this, the browser can request a byte range it never receives and
     // seeking on an unbuffered position silently does nothing.
     const backendResponse = await getJobAudio(
       jobId,
-      request.headers.get("range")
+      request.headers.get("range"),
+      accessToken
     );
     // Stream the backend's body through verbatim, for both success and
     // error statuses (200/206 for real audio, 404/416 otherwise) — building

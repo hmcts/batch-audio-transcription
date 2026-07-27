@@ -1,7 +1,9 @@
-import { NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { uploadAndSubmit } from "@/lib/api-client";
+import { getEasyAuthToken } from "@/lib/auth-utils";
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const accessToken = getEasyAuthToken(request);
   const form = await request.formData();
   const file = form.get("file");
 
@@ -25,7 +27,7 @@ export async function POST(request: Request) {
       : undefined;
 
   try {
-    const job = await uploadAndSubmit(file, filename, audioDurationSeconds);
+    const job = await uploadAndSubmit(file, filename, audioDurationSeconds, accessToken);
     return NextResponse.json({ job }, { status: 201 });
   } catch (err) {
     console.error("Failed to upload and submit job", err);

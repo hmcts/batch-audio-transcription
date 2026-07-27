@@ -362,11 +362,10 @@ function toTranscriptionJob(job: BackendJob): TranscriptionJob {
   };
 }
 
-export async function listJobs(params?: {
-  status?: string;
-  limit?: number;
-  offset?: number;
-}): Promise<{
+export async function listJobs(
+  params?: { status?: string; limit?: number; offset?: number },
+  accessToken?: string | null
+): Promise<{
   jobs: TranscriptionJob[];
   total: number;
   limit: number;
@@ -377,7 +376,11 @@ export async function listJobs(params?: {
   if (params?.limit !== undefined) query.set("limit", String(params.limit));
   if (params?.offset !== undefined) query.set("offset", String(params.offset));
   const qs = query.toString();
-  const response = await backendFetch(`/api/v1/jobs${qs ? `?${qs}` : ""}`);
+  const response = await backendFetch(
+    `/api/v1/jobs${qs ? `?${qs}` : ""}`,
+    undefined,
+    accessToken
+  );
   const body: BackendJobList = await response.json();
   return {
     jobs: body.jobs.map(toTranscriptionJob),
@@ -387,9 +390,12 @@ export async function listJobs(params?: {
   };
 }
 
-export async function getJob(jobId: string): Promise<TranscriptionJob | null> {
+export async function getJob(
+  jobId: string,
+  accessToken?: string | null
+): Promise<TranscriptionJob | null> {
   try {
-    const response = await backendFetch(`/api/v1/jobs/${jobId}`);
+    const response = await backendFetch(`/api/v1/jobs/${jobId}`, undefined, accessToken);
     const body: BackendJob = await response.json();
     return toTranscriptionJob(body);
   } catch (err) {
@@ -412,24 +418,29 @@ export async function getJob(jobId: string): Promise<TranscriptionJob | null> {
 // the browser rather than every non-2xx collapsing into a generic error.
 export async function getJobAudio(
   jobId: string,
-  rangeHeader?: string | null
+  rangeHeader?: string | null,
+  accessToken?: string | null
 ): Promise<Response> {
-  return rawBackendFetch(`/api/v1/jobs/${jobId}/audio`, {
-    headers: rangeHeader ? { Range: rangeHeader } : undefined,
-  });
+  return rawBackendFetch(
+    `/api/v1/jobs/${jobId}/audio`,
+    { headers: rangeHeader ? { Range: rangeHeader } : undefined },
+    accessToken
+  );
 }
 
 export async function uploadAudio(
   file: Blob,
-  filename: string
+  filename: string,
+  accessToken?: string | null
 ): Promise<BackendUpload> {
   const form = new FormData();
   form.append("file", file, filename);
 
-  const response = await backendFetch("/api/v1/uploads", {
-    method: "POST",
-    body: form,
-  });
+  const response = await backendFetch(
+    "/api/v1/uploads",
+    { method: "POST", body: form },
+    accessToken
+  );
   return response.json();
 }
 
@@ -443,7 +454,8 @@ export async function submitJob(
   audioUrl: string,
   metadata: SubmitJobMetadata,
   blobName?: string,
-  audioDurationSeconds?: number
+  audioDurationSeconds?: number,
+  accessToken?: string | null
 ): Promise<TranscriptionJob> {
   const response = await backendFetch("/api/v1/jobs", {
     method: "POST",
@@ -458,7 +470,8 @@ export async function submitJob(
         audio_file_name: metadata.audioFileName,
       },
     }),
-  });
+  },
+  accessToken);
   const body: BackendJob = await response.json();
   return toTranscriptionJob(body);
 }
@@ -466,7 +479,8 @@ export async function submitJob(
 export async function correctSegment(
   jobId: string,
   index: number,
-  correctedText: string
+  correctedText: string,
+  accessToken?: string | null
 ): Promise<TranscriptionJob> {
   const response = await backendFetch(
     `/api/v1/jobs/${jobId}/segments/${index}`,
@@ -474,7 +488,8 @@ export async function correctSegment(
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ corrected_text: correctedText }),
-    }
+    },
+    accessToken
   );
   const body: BackendJob = await response.json();
   return toTranscriptionJob(body);
@@ -485,7 +500,8 @@ export async function correctWordRange(
   index: number,
   startWordIndex: number,
   endWordIndex: number,
-  correctedText: string
+  correctedText: string,
+  accessToken?: string | null
 ): Promise<TranscriptionJob> {
   const response = await backendFetch(
     `/api/v1/jobs/${jobId}/segments/${index}/words`,
@@ -497,7 +513,8 @@ export async function correctWordRange(
         end_word_index: endWordIndex,
         corrected_text: correctedText,
       }),
-    }
+    },
+    accessToken
   );
   const body: BackendJob = await response.json();
   return toTranscriptionJob(body);
@@ -505,11 +522,13 @@ export async function correctWordRange(
 
 export async function rollbackSegment(
   jobId: string,
-  index: number
+  index: number,
+  accessToken?: string | null
 ): Promise<TranscriptionJob> {
   const response = await backendFetch(
     `/api/v1/jobs/${jobId}/segments/${index}/rollback`,
-    { method: "POST" }
+    { method: "POST" },
+    accessToken
   );
   const body: BackendJob = await response.json();
   return toTranscriptionJob(body);
@@ -517,11 +536,13 @@ export async function rollbackSegment(
 
 export async function acceptSegment(
   jobId: string,
-  index: number
+  index: number,
+  accessToken?: string | null
 ): Promise<TranscriptionJob> {
   const response = await backendFetch(
     `/api/v1/jobs/${jobId}/segments/${index}/accept`,
-    { method: "POST" }
+    { method: "POST" },
+    accessToken
   );
   const body: BackendJob = await response.json();
   return toTranscriptionJob(body);
@@ -530,11 +551,13 @@ export async function acceptSegment(
 export async function rollbackToHistoryEntry(
   jobId: string,
   index: number,
-  historyIndex: number
+  historyIndex: number,
+  accessToken?: string | null
 ): Promise<TranscriptionJob> {
   const response = await backendFetch(
     `/api/v1/jobs/${jobId}/segments/${index}/history/${historyIndex}/rollback`,
-    { method: "POST" }
+    { method: "POST" },
+    accessToken
   );
   const body: BackendJob = await response.json();
   return toTranscriptionJob(body);
@@ -543,15 +566,17 @@ export async function rollbackToHistoryEntry(
 export async function uploadBaselineTranscript(
   jobId: string,
   file: Blob,
-  filename: string
+  filename: string,
+  accessToken?: string | null
 ): Promise<TranscriptionJob> {
   const form = new FormData();
   form.append("file", file, filename);
 
-  const response = await backendFetch(`/api/v1/jobs/${jobId}/baseline`, {
-    method: "POST",
-    body: form,
-  });
+  const response = await backendFetch(
+    `/api/v1/jobs/${jobId}/baseline`,
+    { method: "POST", body: form },
+    accessToken
+  );
   const body: BackendJob = await response.json();
   return toTranscriptionJob(body);
 }
@@ -559,9 +584,10 @@ export async function uploadBaselineTranscript(
 export async function uploadAndSubmit(
   file: Blob,
   filename: string,
-  audioDurationSeconds?: number
+  audioDurationSeconds?: number,
+  accessToken?: string | null
 ): Promise<TranscriptionJob> {
-  const { audio_url, blob_name } = await uploadAudio(file, filename);
+  const { audio_url, blob_name } = await uploadAudio(file, filename, accessToken);
   const caseReference = filename.replace(/\.[^.]+$/, "").replace(/_/g, "/");
   return submitJob(
     audio_url,
@@ -571,6 +597,7 @@ export async function uploadAndSubmit(
       audioFileName: filename,
     },
     blob_name,
-    audioDurationSeconds
+    audioDurationSeconds,
+    accessToken
   );
 }

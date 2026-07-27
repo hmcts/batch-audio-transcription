@@ -1,11 +1,12 @@
-import { NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { BackendApiError, rollbackToHistoryEntry } from "@/lib/api-client";
+import { getEasyAuthToken } from "@/lib/auth-utils";
 
 interface RouteContext {
   params: Promise<{ jobId: string; index: string; historyIndex: string }>;
 }
 
-export async function POST(_request: Request, { params }: RouteContext) {
+export async function POST(request: NextRequest, { params }: RouteContext) {
   const { jobId, index, historyIndex } = await params;
   const segmentIndex = Number(index);
   const targetHistoryIndex = Number(historyIndex);
@@ -21,11 +22,13 @@ export async function POST(_request: Request, { params }: RouteContext) {
     );
   }
 
+  const accessToken = getEasyAuthToken(request);
   try {
     const job = await rollbackToHistoryEntry(
       jobId,
       segmentIndex,
-      targetHistoryIndex
+      targetHistoryIndex,
+      accessToken
     );
     return NextResponse.json({ job });
   } catch (err) {
