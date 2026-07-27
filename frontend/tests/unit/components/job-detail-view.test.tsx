@@ -1,5 +1,6 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it } from "vitest";
 import { JobDetailView } from "@/components/transcript/job-detail-view";
 import type { TranscriptionJob } from "@/lib/types";
 
@@ -74,5 +75,50 @@ describe("JobDetailView review panel sidebar", () => {
     });
     render(<JobDetailView jobId={job.id} initialJob={job} />);
     expect(screen.queryByText(/needs review/i)).toBeNull();
+  });
+});
+
+// DIAAT-246: the sync-highlight preference is owned here, defaults on, and is
+// persisted to localStorage so it survives reloads.
+describe("JobDetailView sync-highlight toggle", () => {
+  const STORAGE_KEY = "batch:syncHighlight";
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("defaults the toggle on", () => {
+    const job = makeJob();
+    render(<JobDetailView jobId={job.id} initialJob={job} />);
+    const toggle = screen.getByRole("button", {
+      name: /highlight words with audio/i,
+    });
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("flips state and writes localStorage when toggled off", async () => {
+    const user = userEvent.setup();
+    const job = makeJob();
+    render(<JobDetailView jobId={job.id} initialJob={job} />);
+    const toggle = screen.getByRole("button", {
+      name: /highlight words with audio/i,
+    });
+
+    await user.click(toggle);
+
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    expect(localStorage.getItem(STORAGE_KEY)).toBe("false");
+  });
+
+  it("hydrates the stored 'off' choice on mount", async () => {
+    localStorage.setItem(STORAGE_KEY, "false");
+    const job = makeJob();
+    render(<JobDetailView jobId={job.id} initialJob={job} />);
+    const toggle = screen.getByRole("button", {
+      name: /highlight words with audio/i,
+    });
+    await waitFor(() => {
+      expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    });
   });
 });
