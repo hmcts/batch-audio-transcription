@@ -32,7 +32,6 @@ def upgrade() -> None:
         sa.Column("created_datetime", sa.TIMESTAMP(timezone=True), nullable=False),
         sa.Column("updated_datetime", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("azure_user_id"),
     )
     op.create_index(op.f("ix_user_azure_user_id"), "user", ["azure_user_id"], unique=True)
     op.create_index(op.f("ix_user_email"), "user", ["email"], unique=False)

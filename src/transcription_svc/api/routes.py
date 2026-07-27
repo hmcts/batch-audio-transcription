@@ -48,6 +48,7 @@ from transcription_svc.database.models import (
     TranscriptionJob,
     WordCorrection,
 )
+from transcription_svc.utils.approles import get_valid_roles
 from transcription_svc.utils.auth_models import AuthenticatedUser
 from transcription_svc.utils.dependencies import get_current_user
 
@@ -689,7 +690,7 @@ async def list_jobs(
     # pre-migration jobs are accessible to any user by ID via _check_job_access,
     # but are intentionally excluded from the per-user listing to avoid surfacing
     # unrelated system-created jobs to every human user.
-    is_admin = "SystemAdministrator" in current_user.app_roles
+    is_admin = get_valid_roles()["SystemAdministrator"] in current_user.app_roles
     filter_user_id = None if is_admin else current_user.id
     jobs, total = list_jobs_paginated(session, filter_user_id, parsed_status, limit, offset)
     return ListJobsResponse(
@@ -794,7 +795,7 @@ def _check_job_access(
     SystemAdministrator — otherwise any user who knows a legacy UUID could
     modify or delete it.
     """
-    is_admin = "SystemAdministrator" in current_user.app_roles
+    is_admin = get_valid_roles()["SystemAdministrator"] in current_user.app_roles
     if job.user_id is None:
         if mutating and not is_admin:
             raise HTTPException(status_code=404, detail="Job not found")
