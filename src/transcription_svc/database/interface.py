@@ -66,37 +66,23 @@ def list_jobs_paginated(
     return list(session.exec(jobs_stmt).all()), total
 
 
-def list_jobs_for_caller(
-    session: Session,
-    caller_id: UUID,
-    status: JobStatus | None = None,
-    limit: int = 20,
-    offset: int = 0,
-) -> tuple[list[TranscriptionJob], int]:
-    conditions = [TranscriptionJob.caller_id == caller_id]
-    if status is not None:
-        conditions.append(TranscriptionJob.status == status)
-
-    total: int = session.execute(
-        select(func.count(TranscriptionJob.id)).where(*conditions)
-    ).scalar_one()
-
-    jobs_stmt = (
-        select(TranscriptionJob)
-        .where(*conditions)
-        .order_by(col(TranscriptionJob.created_datetime).desc())
-        .limit(limit)
-        .offset(offset)
-    )
-    return list(session.exec(jobs_stmt).all()), total
-
-
 def get_job_by_idempotency_key(
     session: Session, key: str, caller_id: UUID
 ) -> TranscriptionJob | None:
     stmt = select(TranscriptionJob).where(
         TranscriptionJob.idempotency_key == key,
         TranscriptionJob.caller_id == caller_id,
+    )
+    return session.exec(stmt).first()
+
+
+def get_job_by_idempotency_key_for_user(
+    session: Session, key: str, user_id: UUID
+) -> TranscriptionJob | None:
+    """Idempotency lookup for JWT-authenticated callers (keyed by user_id)."""
+    stmt = select(TranscriptionJob).where(
+        TranscriptionJob.idempotency_key == key,
+        TranscriptionJob.user_id == user_id,
     )
     return session.exec(stmt).first()
 

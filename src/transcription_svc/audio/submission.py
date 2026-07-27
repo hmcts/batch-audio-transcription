@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 async def submit_and_queue_batch_job(
     session: Session,
     audio_url: str,
-    caller_id: UUID,
+    caller_id: UUID | None = None,
     locale: str = "en-GB",
     enable_diarization: bool = True,
     callback_url: str | None = None,

@@ -29,7 +29,6 @@ from slowapi.util import get_remote_address
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
-from transcription_svc.api.dependencies import get_caller
 from transcription_svc.audio import local_storage
 from transcription_svc.audio.accuracy import DEFAULT_CONFIDENCE_THRESHOLD, compute_accuracy
 from transcription_svc.audio.azure_utils import AsyncAzureBlobManager
@@ -38,12 +37,11 @@ from transcription_svc.config.settings import get_settings
 from transcription_svc.database.engine import get_session
 from transcription_svc.database.interface import (
     get_job_by_id,
-    get_job_by_idempotency_key,
+    get_job_by_idempotency_key_for_user,
     list_jobs_paginated,
     record_correction_dataset_entry,
 )
 from transcription_svc.database.models import (
-    Caller,
     CorrectionEntry,
     DialogueEntry,
     JobStatus,
@@ -318,14 +316,6 @@ class JobResponse(BaseModel):
     needs_review: list[NeedsReviewItemResponse] | None = None
     error_message: str | None = None
     metadata: dict = Field(default_factory=dict)
-    # The caller (API client / clerk identity) that owns this job. Every
-    # correction endpoint enforces job.caller_id == caller.id, so all
-    # modification-history entries on the job were made by this caller — it's
-    # the best available "who made the change" attribution. Note this is
-    # job-level, not per-action: CorrectionEntry does not record a separate
-    # identity per correction, so it cannot distinguish two people editing
-    # under the same caller. In local dev this is always "local-dev".
-    caller_name: str | None = None
     # Run metadata (DIAAT-227): audio length, how long the transcription
     # itself took, and which model/engine produced it. audio_duration is
     # known from submission; the other two only once the job succeeds.
@@ -406,7 +396,7 @@ def _to_dialogue_entries(job: TranscriptionJob) -> list[DialogueEntry] | None:
     ]
 
 
-def _to_response(job: TranscriptionJob, caller_name: str | None = None) -> JobResponse:
+def _to_response(job: TranscriptionJob) -> JobResponse:
     entries = _to_dialogue_entries(job)
     accuracy = None
     needs_review = None
@@ -515,7 +505,6 @@ def _to_response(job: TranscriptionJob, caller_name: str | None = None) -> JobRe
         needs_review=needs_review,
         error_message=job.error_message,
         metadata=job.metadata_,
-        caller_name=caller_name,
         audio_duration_seconds=job.audio_duration_seconds,
         transcription_duration_seconds=job.transcription_duration_seconds,
         model_identifier=job.model_identifier,
@@ -630,13 +619,14 @@ async def submit_job(
     request: Request,
     body: Annotated[SubmitJobRequest, Body()],
     session: Session = Depends(get_session),
-    caller: Caller = Depends(get_caller),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> JobResponse:
     if body.idempotency_key:
-        existing = get_job_by_idempotency_key(session, body.idempotency_key, caller.id)
+        existing = get_job_by_idempotency_key_for_user(
+            session, body.idempotency_key, current_user.id
+        )
         if existing:
-            return _to_response(existing, caller.name)
+            return _to_response(existing)
 
     # blob_name is later trusted by GET /jobs/{id}/audio to read straight from
     # storage — without this check a caller could point it at another user's
@@ -649,7 +639,6 @@ async def submit_job(
         job = await submit_and_queue_batch_job(
             session=session,
             audio_url=body.audio_url,
-            caller_id=caller.id,
             locale=body.locale,
             enable_diarization=body.enable_diarization,
             callback_url=body.callback_url,
@@ -665,14 +654,16 @@ async def submit_job(
         # Roll back the failed transaction and return whatever the winner created.
         session.rollback()
         if body.idempotency_key:
-            existing = get_job_by_idempotency_key(session, body.idempotency_key, caller.id)
+            existing = get_job_by_idempotency_key_for_user(
+                session, body.idempotency_key, current_user.id
+            )
             if existing:
-                return _to_response(existing, caller.name)
+                return _to_response(existing)
         raise HTTPException(
             status_code=409, detail="Concurrent submission conflict; retry"
         ) from None
 
-    return _to_response(job, caller.name)
+    return _to_response(job)
 
 
 @router.get("/jobs", response_model=ListJobsResponse)
@@ -693,7 +684,11 @@ async def list_jobs(
                 status_code=400, detail=f"Invalid status '{status}'. Valid values: {valid}"
             ) from None
 
-    # SystemAdministrators see all jobs; regular users see only their own.
+    # SystemAdministrators see all jobs (including pre-migration jobs with
+    # user_id=NULL). Regular users see only their own JWT-created jobs;
+    # pre-migration jobs are accessible to any user by ID via _check_job_access,
+    # but are intentionally excluded from the per-user listing to avoid surfacing
+    # unrelated system-created jobs to every human user.
     is_admin = "SystemAdministrator" in current_user.app_roles
     filter_user_id = None if is_admin else current_user.id
     jobs, total = list_jobs_paginated(session, filter_user_id, parsed_status, limit, offset)
@@ -782,9 +777,20 @@ async def upload_baseline_transcript(
 
 
 def _check_job_access(job: TranscriptionJob, current_user: AuthenticatedUser) -> None:
-    """Raise 403 if current_user neither owns the job nor is a SystemAdministrator."""
+    """Raise 404 if current_user neither owns the job nor is a SystemAdministrator.
+
+    404 is intentional: returning 403 would reveal that a job with this UUID
+    exists, allowing enumeration. Callers already raised 404 for a missing job,
+    so both cases look identical to the requester.
+
+    Pre-migration jobs (user_id is None) were created by API-key callers before
+    per-user auth existed — they have no user owner to enforce, so any
+    authenticated user may access them.
+    """
+    if job.user_id is None:
+        return
     if job.user_id != current_user.id and "SystemAdministrator" not in current_user.app_roles:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=404, detail="Job not found")
 
 
 def _load_entry_for_correction(

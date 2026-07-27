@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from transcription_svc.api.app import create_app
-from transcription_svc.database.models import Caller, JobStatus, TranscriptionJob
+from transcription_svc.database.models import Caller, JobStatus, TranscriptionJob, User
 
 
 def _make_caller() -> Caller:
@@ -51,6 +51,31 @@ def as_caller(client):
     app.dependency_overrides[get_caller] = lambda: caller
     yield
     app.dependency_overrides.pop(get_caller, None)
+
+
+def _make_user() -> User:
+    from datetime import UTC, datetime
+
+    return User(
+        id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        azure_user_id="test-azure-user",
+        email="test@example.com",
+        role="Normal",
+        created_datetime=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
+@pytest.fixture
+def as_current_user(client):
+    from transcription_svc.utils.auth_models import AuthenticatedUser
+    from transcription_svc.utils.dependencies import get_current_user
+
+    user = _make_user()
+    current_user = AuthenticatedUser(db_user=user, app_roles=["Normal"])
+    app = client.app
+    app.dependency_overrides[get_current_user] = lambda: current_user
+    yield current_user
+    app.dependency_overrides.pop(get_current_user, None)
 
 
 class TestHealth:
@@ -617,17 +642,15 @@ class TestGetJob:
         response = client.get(f"/api/v1/jobs/{job.id}")
         assert response.status_code == 200
 
-    def test_includes_owning_caller_name(self, client, as_caller, mocker):
-        # The modification-history table (DIAAT-230) uses caller_name as the
-        # "who made the change" attribution; every job response must carry it.
+    def test_caller_name_absent_from_response(self, client, as_current_user, mocker):
+        # caller_name was removed in DIAAT-20 when API-key auth was replaced by
+        # JWT. The field no longer exists on JobResponse.
         job = _make_job()
-        job.caller_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
 
         response = client.get(f"/api/v1/jobs/{job.id}")
         assert response.status_code == 200
-        # The as_caller fixture authenticates as "test-caller".
-        assert response.json()["caller_name"] == "test-caller"
+        assert "caller_name" not in response.json()
 
     def test_returns_404_for_unknown_job(self, client, as_caller, mocker):
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=None)
@@ -2213,10 +2236,10 @@ class TestRollbackToHistoryEntry:
 
 
 class TestListJobs:
-    def test_returns_jobs(self, client, as_caller, mocker):
+    def test_returns_jobs(self, client, as_current_user, mocker):
         jobs = [_make_job(JobStatus.SUCCEEDED), _make_job(JobStatus.PENDING)]
         mocker.patch(
-            "transcription_svc.api.routes.list_jobs_for_caller",
+            "transcription_svc.api.routes.list_jobs_paginated",
             return_value=(jobs, 2),
         )
 
@@ -2228,9 +2251,9 @@ class TestListJobs:
         assert body["limit"] == 20
         assert body["offset"] == 0
 
-    def test_filters_by_status(self, client, as_caller, mocker):
+    def test_filters_by_status(self, client, as_current_user, mocker):
         mock = mocker.patch(
-            "transcription_svc.api.routes.list_jobs_for_caller",
+            "transcription_svc.api.routes.list_jobs_paginated",
             return_value=([_make_job(JobStatus.SUCCEEDED)], 1),
         )
 
@@ -2238,25 +2261,25 @@ class TestListJobs:
         assert response.status_code == 200
         from transcription_svc.database.models import JobStatus as JS
 
-        mock.assert_called_once_with(mocker.ANY, mocker.ANY, JS.SUCCEEDED, 20, 0)
+        mock.assert_called_once_with(mocker.ANY, as_current_user.id, JS.SUCCEEDED, 20, 0)
 
-    def test_rejects_invalid_status(self, client, as_caller):
+    def test_rejects_invalid_status(self, client, as_current_user):
         response = client.get("/api/v1/jobs?status=notastate")
         assert response.status_code == 400
 
-    def test_pagination_params_forwarded(self, client, as_caller, mocker):
+    def test_pagination_params_forwarded(self, client, as_current_user, mocker):
         mock = mocker.patch(
-            "transcription_svc.api.routes.list_jobs_for_caller",
+            "transcription_svc.api.routes.list_jobs_paginated",
             return_value=([], 0),
         )
 
         response = client.get("/api/v1/jobs?limit=5&offset=10")
         assert response.status_code == 200
-        mock.assert_called_once_with(mocker.ANY, mocker.ANY, None, 5, 10)
+        mock.assert_called_once_with(mocker.ANY, as_current_user.id, None, 5, 10)
 
-    def test_returns_empty_list_when_no_jobs(self, client, as_caller, mocker):
+    def test_returns_empty_list_when_no_jobs(self, client, as_current_user, mocker):
         mocker.patch(
-            "transcription_svc.api.routes.list_jobs_for_caller",
+            "transcription_svc.api.routes.list_jobs_paginated",
             return_value=([], 0),
         )
 

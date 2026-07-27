@@ -138,11 +138,10 @@ export interface TranscriptionJob {
   segments?: TranscriptSegment[];
   accuracy?: TranscriptAccuracy;
   lowConfidenceSegments?: LowConfidenceSegment[];
-  // The caller (API client / clerk identity) that owns this job. Every
-  // correction is made under this caller, so it's the "who made the change"
-  // attribution for the modification-history table. Job-level, not
-  // per-action: the audit trail records no separate identity per correction.
-  // In local dev this is always "local-dev".
+  // Job-level "who made changes" attribution shown in the modification-history
+  // table. Currently always undefined — the API-key caller concept was removed
+  // when JWT auth was added (DIAAT-20). A future ticket should populate this
+  // from the job owner's Azure AD display name or email.
   caller?: string;
   // Run metadata (DIAAT-227) — surfaced on the dashboard via the file name,
   // on hover/click, without needing to open the transcript. audioDuration is
