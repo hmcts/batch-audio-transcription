@@ -45,7 +45,8 @@ Two mechanisms, same threshold, different granularity:
 
 - **Frontend per-word/token (the path in the report).**
   `frontend/components/transcript/transcript-segment.tsx` — `LOW_CONFIDENCE_THRESHOLD = 0.65`;
-  `groupByConfidence` flags a display token iff `token.confidence < threshold`.
+  `groupByConfidence` flags a display token when `token.confidence < threshold`
+  (unless highlighting is suppressed for the segment, e.g. after an "accept all").
   A display token's `.confidence` is the **MIN** confidence of the lexical words
   proportionally mapped to it (`frontend/lib/word-alignment.ts`). The threshold
   is threaded from the backend (`job.accuracy.confidenceThreshold`, a 0–100
@@ -54,7 +55,8 @@ Two mechanisms, same threshold, different granularity:
   `src/transcription_svc/audio/accuracy.py` — `DEFAULT_CONFIDENCE_THRESHOLD = 0.65`
   (DIAAT-235 lowered it from 0.85 because the list was dominated by
   correctly-recognised short/common words). `needs_review` selects whole entries
-  where `entry.confidence < threshold`. Per-word confidence originates in
+  whose confidence is present and `< threshold`, excluding entries already
+  accepted or corrected. Per-word confidence originates in
   `batch_client.py` from Azure's `words[].confidence`; per-phrase from
   `nBest[0].confidence`.
 
