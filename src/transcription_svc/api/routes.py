@@ -733,7 +733,7 @@ async def upload_baseline_transcript(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user)
+    _check_job_access(job, current_user, mutating=True)
     if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
         raise HTTPException(
             status_code=422, detail="Job has no transcript to compare a baseline against"
@@ -776,7 +776,12 @@ async def upload_baseline_transcript(
     return _to_response(job)
 
 
-def _check_job_access(job: TranscriptionJob, current_user: AuthenticatedUser) -> None:
+def _check_job_access(
+    job: TranscriptionJob,
+    current_user: AuthenticatedUser,
+    *,
+    mutating: bool = False,
+) -> None:
     """Raise 404 if current_user neither owns the job nor is a SystemAdministrator.
 
     404 is intentional: returning 403 would reveal that a job with this UUID
@@ -784,12 +789,17 @@ def _check_job_access(job: TranscriptionJob, current_user: AuthenticatedUser) ->
     so both cases look identical to the requester.
 
     Pre-migration jobs (user_id is None) were created by API-key callers before
-    per-user auth existed — they have no user owner to enforce, so any
-    authenticated user may access them.
+    per-user auth existed. Any authenticated user may read them, but write
+    operations (corrections, baseline upload, delete) are restricted to
+    SystemAdministrator — otherwise any user who knows a legacy UUID could
+    modify or delete it.
     """
+    is_admin = "SystemAdministrator" in current_user.app_roles
     if job.user_id is None:
+        if mutating and not is_admin:
+            raise HTTPException(status_code=404, detail="Job not found")
         return
-    if job.user_id != current_user.id and "SystemAdministrator" not in current_user.app_roles:
+    if job.user_id != current_user.id and not is_admin:
         raise HTTPException(status_code=404, detail="Job not found")
 
 
@@ -799,7 +809,7 @@ def _load_entry_for_correction(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user)
+    _check_job_access(job, current_user, mutating=True)
     if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
         raise HTTPException(status_code=422, detail="Job has no transcript to correct")
     if index < 0 or index >= len(job.dialogue_entries):
@@ -1286,7 +1296,7 @@ async def delete_job(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user)
+    _check_job_access(job, current_user, mutating=True)
     session.delete(job)
     session.commit()
     return Response(status_code=204)

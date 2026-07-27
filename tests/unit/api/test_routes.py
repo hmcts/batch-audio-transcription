@@ -9,13 +9,19 @@ from fastapi.testclient import TestClient
 from transcription_svc.api.app import create_app
 from transcription_svc.database.models import JobStatus, TranscriptionJob, User
 
+_TEST_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
-def _make_job(status: JobStatus = JobStatus.PENDING) -> TranscriptionJob:
+
+def _make_job(
+    status: JobStatus = JobStatus.PENDING,
+    user_id: uuid.UUID | None = _TEST_USER_ID,
+) -> TranscriptionJob:
     from datetime import UTC, datetime
 
     job = TranscriptionJob(
         id=uuid.uuid4(),
         caller_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        user_id=user_id,
         audio_url="https://storage.example.com/audio.wav?sig=token",
         locale="en-GB",
         status=status,
@@ -51,6 +57,19 @@ def as_current_user(client):
 
     user = _make_user()
     current_user = AuthenticatedUser(db_user=user, app_roles=["Normal"])
+    app = client.app
+    app.dependency_overrides[get_current_user] = lambda: current_user
+    yield current_user
+    app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.fixture
+def as_admin_user(client):
+    from transcription_svc.utils.auth_models import AuthenticatedUser
+    from transcription_svc.utils.dependencies import get_current_user
+
+    user = _make_user()
+    current_user = AuthenticatedUser(db_user=user, app_roles=["SystemAdministrator"])
     app = client.app
     app.dependency_overrides[get_current_user] = lambda: current_user
     yield current_user
@@ -661,6 +680,15 @@ class TestGetJob:
         response = client.get(f"/api/v1/jobs/{job.id}")
         assert response.status_code == 404
 
+    def test_legacy_job_readable_by_any_authenticated_user(self, client, as_current_user, mocker):
+        # Pre-migration jobs (user_id=None) are readable by any authenticated
+        # user — only mutation endpoints are restricted to SystemAdministrator.
+        job = _make_job(user_id=None)
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        assert response.status_code == 200
+
     def test_includes_accuracy_and_needs_review_for_succeeded_job(
         self, client, as_current_user, mocker
     ):
@@ -865,6 +893,38 @@ class TestUploadBaselineTranscript:
             files={"file": ("baseline.txt", b"hello world", "text/plain")},
         )
         assert response.status_code == 404
+
+    def test_legacy_job_returns_404_for_normal_user(self, client, as_current_user, mocker):
+        # Pre-migration jobs (user_id=None) must not be world-writable.
+        # A Normal user who knows the UUID should get 404, not a mutation.
+        job = _make_job(status=JobStatus.SUCCEEDED, user_id=None)
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.post(
+            f"/api/v1/jobs/{job.id}/baseline",
+            files={"file": ("baseline.txt", b"hello world", "text/plain")},
+        )
+        assert response.status_code == 404
+
+    def test_legacy_job_accessible_to_system_administrator(self, client, as_admin_user, mocker):
+        # SystemAdministrators may mutate legacy (user_id=None) jobs.
+        from transcription_svc.database.engine import get_session
+
+        self._patch_session(client, mocker)
+        job = _make_job(status=JobStatus.SUCCEEDED, user_id=None)
+        job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        try:
+            response = client.post(
+                f"/api/v1/jobs/{job.id}/baseline",
+                files={"file": ("baseline.txt", b"hello world", "text/plain")},
+            )
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 200
 
     def test_returns_422_when_job_not_succeeded(self, client, as_current_user, mocker):
         job = _make_job(status=JobStatus.SUBMITTED)
@@ -2318,3 +2378,28 @@ class TestDeleteJob:
         assert response.status_code == 204
         mock_session.delete.assert_called_once_with(job)
         mock_session.commit.assert_called_once()
+
+    def test_legacy_job_returns_404_for_normal_user(self, client, as_current_user, mocker):
+        # Pre-migration jobs (user_id=None) must not be deletable by Normal users.
+        job = _make_job(user_id=None)
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.delete(f"/api/v1/jobs/{job.id}")
+        assert response.status_code == 404
+
+    def test_legacy_job_deletable_by_system_administrator(self, client, as_admin_user, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job(user_id=None)
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        mock_session = MagicMock()
+        client.app.dependency_overrides[get_session] = lambda: mock_session
+
+        try:
+            response = client.delete(f"/api/v1/jobs/{job.id}")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 204
+        mock_session.delete.assert_called_once_with(job)
