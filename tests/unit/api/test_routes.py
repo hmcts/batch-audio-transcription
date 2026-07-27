@@ -621,6 +621,20 @@ class TestSubmitJob:
         )
         assert response.status_code == 422
 
+    def test_rejects_callback_url_for_jwt_submission(self, client, as_current_user, mocker):
+        # JWT jobs have caller_id=None so the polling service cannot resolve a
+        # webhook secret. Accepting callback_url would silently drop the callback;
+        # reject it at the boundary instead so the caller knows upfront.
+        response = client.post(
+            "/api/v1/jobs",
+            json={
+                "audio_url": "https://storage.example.com/audio.wav?sig=token",
+                "callback_url": "https://example.com/webhook",
+            },
+        )
+        assert response.status_code == 422
+        assert "callback_url" in response.json()["detail"]
+
     @pytest.mark.parametrize("bad_value", ["NaN", "Infinity", "-Infinity"])
     def test_rejects_non_finite_audio_duration_seconds(
         self, client, as_current_user, mocker, bad_value

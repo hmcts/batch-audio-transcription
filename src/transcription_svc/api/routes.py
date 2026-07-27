@@ -622,6 +622,16 @@ async def submit_job(
     session: Session = Depends(get_session),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> JobResponse:
+    if body.callback_url is not None:
+        # Webhook dispatch requires a caller_id to resolve the webhook secret.
+        # JWT-authenticated submissions have no caller_id, so callbacks cannot
+        # be delivered. Reject explicitly rather than silently dropping the
+        # callback after accepting the request.
+        raise HTTPException(
+            status_code=422,
+            detail="callback_url is not supported for user-authenticated submissions",
+        )
+
     if body.idempotency_key:
         existing = get_job_by_idempotency_key_for_user(
             session, body.idempotency_key, current_user.id
