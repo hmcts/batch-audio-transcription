@@ -224,6 +224,12 @@ class CorrectionDatasetEntry(BaseTable, table=True):
     confidence: float | None = Field(default=None)
 
 
+class User(BaseTable, table=True):
+    email: str = Field(index=True)
+    azure_user_id: str = Field(unique=True, index=True)
+    role: str | None = Field(default=None)
+
+
 class Caller(BaseTable, table=True):
     __tablename__ = "caller"
 
@@ -246,6 +252,9 @@ class TranscriptionJob(BaseTable, table=True):
     )
 
     caller_id: UUID = Field(foreign_key="caller.id", index=True)
+    # Nullable FK to the User table — populated for JWT-authenticated submissions.
+    # NULL on rows created before auth migration (API-key-only callers).
+    user_id: UUID | None = Field(default=None, foreign_key="user.id", index=True)
     status: JobStatus = Field(default=JobStatus.PENDING)
 
     # Submission fields

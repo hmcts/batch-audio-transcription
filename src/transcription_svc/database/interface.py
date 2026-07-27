@@ -32,6 +32,40 @@ def get_job_by_id(session: Session, job_id: UUID) -> TranscriptionJob | None:
     return session.get(TranscriptionJob, job_id)
 
 
+def list_jobs_paginated(
+    session: Session,
+    user_id: UUID | None = None,
+    status: JobStatus | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[TranscriptionJob], int]:
+    """List jobs with optional user_id filter.
+
+    Pass user_id=None to return all jobs regardless of owner (admin use).
+    Pass a specific user_id to return only that user's jobs.
+    """
+    conditions = []
+    if user_id is not None:
+        conditions.append(TranscriptionJob.user_id == user_id)
+    if status is not None:
+        conditions.append(TranscriptionJob.status == status)
+
+    count_stmt = select(func.count(TranscriptionJob.id))
+    if conditions:
+        count_stmt = count_stmt.where(*conditions)
+    total: int = session.execute(count_stmt).scalar_one()
+
+    jobs_stmt = (
+        select(TranscriptionJob)
+        .order_by(col(TranscriptionJob.created_datetime).desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    if conditions:
+        jobs_stmt = jobs_stmt.where(*conditions)
+    return list(session.exec(jobs_stmt).all()), total
+
+
 def list_jobs_for_caller(
     session: Session,
     caller_id: UUID,

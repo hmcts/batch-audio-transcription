@@ -142,17 +142,24 @@ function apiKey(): string {
 // turned into a thrown error first. Most callers want backendFetch()
 // instead, which throws on non-2xx for the common "this should always
 // succeed" case.
+//
+// Route handlers that have an Azure Easy Auth token available should pass it
+// as `accessToken` (see frontend/lib/auth-utils.ts → getEasyAuthToken).
+// When present it is used as the Bearer token; when absent the service API
+// key is used as a fallback (local dev / non-Easy-Auth environments).
 async function rawBackendFetch(
   path: string,
-  init?: RequestInit
+  init?: RequestInit,
+  accessToken?: string | null
 ): Promise<Response> {
+  const token = accessToken ?? apiKey();
   return fetch(`${backendUrl()}${path}`, {
     ...init,
     // Authorization is spread last so a caller-supplied header (present or
     // future) can never accidentally override the backend bearer token.
     headers: {
       ...init?.headers,
-      Authorization: `Bearer ${apiKey()}`,
+      Authorization: `Bearer ${token}`,
     },
     cache: "no-store",
   });
@@ -160,9 +167,10 @@ async function rawBackendFetch(
 
 async function backendFetch(
   path: string,
-  init?: RequestInit
+  init?: RequestInit,
+  accessToken?: string | null
 ): Promise<Response> {
-  const response = await rawBackendFetch(path, init);
+  const response = await rawBackendFetch(path, init, accessToken);
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
