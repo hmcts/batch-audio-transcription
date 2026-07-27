@@ -785,15 +785,12 @@ export function TranscriptSegment({
     (segment.wordCorrections?.length ?? 0) > 0;
   const hasHistory = (segment.correctionHistory?.length ?? 0) > 0;
   const accepted = segment.accepted ?? false;
-  // Whether this (uncorrected) segment actually has words highlighted as
-  // low-confidence — i.e. there is something for "accept all" to clear. This
-  // uses the SAME per-word threshold as the highlighting itself
-  // (lowConfidenceThreshold), so the checkmark appears on exactly the segments
-  // that show orange highlights.
+  // Whether the segment has any word highlighted below the SAME per-word
+  // threshold used for the highlighting itself (lowConfidenceThreshold) — i.e.
+  // there are orange highlights for "accept all" to clear. Whether the segment
+  // has been edited is handled separately by !hasCorrections in canAccept.
   const hasLowConfidenceWords =
-    segment.correctedText === undefined &&
-    (segment.words?.some((w) => w.confidence < lowConfidenceThreshold) ??
-      false);
+    segment.words?.some((w) => w.confidence < lowConfidenceThreshold) ?? false;
   // Only offer "accept as-is" when the segment has low-confidence highlights to
   // clear, hasn't been edited, and hasn't already been accepted. Previously
   // this was gated on the segment-level 85% average confidence (isLowConf) —
