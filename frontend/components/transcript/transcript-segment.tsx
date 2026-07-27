@@ -231,6 +231,10 @@ function EditPopover({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
+          // Ignore keyboard shortcuts while a save is in flight — the buttons
+          // are already disabled, and Enter/Escape here would otherwise trigger
+          // a concurrent save or close the editor mid-request.
+          if (saving) return;
           if (e.key === "Escape") {
             e.preventDefault();
             onCancel();
@@ -239,6 +243,7 @@ function EditPopover({
             onAccept();
           }
         }}
+        readOnly={saving}
         className="w-full rounded border border-primary px-1 py-0.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
         // biome-ignore lint/a11y/noAutofocus: opening the editor is an explicit user action
         autoFocus
@@ -363,6 +368,9 @@ function Words({
   ) => {
     setRangeDraft(initialText);
     setEditingRun({ start, end, wordStart, wordEnd });
+    // Opening the editor closes any resolve menu (this run's or another run's),
+    // so a stale menu can't linger while editing or reappear once editing ends.
+    setMenuRun(null);
   };
 
   const saveRun = async () => {
@@ -556,6 +564,10 @@ function Words({
         const menuId = `${popupBaseId}-resolve-${run.start}`;
 
         const openResolve = () => {
+          // While this run's editor is open, clicking the word must not toggle
+          // the resolve menu underneath it — otherwise menuRun could be left
+          // set and the menu would pop as soon as editing closes.
+          if (isEditing) return;
           // Don't start a second correction while one is mid-flight — the
           // menu buttons disable themselves, but the underlying words stay
           // clickable, and concurrent PATCHes aren't supported.
