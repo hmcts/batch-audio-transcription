@@ -197,6 +197,71 @@ function buildRuns(
   return runs;
 }
 
+interface EditPopoverProps {
+  value: string;
+  onChange: (value: string) => void;
+  onAccept: () => void;
+  onCancel: () => void;
+  saving: boolean;
+}
+
+// The inline editor for a low-confidence phrase or an existing correction,
+// rendered as a small popover anchored at the edited run (DIAAT-234 review).
+// It mirrors the resolve menu's container so it visually sits at the word,
+// leaving the rest of the transcript text in place instead of replacing the
+// whole paragraph. Rendered as phrasing content (spans) since it lives inside
+// the transcript <p>.
+function EditPopover({
+  value,
+  onChange,
+  onAccept,
+  onCancel,
+  saving,
+}: EditPopoverProps) {
+  return (
+    <span
+      role="dialog"
+      aria-label="Edit text"
+      // Clicks inside the editor must not bubble to the trigger word's own
+      // click handler (which would toggle the resolve menu / re-open editing).
+      onClick={(e) => e.stopPropagation()}
+      className="absolute left-0 top-full z-30 mt-1 flex w-64 flex-col gap-2 whitespace-normal rounded-md border border-border bg-popover p-2 text-left text-xs font-normal normal-case text-popover-foreground shadow-md"
+    >
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          // Ignore keyboard shortcuts while a save is in flight — the buttons
+          // are already disabled, and Enter/Escape here would otherwise trigger
+          // a concurrent save or close the editor mid-request.
+          if (saving) return;
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            onAccept();
+          }
+        }}
+        readOnly={saving}
+        className="w-full rounded border border-primary px-1 py-0.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+        // biome-ignore lint/a11y/noAutofocus: opening the editor is an explicit user action
+        autoFocus
+      />
+      <span className="flex gap-2">
+        <Button size="sm" onClick={onAccept} disabled={saving}>
+          <Check className="size-3.5" />
+          Accept
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+          <X className="size-3.5" />
+          Cancel
+        </Button>
+      </span>
+    </span>
+  );
+}
+
 interface WordsProps {
   text: string;
   words: WordList;
@@ -303,6 +368,9 @@ function Words({
   ) => {
     setRangeDraft(initialText);
     setEditingRun({ start, end, wordStart, wordEnd });
+    // Opening the editor closes any resolve menu (this run's or another run's),
+    // so a stale menu can't linger while editing or reappear once editing ends.
+    setMenuRun(null);
   };
 
   const saveRun = async () => {
@@ -321,46 +389,15 @@ function Words({
     }
   };
 
-  if (editingRun) {
-    const before = tokens
-      .slice(0, editingRun.start)
-      .map((t) => t.text)
-      .join(" ");
-    const after = tokens
-      .slice(editingRun.end + 1)
-      .map((t) => t.text)
-      .join(" ");
-    return (
-      <div className="space-y-2">
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          {before && <>{before} </>}
-          <input
-            value={rangeDraft}
-            onChange={(e) => setRangeDraft(e.target.value)}
-            className="inline-block w-auto min-w-32 text-sm text-foreground border border-primary rounded px-1 py-0.5 focus:outline-none focus:ring-2 focus:ring-primary"
-            // biome-ignore lint/a11y/noAutofocus: opening the editor is an explicit user action
-            autoFocus
-          />
-          {after && <> {after}</>}
-        </p>
-        <div className="flex gap-2">
-          <Button size="sm" onClick={saveRun} disabled={savingRange}>
-            <Check className="size-3.5" />
-            Save
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setEditingRun(null)}
-            disabled={savingRange}
-          >
-            <X className="size-3.5" />
-            Cancel
-          </Button>
-        </div>
-      </div>
-    );
-  }
+  // A run is being edited when its display-token range matches editingRun.
+  // The inline editor now renders as an anchored popover at that run (see
+  // EditPopover) rather than replacing the whole paragraph — so in a long
+  // segment the controls sit right at the clicked word instead of scrolling
+  // off-screen (DIAAT-234 stakeholder review).
+  const isEditingRun = (run: Run) =>
+    !!editingRun &&
+    editingRun.start === run.start &&
+    editingRun.end === run.end;
 
   const runs = buildRuns(
     tokens,
@@ -386,7 +423,8 @@ function Words({
             isActive &&
             liveTime >= tokens[run.start].startTime &&
             liveTime < tokens[run.end].endTime;
-          return (
+          const editing = isEditingRun(run);
+          const triggerSpan = (
             <span
               key={`corrected-${run.wordStart}-${run.wordEnd}`}
               onClick={
@@ -432,6 +470,29 @@ function Words({
               {run.text}{" "}
             </span>
           );
+
+          // When this correction is being re-edited, anchor the edit popover to
+          // it via a relative wrapper (like the low-confidence runs below), so
+          // the editor appears right at the word rather than replacing the
+          // paragraph. Otherwise render the plain trigger span as before.
+          if (editing) {
+            return (
+              <span
+                key={`corrected-edit-${run.wordStart}-${run.wordEnd}`}
+                className="relative"
+              >
+                {triggerSpan}
+                <EditPopover
+                  value={rangeDraft}
+                  onChange={setRangeDraft}
+                  onAccept={saveRun}
+                  onCancel={() => setEditingRun(null)}
+                  saving={savingRange}
+                />
+              </span>
+            );
+          }
+          return triggerSpan;
         }
 
         const runTokens = tokens
@@ -490,15 +551,23 @@ function Words({
         // case clicking skips the menu and opens Edit directly, preserving
         // today's one-click-to-edit behaviour.
         const hasAlternatives = diagnosis.alternativeCandidates.length > 0;
-        const isMenuOpen = menuRun === run.start;
+        const isEditing = isEditingRun(run);
+        const isMenuOpen = menuRun === run.start && !isEditing;
         // Hover popup (informational) and the resolve menu coexist, but never
         // both on screen at once — suppress every hover popup while *any*
-        // resolve menu is open, so hovering another run can't overlap it.
-        const isPopupOpen = hoveredRun === run.start && menuRun === null;
+        // resolve menu is open, so hovering another run can't overlap it. Also
+        // suppress it while this run's edit popover is open, so the two don't
+        // stack on the same word.
+        const isPopupOpen =
+          hoveredRun === run.start && menuRun === null && !isEditing;
         const popupId = `${popupBaseId}-lowconf-${run.start}`;
         const menuId = `${popupBaseId}-resolve-${run.start}`;
 
         const openResolve = () => {
+          // While this run's editor is open, clicking the word must not toggle
+          // the resolve menu underneath it — otherwise menuRun could be left
+          // set and the menu would pop as soon as editing closes.
+          if (isEditing) return;
           // Don't start a second correction while one is mid-flight — the
           // menu buttons disable themselves, but the underlying words stay
           // clickable, and concurrent PATCHes aren't supported.
@@ -611,6 +680,15 @@ function Words({
                 onEdit={editFromMenu}
                 onPickCandidate={applyCandidate}
                 onClose={() => setMenuRun(null)}
+              />
+            )}
+            {isEditing && (
+              <EditPopover
+                value={rangeDraft}
+                onChange={setRangeDraft}
+                onAccept={saveRun}
+                onCancel={() => setEditingRun(null)}
+                saving={savingRange}
               />
             )}
           </span>
