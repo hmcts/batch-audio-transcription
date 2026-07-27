@@ -96,7 +96,10 @@ describe("TranscriptPage", () => {
     mockGetJob.mockResolvedValue({
       ...COMPLETED_JOB,
       status: "PROCESSING",
-      progressPercent: 60,
+      // Recently submitted with a known audio duration -> the time-based
+      // progress bar renders (an early, non-overrun percentage).
+      uploadedAt: new Date().toISOString(),
+      audioDurationSeconds: 9360,
       segments: undefined,
     });
     render(
@@ -105,7 +108,7 @@ describe("TranscriptPage", () => {
       })
     );
     expect(screen.getByText(/still in progress/i)).toBeDefined();
-    expect(screen.getByText("60%")).toBeDefined();
+    expect(screen.getByRole("progressbar")).toBeDefined();
   });
 
   it("shows the error message and does not 404 for a failed job", async () => {

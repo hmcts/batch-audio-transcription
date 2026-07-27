@@ -5,14 +5,16 @@
 // component that renders a job's progress (the job detail page, the jobs
 // table, etc).
 
-// Azure Speech Batch transcription (with diarization) has been observed to
-// typically complete well within the audio's own real-time duration. This
-// ratio is only a starting estimate for "estimated remaining time" — once a
-// job has run long enough to have a non-zero stage-based progress reading,
-// the observed elapsed-vs-progress throughput is blended in alongside it (see
-// estimateRemainingSeconds), so the estimate isn't solely a fixed multiple of
-// audio duration.
-const ASSUMED_PROCESSING_RATIO = 0.5;
+import type { JobStatus } from "./types";
+
+// Azure Speech Batch transcription processes audio at roughly 5x real time.
+// Microsoft's "Roughly estimate the latency" guidance defines a normalized
+// latency as ProcessDuration − (AudioLength / 5); the factor 5 is that ~5x
+// rate. So a job's expected processing time is the audio duration divided by
+// this factor. Both the progress bar and the countdown are driven from this
+// single estimate, so they can never disagree (DIAAT-244).
+// https://learn.microsoft.com/en-us/azure/ai-services/speech-service/batch-transcription#roughly-estimate-the-latency
+const AZURE_REALTIME_FACTOR = 5;
 
 /** Seconds elapsed between `submittedAt` (an ISO 8601 timestamp) and `now`. */
 export function computeElapsedSeconds(submittedAt: string, now: Date): number {
@@ -41,54 +43,84 @@ export function formatDuration(totalSeconds: number): string {
   return `${minutes}m`;
 }
 
-export interface EstimateRemainingInput {
+/**
+ * The expected total processing time for a job, in seconds, from Azure's ~5x
+ * real-time rate — the audio duration divided by AZURE_REALTIME_FACTOR.
+ * Returns undefined when the audio duration isn't known (or is non-positive),
+ * in which case there's no meaningful time-based estimate to show.
+ */
+export function estimatedProcessingSeconds(
+  audioDurationSeconds?: number
+): number | undefined {
+  if (audioDurationSeconds == null || audioDurationSeconds <= 0)
+    return undefined;
+  return audioDurationSeconds / AZURE_REALTIME_FACTOR;
+}
+
+export interface ProcessingProgressInput {
+  status: JobStatus;
   elapsedSeconds: number;
-  // The stage-based progress percentage the backend/frontend currently
-  // reports for the job (0-100).
-  progressPercent?: number;
   audioDurationSeconds?: number;
 }
 
+export interface ProcessingProgress {
+  // 0-100 for the bar; undefined when there's no meaningful bar to show
+  // (processing with an unknown audio duration). 100 only when COMPLETED.
+  barPercent: number | undefined;
+  // Remaining seconds while processing with a known duration; undefined when
+  // the duration is unknown, the job is terminal, or elapsed has overrun the
+  // estimate.
+  remainingSeconds: number | undefined;
+  // Still processing but elapsed has passed the estimate (e.g. Azure queue
+  // wait) — the UI shows "taking longer than usual" rather than a negative or
+  // looping countdown.
+  overrun: boolean;
+}
+
 /**
- * Estimates the remaining processing time in seconds, or undefined if there
- * isn't enough information yet. Combines two independent signals when both
- * are available, per DIAAT-226's acceptance criteria ("based on audio
- * duration and/or observed throughput"):
- *
- * - A duration-based estimate: audio duration scaled by
- *   ASSUMED_PROCESSING_RATIO, minus time already elapsed.
- * - A throughput-based estimate: projects the total processing time from
- *   how long it's taken to reach the current progress percentage, then
- *   returns the remaining portion of that projection.
- *
- * As elapsed time grows (each poll/tick), both components shrink, so the
- * returned estimate naturally updates as polling refreshes the job status.
+ * The single, unified progress model driving BOTH the bar and the countdown
+ * (DIAAT-244). Grounded in Azure's ~5x processing rate (see
+ * estimatedProcessingSeconds), so the bar percentage and the remaining time
+ * are always two views of the same estimate and can never disagree.
  */
-export function estimateRemainingSeconds({
+export function computeProcessingProgress({
+  status,
   elapsedSeconds,
-  progressPercent,
   audioDurationSeconds,
-}: EstimateRemainingInput): number | undefined {
-  const durationEstimate =
-    audioDurationSeconds != null && audioDurationSeconds > 0
-      ? Math.max(
-          0,
-          audioDurationSeconds * ASSUMED_PROCESSING_RATIO - elapsedSeconds
-        )
-      : undefined;
-
-  const throughputEstimate =
-    progressPercent != null && progressPercent > 0 && progressPercent < 100
-      ? Math.max(
-          0,
-          (elapsedSeconds / progressPercent) * (100 - progressPercent)
-        )
-      : undefined;
-
-  if (durationEstimate !== undefined && throughputEstimate !== undefined) {
-    return (durationEstimate + throughputEstimate) / 2;
+}: ProcessingProgressInput): ProcessingProgress {
+  if (status === "COMPLETED") {
+    return { barPercent: 100, remainingSeconds: undefined, overrun: false };
   }
-  return durationEstimate ?? throughputEstimate;
+  if (status === "FAILED") {
+    // No misleading bar — the UI renders a failed state separately.
+    return {
+      barPercent: undefined,
+      remainingSeconds: undefined,
+      overrun: false,
+    };
+  }
+
+  // PENDING or PROCESSING.
+  const est = estimatedProcessingSeconds(audioDurationSeconds);
+  if (est === undefined) {
+    // Unknown duration -> indeterminate; the UI shows elapsed time only.
+    return {
+      barPercent: undefined,
+      remainingSeconds: undefined,
+      overrun: false,
+    };
+  }
+  if (elapsedSeconds >= est) {
+    // Past the estimate: hold near-complete rather than jumping to 100% or
+    // showing a negative/looping countdown.
+    return { barPercent: 99, remainingSeconds: undefined, overrun: true };
+  }
+  return {
+    // Capped below 100 until the job actually completes.
+    barPercent: Math.min(99, Math.round((elapsedSeconds / est) * 100)),
+    remainingSeconds: Math.max(0, est - elapsedSeconds),
+    overrun: false,
+  };
 }
 
 /** "Transcribing 2h 36m of audio" — undefined if the duration isn't known. */

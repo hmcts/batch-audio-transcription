@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   audioDurationMessage,
   computeElapsedSeconds,
-  estimateRemainingSeconds,
+  computeProcessingProgress,
+  estimatedProcessingSeconds,
   formatDuration,
 } from "@/lib/progress";
 
@@ -51,75 +52,120 @@ describe("computeElapsedSeconds", () => {
   });
 });
 
-describe("estimateRemainingSeconds", () => {
-  it("returns undefined when neither audio duration nor progress is known", () => {
-    expect(estimateRemainingSeconds({ elapsedSeconds: 60 })).toBeUndefined();
+describe("estimatedProcessingSeconds", () => {
+  it("estimates from Azure's ~5x real-time processing rate (audio / 5)", () => {
+    // 9360s of audio processes ~5x faster than real time -> 1872s.
+    expect(estimatedProcessingSeconds(9360)).toBe(1872);
   });
 
-  it("estimates from audio duration alone", () => {
-    // 9360s audio * 0.5 ratio = 4680s total estimate, minus 60s elapsed.
-    const result = estimateRemainingSeconds({
-      elapsedSeconds: 60,
+  it("returns undefined when the audio duration is unknown", () => {
+    expect(estimatedProcessingSeconds(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined for a non-positive duration", () => {
+    expect(estimatedProcessingSeconds(0)).toBeUndefined();
+    expect(estimatedProcessingSeconds(-5)).toBeUndefined();
+  });
+});
+
+describe("computeProcessingProgress", () => {
+  it("drives bar and countdown from the same model so they always agree (mid-processing)", () => {
+    // est = 9360 / 5 = 1872s. Halfway through (elapsed=936) the bar should
+    // read ~50% AND the remaining should be ~half of the estimate — the two
+    // are derived from one model, so they can never disagree.
+    const result = computeProcessingProgress({
+      status: "PROCESSING",
+      elapsedSeconds: 936,
       audioDurationSeconds: 9360,
     });
-    expect(result).toBe(4620);
+    expect(result.barPercent).toBe(50);
+    expect(result.remainingSeconds).toBe(936);
+    expect(result.overrun).toBe(false);
   });
 
-  it("estimates from observed throughput alone", () => {
-    // 60s elapsed to reach 25% -> projected total 240s -> 180s remaining.
-    const result = estimateRemainingSeconds({
-      elapsedSeconds: 60,
-      progressPercent: 25,
-    });
-    expect(result).toBe(180);
-  });
-
-  it("blends both estimates when available", () => {
-    const durationOnly = estimateRemainingSeconds({
-      elapsedSeconds: 60,
+  it("reports 100% and no countdown only when COMPLETED", () => {
+    const result = computeProcessingProgress({
+      status: "COMPLETED",
+      elapsedSeconds: 5000,
       audioDurationSeconds: 9360,
     });
-    const throughputOnly = estimateRemainingSeconds({
-      elapsedSeconds: 60,
-      progressPercent: 25,
-    });
-    const blended = estimateRemainingSeconds({
-      elapsedSeconds: 60,
-      progressPercent: 25,
-      audioDurationSeconds: 9360,
-    });
-    expect(blended).toBe(((durationOnly ?? 0) + (throughputOnly ?? 0)) / 2);
+    expect(result.barPercent).toBe(100);
+    expect(result.remainingSeconds).toBeUndefined();
+    expect(result.overrun).toBe(false);
   });
 
-  it("never returns a negative value even once elapsed exceeds the estimate", () => {
-    const result = estimateRemainingSeconds({
-      elapsedSeconds: 100_000,
+  it("renders no bar for a FAILED job (a failed state is shown separately)", () => {
+    const result = computeProcessingProgress({
+      status: "FAILED",
+      elapsedSeconds: 500,
+      audioDurationSeconds: 9360,
+    });
+    expect(result.barPercent).toBeUndefined();
+    expect(result.remainingSeconds).toBeUndefined();
+    expect(result.overrun).toBe(false);
+  });
+
+  it("holds near 99% with an overrun flag once elapsed passes the estimate", () => {
+    // est = 60 / 5 = 12s; elapsed of 100s is well past it (e.g. queue wait).
+    const result = computeProcessingProgress({
+      status: "PROCESSING",
+      elapsedSeconds: 100,
       audioDurationSeconds: 60,
     });
-    expect(result).toBe(0);
+    expect(result.barPercent).toBe(99);
+    expect(result.remainingSeconds).toBeUndefined();
+    expect(result.overrun).toBe(true);
   });
 
-  it("ignores progress of 0 or 100 for the throughput estimate", () => {
-    expect(
-      estimateRemainingSeconds({ elapsedSeconds: 60, progressPercent: 0 })
-    ).toBeUndefined();
-    expect(
-      estimateRemainingSeconds({ elapsedSeconds: 60, progressPercent: 100 })
-    ).toBeUndefined();
-  });
-
-  it("updates as elapsed time grows, decreasing the estimate", () => {
-    const early = estimateRemainingSeconds({
-      elapsedSeconds: 60,
-      progressPercent: 25,
-      audioDurationSeconds: 9360,
-    });
-    const later = estimateRemainingSeconds({
+  it("shows an elapsed-only display (no bar/countdown) when the duration is unknown", () => {
+    const result = computeProcessingProgress({
+      status: "PROCESSING",
       elapsedSeconds: 300,
-      progressPercent: 60,
+      audioDurationSeconds: undefined,
+    });
+    expect(result.barPercent).toBeUndefined();
+    expect(result.remainingSeconds).toBeUndefined();
+    expect(result.overrun).toBe(false);
+  });
+
+  it("treats PENDING like PROCESSING for the model", () => {
+    const result = computeProcessingProgress({
+      status: "PENDING",
+      elapsedSeconds: 936,
       audioDurationSeconds: 9360,
     });
-    expect(later).toBeLessThan(early ?? Number.POSITIVE_INFINITY);
+    expect(result.barPercent).toBe(50);
+    expect(result.remainingSeconds).toBe(936);
+    expect(result.overrun).toBe(false);
+  });
+
+  it("caps the bar below 100 while still processing (never 100 until COMPLETED)", () => {
+    // Almost done but not complete: elapsed just below the estimate.
+    const result = computeProcessingProgress({
+      status: "PROCESSING",
+      elapsedSeconds: 1871,
+      audioDurationSeconds: 9360, // est = 1872
+    });
+    expect(result.barPercent).toBeLessThan(100);
+    expect(result.barPercent).toBe(99); // round(1871/1872*100)=100 -> capped to 99
+    expect(result.remainingSeconds).toBe(1);
+  });
+
+  it("decreases the remaining estimate as elapsed time grows", () => {
+    const early = computeProcessingProgress({
+      status: "PROCESSING",
+      elapsedSeconds: 100,
+      audioDurationSeconds: 9360,
+    });
+    const later = computeProcessingProgress({
+      status: "PROCESSING",
+      elapsedSeconds: 500,
+      audioDurationSeconds: 9360,
+    });
+    expect(later.remainingSeconds).toBeLessThan(
+      early.remainingSeconds ?? Number.POSITIVE_INFINITY
+    );
+    expect(later.barPercent).toBeGreaterThan(early.barPercent ?? 0);
   });
 });
 

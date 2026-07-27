@@ -1,8 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-// Verifies the richer processing-job progress display (DIAAT-226): elapsed
-// time, an estimated remaining time, the "Transcribing 2h 36m of audio"
-// message, and that the estimate refreshes as polling updates the job.
+// Verifies the unified processing-job progress display (DIAAT-244): the bar
+// percentage and the estimated remaining time are BOTH derived from one
+// time-based model grounded in Azure's ~5x processing rate, so they always
+// agree, plus the "Transcribing 2h 36m of audio" message and that the readouts
+// advance as the live clock ticks.
 //
 // The dashboard fetches its job list client-side from the app's own
 // /batch/api/jobs route (which normally proxies the real backend). We
@@ -23,8 +25,7 @@ function makeProcessingJob(overrides: Record<string, unknown> = {}) {
     // Submitted 10 minutes before "now" so elapsed time is clearly non-zero.
     uploadedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
     status: "PROCESSING",
-    progressPercent: 60,
-    audioDurationSeconds: 9360, // 2h 36m
+    audioDurationSeconds: 9360, // 2h 36m -> est = 9360/5 = 1872s (31.2m)
     ...overrides,
   };
 }
@@ -33,7 +34,7 @@ test.describe("Processing job progress display", () => {
   test("shows elapsed time, estimated remaining, and audio duration", async ({
     page,
   }) => {
-    let payload = makeProcessingJob();
+    const payload = makeProcessingJob();
     await page.route("**/api/jobs", async (route) => {
       if (route.request().method() !== "GET") {
         await route.continue();
@@ -57,20 +58,22 @@ test.describe("Processing job progress display", () => {
     await expect(row.getByText("Transcribing 2h 36m of audio.")).toBeVisible();
     await expect(row.getByText(/Elapsed: 1[01]m/)).toBeVisible();
     await expect(row.getByText(/Estimated remaining:/)).toBeVisible();
-    // The existing percentage readout still renders.
-    await expect(row.getByText("60%")).toBeVisible();
+    // The bar percentage is now time-derived (DIAAT-244): est = 1872s and
+    // elapsed ≈ 600s, so round(600/1872*100) ≈ 32%. A tolerant range absorbs a
+    // few seconds of runner latency around the 10-minute mark.
+    await expect(row.getByText(/3[0-4]%/)).toBeVisible();
 
-    // Acceptance criterion 4: the estimate updates as polling refreshes the
-    // job. Advance the reported progress; the dashboard re-polls every 5s.
-    const estimateBefore = await row
-      .getByText(/Estimated remaining:/)
-      .textContent();
-    payload = makeProcessingJob({ progressPercent: 90 });
+    // The readouts advance as the shared live clock ticks (progress is no
+    // longer driven by a status placeholder). The bar percentage is the fastest
+    // observable change — around the 10-minute mark each 1% step is ~19s — so
+    // within a modest window it ticks up (e.g. 32% -> 33%), confirming the bar
+    // is live rather than a frozen placeholder.
+    const percentBefore = await row.getByText(/\d+%/).textContent();
 
     await expect
-      .poll(async () => row.getByText(/Estimated remaining:/).textContent(), {
-        timeout: 15_000,
+      .poll(async () => row.getByText(/\d+%/).textContent(), {
+        timeout: 30_000,
       })
-      .not.toBe(estimateBefore);
+      .not.toBe(percentBefore);
   });
 });
