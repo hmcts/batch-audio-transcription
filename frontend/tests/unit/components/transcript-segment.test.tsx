@@ -305,7 +305,7 @@ describe("TranscriptSegment", () => {
       });
     });
 
-    it("does not highlight the spoken word when syncHighlight is off", async () => {
+    it("does not highlight the spoken word when syncHighlight is off", () => {
       const { container } = render(
         <TranscriptSegment
           segment={{ ...SEGMENT, words: WORDS }}
@@ -314,9 +314,9 @@ describe("TranscriptSegment", () => {
           syncHighlight={false}
         />
       );
-      // Give the rAF loop the same opportunity to run as the "on" case, then
-      // assert the highlight never appears.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // With syncHighlight off the rAF polling effect short-circuits and
+      // isSpoken is forced false, so the highlight can never appear — no async
+      // change to wait for, assert synchronously (no arbitrary sleep).
       const spokenWord = Array.from(
         wordsParagraph(container).querySelectorAll("span")
       ).find((el) => el.textContent?.trim() === "We");
