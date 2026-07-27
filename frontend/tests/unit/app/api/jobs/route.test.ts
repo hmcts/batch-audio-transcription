@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+import { describe, expect, it, vi } from "vitest";
 
 const { mockListJobs } = vi.hoisted(() => ({ mockListJobs: vi.fn() }));
 
@@ -39,7 +39,12 @@ describe("GET /api/jobs", () => {
   });
 
   it("forwards the Easy Auth token to listJobs when present", async () => {
-    mockListJobs.mockResolvedValue({ jobs: [], total: 0, limit: 20, offset: 0 });
+    mockListJobs.mockResolvedValue({
+      jobs: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+    });
     const { GET } = await import("@/app/api/jobs/route");
 
     const request = new NextRequest("http://localhost/api/jobs", {
@@ -51,7 +56,12 @@ describe("GET /api/jobs", () => {
   });
 
   it("passes null when the Easy Auth header is absent", async () => {
-    mockListJobs.mockResolvedValue({ jobs: [], total: 0, limit: 20, offset: 0 });
+    mockListJobs.mockResolvedValue({
+      jobs: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+    });
     const { GET } = await import("@/app/api/jobs/route");
 
     await GET(makeRequest());

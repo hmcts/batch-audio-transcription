@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
 import type { NextRequest } from "next/server";
+import { describe, expect, it, vi } from "vitest";
 
 const { mockUploadAndSubmit } = vi.hoisted(() => ({
   mockUploadAndSubmit: vi.fn(),
@@ -22,7 +22,10 @@ function requestWithFile(
     fields.audio_duration_seconds = durationSeconds;
   }
   return {
-    headers: { get: (name: string) => (name === "x-ms-token-aad-access-token" ? (easyAuthToken ?? null) : null) },
+    headers: {
+      get: (name: string) =>
+        name === "x-ms-token-aad-access-token" ? (easyAuthToken ?? null) : null,
+    },
     formData: async () => ({
       get: (key: string) => fields[key] ?? null,
     }),

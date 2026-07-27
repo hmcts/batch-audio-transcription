@@ -395,7 +395,11 @@ export async function getJob(
   accessToken?: string | null
 ): Promise<TranscriptionJob | null> {
   try {
-    const response = await backendFetch(`/api/v1/jobs/${jobId}`, undefined, accessToken);
+    const response = await backendFetch(
+      `/api/v1/jobs/${jobId}`,
+      undefined,
+      accessToken
+    );
     const body: BackendJob = await response.json();
     return toTranscriptionJob(body);
   } catch (err) {
@@ -457,21 +461,24 @@ export async function submitJob(
   audioDurationSeconds?: number,
   accessToken?: string | null
 ): Promise<TranscriptionJob> {
-  const response = await backendFetch("/api/v1/jobs", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      audio_url: audioUrl,
-      blob_name: blobName,
-      audio_duration_seconds: audioDurationSeconds,
-      metadata: {
-        case_reference: metadata.caseReference,
-        tribunal: metadata.tribunal,
-        audio_file_name: metadata.audioFileName,
-      },
-    }),
-  },
-  accessToken);
+  const response = await backendFetch(
+    "/api/v1/jobs",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        audio_url: audioUrl,
+        blob_name: blobName,
+        audio_duration_seconds: audioDurationSeconds,
+        metadata: {
+          case_reference: metadata.caseReference,
+          tribunal: metadata.tribunal,
+          audio_file_name: metadata.audioFileName,
+        },
+      }),
+    },
+    accessToken
+  );
   const body: BackendJob = await response.json();
   return toTranscriptionJob(body);
 }
@@ -587,7 +594,11 @@ export async function uploadAndSubmit(
   audioDurationSeconds?: number,
   accessToken?: string | null
 ): Promise<TranscriptionJob> {
-  const { audio_url, blob_name } = await uploadAudio(file, filename, accessToken);
+  const { audio_url, blob_name } = await uploadAudio(
+    file,
+    filename,
+    accessToken
+  );
   const caseReference = filename.replace(/\.[^.]+$/, "").replace(/_/g, "/");
   return submitJob(
     audio_url,
