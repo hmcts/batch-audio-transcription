@@ -27,7 +27,12 @@ export async function POST(request: NextRequest) {
       : undefined;
 
   try {
-    const job = await uploadAndSubmit(file, filename, audioDurationSeconds, accessToken);
+    const job = await uploadAndSubmit(
+      file,
+      filename,
+      audioDurationSeconds,
+      accessToken
+    );
     return NextResponse.json({ job }, { status: 201 });
   } catch (err) {
     console.error("Failed to upload and submit job", err);

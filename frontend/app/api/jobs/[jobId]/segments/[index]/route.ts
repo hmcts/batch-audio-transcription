@@ -28,7 +28,12 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
         { status: 422 }
       );
     }
-    const job = await correctSegment(jobId, segmentIndex, correctedText, accessToken);
+    const job = await correctSegment(
+      jobId,
+      segmentIndex,
+      correctedText,
+      accessToken
+    );
     return NextResponse.json({ job });
   } catch (err) {
     if (err instanceof BackendApiError) {

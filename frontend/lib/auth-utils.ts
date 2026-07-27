@@ -1,5 +1,5 @@
 import "server-only";
-import { type NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 
 /**
  * Extract the Azure Easy Auth access token from the incoming request headers.

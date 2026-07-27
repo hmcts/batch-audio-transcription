@@ -18,7 +18,12 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     }
     const filename = file instanceof File ? file.name : "baseline.txt";
 
-    const job = await uploadBaselineTranscript(jobId, file, filename, accessToken);
+    const job = await uploadBaselineTranscript(
+      jobId,
+      file,
+      filename,
+      accessToken
+    );
     return NextResponse.json({ job });
   } catch (err) {
     if (err instanceof BackendApiError) {
