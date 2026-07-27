@@ -36,8 +36,13 @@ export interface DisplayToken {
   // display token was proportionally mapped to.
   startWordIndex: number;
   endWordIndex: number;
-  // Most pessimistic (lowest) confidence among the mapped lexical words —
-  // if any of them was uncertain, treat the whole display token as such.
+  // Mean confidence across the mapped lexical words (DIAAT-249). A single-word
+  // token is unchanged (mean == that word's confidence), so genuinely low
+  // single words still flag. For a multi-word token (a compressed reference
+  // like "PA/05217/2025" spanning many lexical words), averaging stops one
+  // weak sub-word among confident ones from dragging the whole token below the
+  // highlight threshold — cutting false-positive "review" highlights — while a
+  // broadly-uncertain multi-word token still averages low and stays flagged.
   confidence: number;
   startTime: number;
   endTime: number;
@@ -159,14 +164,16 @@ export function alignWordsToDisplayTokens(
 
   return tokens.map((text, i) => {
     const [start, end] = ranges[i];
-    // A plain loop rather than Math.min(...span.map(...)) — spreading a
-    // large array as call arguments risks exceeding the JS engine's
+    // A plain loop rather than spreading `span.map(...)` into Math.min/reduce —
+    // spreading a large array as call arguments risks exceeding the JS engine's
     // argument-count limit, and this avoids the intermediate arrays too.
-    let confidence = words[start].confidence;
+    // Confidence is the MEAN across the mapped words (DIAAT-249); timing keeps
+    // the min startTime / max endTime so the token spans the full spoken range.
+    let confidenceSum = words[start].confidence;
     let startTime = words[start].startTime;
     let endTime = words[start].endTime;
     for (let j = start + 1; j <= end; j++) {
-      if (words[j].confidence < confidence) confidence = words[j].confidence;
+      confidenceSum += words[j].confidence;
       if (words[j].startTime < startTime) startTime = words[j].startTime;
       if (words[j].endTime > endTime) endTime = words[j].endTime;
     }
@@ -174,7 +181,7 @@ export function alignWordsToDisplayTokens(
       text,
       startWordIndex: start,
       endWordIndex: end,
-      confidence,
+      confidence: confidenceSum / (end - start + 1),
       startTime,
       endTime,
     };

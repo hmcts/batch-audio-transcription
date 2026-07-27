@@ -66,10 +66,56 @@ describe("alignWordsToDisplayTokens", () => {
     expect(tokens).toHaveLength(1);
     expect(tokens[0].startWordIndex).toBe(0);
     expect(tokens[0].endWordIndex).toBe(3);
-    // Pessimistic (min) confidence across the whole merged span.
-    expect(tokens[0].confidence).toBe(0.4);
+    // Mean confidence across the whole merged span (DIAAT-249): the one weak
+    // sub-word (0.4) no longer drags the token down to the old min of 0.4.
+    // (0.6 + 0.4 + 0.7 + 0.9) / 4 = 0.65.
+    expect(tokens[0].confidence).toBeCloseTo(0.65, 5);
     expect(tokens[0].startTime).toBe(0);
     expect(tokens[0].endTime).toBe(4);
+  });
+
+  it("averages sub-word confidence so one weak sub-word doesn't flag a multi-word token (DIAAT-249)", () => {
+    // A compressed reference token mapping to several lexical words, mostly
+    // confident with a single dip. Under the old MIN aggregation the token's
+    // confidence was 0.5 (below a 0.65 threshold) and it lit up as a false
+    // positive; the mean stays well above the threshold, so it is NOT flagged.
+    const words = [
+      word("pa", 0.95, 0, 1),
+      word("slash", 0.9, 1, 2),
+      word("zero", 0.5, 2, 3), // lone weak sub-word
+      word("four", 0.92, 3, 4),
+      word("seven", 0.88, 4, 5),
+    ];
+    const tokens = alignWordsToDisplayTokens("PA/0475", words);
+    expect(tokens).toHaveLength(1);
+    // mean = (0.95 + 0.9 + 0.5 + 0.92 + 0.88) / 5 = 0.83.
+    expect(tokens[0].confidence).toBeCloseTo(0.83, 5);
+    expect(tokens[0].confidence).toBeGreaterThan(0.65);
+  });
+
+  it("still flags a broadly-uncertain multi-word token (mean below threshold) (DIAAT-249)", () => {
+    // When most sub-words are weak, the mean stays below the threshold, so a
+    // genuinely uncertain reference remains highlighted for review.
+    const words = [
+      word("pa", 0.5, 0, 1),
+      word("slash", 0.55, 1, 2),
+      word("zero", 0.6, 2, 3),
+      word("four", 0.62, 3, 4),
+    ];
+    const tokens = alignWordsToDisplayTokens("PA/04", words);
+    expect(tokens).toHaveLength(1);
+    // mean = (0.5 + 0.55 + 0.6 + 0.62) / 4 = 0.5675.
+    expect(tokens[0].confidence).toBeCloseTo(0.5675, 5);
+    expect(tokens[0].confidence).toBeLessThan(0.65);
+  });
+
+  it("leaves a single low-confidence word unchanged (still below threshold) (DIAAT-249)", () => {
+    // A one-to-one token: mean == that word's confidence, so genuinely low
+    // single words still flag (no recall regression on the clear cases).
+    const words = [word("good", 0.9, 0, 0.2), word("morning", 0.6, 0.2, 0.6)];
+    const tokens = alignWordsToDisplayTokens("Good morning", words);
+    expect(tokens[1].confidence).toBe(0.6);
+    expect(tokens[1].confidence).toBeLessThan(0.65);
   });
 
   it("distributes lexical words across display tokens proportionally, covering all of them", () => {

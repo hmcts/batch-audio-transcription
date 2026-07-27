@@ -243,6 +243,34 @@ describe("TranscriptSegment", () => {
     expect(word).toBeDefined();
   });
 
+  // DIAAT-249: a multi-word DISPLAY token (a compressed reference spanning
+  // several lexical words) should not be flagged just because ONE sub-word
+  // dipped below the threshold. The token's confidence is now the MEAN of its
+  // lexical words, so a lone weak sub-word among confident ones no longer lights
+  // the whole token up as a false-positive review highlight.
+  it("does not highlight a multi-word token when only one sub-word is weak (DIAAT-249)", () => {
+    const segment: SegmentType = {
+      ...SEGMENT,
+      text: "PA/0475",
+      words: [
+        { text: "pa", startTime: 0, endTime: 0.5, confidence: 0.95 },
+        { text: "slash", startTime: 0.5, endTime: 0.8, confidence: 0.9 },
+        { text: "zero", startTime: 0.8, endTime: 1.1, confidence: 0.5 },
+        { text: "four", startTime: 1.1, endTime: 1.4, confidence: 0.92 },
+        { text: "seven", startTime: 1.4, endTime: 1.7, confidence: 0.88 },
+      ],
+    };
+    const { container } = render(<TranscriptSegment segment={segment} />);
+    const token = Array.from(container.querySelectorAll("span")).find(
+      (el) => el.textContent?.trim() === "PA/0475"
+    );
+    // Fail clearly if the token never rendered, rather than passing vacuously
+    // on `undefined?.className`.
+    expect(token).toBeDefined();
+    // mean = (0.95 + 0.9 + 0.5 + 0.92 + 0.88) / 5 = 0.83 > 0.65: not flagged.
+    expect(token?.className).not.toContain("bg-orange-100");
+  });
+
   // DIAAT-235: the per-word highlight cutoff follows the backend-derived
   // threshold (passed as a 0-1 ratio) so highlights stay consistent with the
   // "needs review" list even when ops override the threshold.

@@ -287,6 +287,25 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
       0
     );
 
+    // Whether the transcript actually renders at least one low-confidence
+    // highlight, mirroring TranscriptSegment's own gating: a segment only
+    // highlights words when it renders word-by-word (no whole-segment
+    // correctedText), hasn't been accepted as-is, and has a word below the
+    // threshold. Gate the "review" caption on this — not merely on job.accuracy
+    // — so it never shows when nothing is highlighted (segments without words,
+    // or all highlights cleared/accepted/corrected) (DIAAT-249 review).
+    const highlightThreshold = job.accuracy
+      ? job.accuracy.confidenceThreshold / 100
+      : undefined;
+    const hasLowConfidenceHighlights =
+      highlightThreshold !== undefined &&
+      job.segments.some(
+        (s) =>
+          s.correctedText === undefined &&
+          !s.accepted &&
+          (s.words?.some((w) => w.confidence < highlightThreshold) ?? false)
+      );
+
     return (
       <main className="min-h-screen bg-background">
         <audio
@@ -325,12 +344,24 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
 
           <div className="flex gap-6 items-start">
             <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center justify-between mb-1">
                 <h2 className="text-lg font-semibold">Transcript</h2>
                 <p className="text-sm text-muted-foreground">
                   {job.segments.length} segments
                 </p>
               </div>
+              {/* Reframe the highlighting as "review", not "error" (DIAAT-249):
+                  a highlighted word had lower recognition confidence, not a
+                  confirmed mistake. Only shown when the transcript actually
+                  renders at least one low-confidence highlight, so clean/older
+                  transcripts (or ones where every highlight was cleared) don't
+                  show a caption referring to highlights that aren't there. */}
+              {hasLowConfidenceHighlights && (
+                <p className="text-sm text-muted-foreground mb-3">
+                  Highlighted words had lower recognition confidence — review
+                  and confirm or edit.
+                </p>
+              )}
               <div className="border border-border rounded-lg divide-y divide-border">
                 {job.segments.map((segment, index) => {
                   const isActive =
@@ -358,11 +389,7 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
                       // highlight compares against a 0-1 ratio. Keep them in
                       // sync so highlights match the backend "needs review"
                       // list even under an env override.
-                      lowConfidenceThreshold={
-                        job.accuracy
-                          ? job.accuracy.confidenceThreshold / 100
-                          : undefined
-                      }
+                      lowConfidenceThreshold={highlightThreshold}
                     />
                   );
                 })}
