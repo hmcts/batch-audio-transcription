@@ -697,9 +697,7 @@ async def list_jobs(
 
     # SystemAdministrators see all jobs (including pre-migration jobs with
     # user_id=NULL). Regular users see only their own JWT-created jobs;
-    # pre-migration jobs are accessible to any user by ID via _check_job_access,
-    # but are intentionally excluded from the per-user listing to avoid surfacing
-    # unrelated system-created jobs to every human user.
+    # pre-migration jobs are restricted to SystemAdministrator everywhere.
     is_admin = get_valid_roles()["SystemAdministrator"] in current_user.app_roles
     filter_user_id = None if is_admin else current_user.id
     jobs, total = list_jobs_paginated(session, filter_user_id, parsed_status, limit, offset)
@@ -744,7 +742,7 @@ async def upload_baseline_transcript(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user, mutating=True)
+    _check_job_access(job, current_user)
     if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
         raise HTTPException(
             status_code=422, detail="Job has no transcript to compare a baseline against"
@@ -790,8 +788,6 @@ async def upload_baseline_transcript(
 def _check_job_access(
     job: TranscriptionJob,
     current_user: AuthenticatedUser,
-    *,
-    mutating: bool = False,
 ) -> None:
     """Raise 404 if current_user neither owns the job nor is a SystemAdministrator.
 
@@ -800,14 +796,14 @@ def _check_job_access(
     so both cases look identical to the requester.
 
     Pre-migration jobs (user_id is None) were created by API-key callers before
-    per-user auth existed. Any authenticated user may read them, but write
-    operations (corrections, baseline upload, delete) are restricted to
-    SystemAdministrator — otherwise any user who knows a legacy UUID could
-    modify or delete it.
+    per-user auth existed. Both reads and writes on legacy jobs are restricted to
+    SystemAdministrator — legacy jobs may contain sensitive hearing content, and
+    any authenticated user who can obtain or guess a UUID should not be able to
+    access that content.
     """
     is_admin = get_valid_roles()["SystemAdministrator"] in current_user.app_roles
     if job.user_id is None:
-        if mutating and not is_admin:
+        if not is_admin:
             raise HTTPException(status_code=404, detail="Job not found")
         return
     if job.user_id != current_user.id and not is_admin:
@@ -820,7 +816,7 @@ def _load_entry_for_correction(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user, mutating=True)
+    _check_job_access(job, current_user)
     if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
         raise HTTPException(status_code=422, detail="Job has no transcript to correct")
     if index < 0 or index >= len(job.dialogue_entries):
@@ -1307,7 +1303,7 @@ async def delete_job(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user, mutating=True)
+    _check_job_access(job, current_user)
     session.delete(job)
     session.commit()
     return Response(status_code=204)

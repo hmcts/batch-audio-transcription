@@ -694,9 +694,16 @@ class TestGetJob:
         response = client.get(f"/api/v1/jobs/{job.id}")
         assert response.status_code == 404
 
-    def test_legacy_job_readable_by_any_authenticated_user(self, client, as_current_user, mocker):
-        # Pre-migration jobs (user_id=None) are readable by any authenticated
-        # user — only mutation endpoints are restricted to SystemAdministrator.
+    def test_legacy_job_returns_404_for_normal_user(self, client, as_current_user, mocker):
+        # Pre-migration jobs (user_id=None) may contain sensitive hearing content;
+        # both reads and writes are restricted to SystemAdministrator.
+        job = _make_job(user_id=None)
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        response = client.get(f"/api/v1/jobs/{job.id}")
+        assert response.status_code == 404
+
+    def test_legacy_job_readable_by_system_administrator(self, client, as_admin_user, mocker):
         job = _make_job(user_id=None)
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
 
@@ -909,8 +916,8 @@ class TestUploadBaselineTranscript:
         assert response.status_code == 404
 
     def test_legacy_job_returns_404_for_normal_user(self, client, as_current_user, mocker):
-        # Pre-migration jobs (user_id=None) must not be world-writable.
-        # A Normal user who knows the UUID should get 404, not a mutation.
+        # Pre-migration jobs (user_id=None) are restricted to SystemAdministrator
+        # for both reads and writes.
         job = _make_job(status=JobStatus.SUCCEEDED, user_id=None)
         job.dialogue_entries = [{"speaker": "0", "text": "hi", "start_time": 0, "end_time": 1}]
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
@@ -2394,7 +2401,7 @@ class TestDeleteJob:
         mock_session.commit.assert_called_once()
 
     def test_legacy_job_returns_404_for_normal_user(self, client, as_current_user, mocker):
-        # Pre-migration jobs (user_id=None) must not be deletable by Normal users.
+        # Pre-migration jobs (user_id=None) are restricted to SystemAdministrator.
         job = _make_job(user_id=None)
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
 
