@@ -7,17 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from transcription_svc.api.app import create_app
-from transcription_svc.database.models import Caller, JobStatus, TranscriptionJob, User
-
-
-def _make_caller() -> Caller:
-    return Caller(
-        id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
-        name="test-caller",
-        hashed_key="",
-        webhook_secret="test-secret",
-        is_active=True,
-    )
+from transcription_svc.database.models import JobStatus, TranscriptionJob, User
 
 
 def _make_job(status: JobStatus = JobStatus.PENDING) -> TranscriptionJob:
@@ -40,17 +30,6 @@ def _make_job(status: JobStatus = JobStatus.PENDING) -> TranscriptionJob:
 def client():
     app = create_app()
     return TestClient(app)
-
-
-@pytest.fixture
-def as_caller(client):
-    from transcription_svc.api.dependencies import get_caller
-
-    caller = _make_caller()
-    app = client.app
-    app.dependency_overrides[get_caller] = lambda: caller
-    yield
-    app.dependency_overrides.pop(get_caller, None)
 
 
 def _make_user() -> User:
@@ -654,8 +633,6 @@ class TestSubmitJob:
 class TestGetJob:
     def test_returns_job(self, client, as_current_user, mocker):
         job = _make_job()
-        caller = _make_caller()
-        job.caller_id = caller.id
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
 
         response = client.get(f"/api/v1/jobs/{job.id}")
@@ -2328,8 +2305,6 @@ class TestDeleteJob:
         from transcription_svc.database.engine import get_session
 
         job = _make_job()
-        caller = _make_caller()
-        job.caller_id = caller.id
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
 
         mock_session = MagicMock()
