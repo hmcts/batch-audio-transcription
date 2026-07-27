@@ -55,9 +55,9 @@ class _PendingJob:
     batch_job_url: str
     batch_job_status: BatchJobStatus
     callback_url: str | None
-    caller_id: UUID
+    caller_id: UUID | None
     metadata_: dict
-    webhook_secret: str
+    webhook_secret: str | None = None
     audio_blob_path: str | None = None
     locale: str = "en-GB"
     created_datetime: datetime | None = None
@@ -234,17 +234,30 @@ class BatchPollingService:
             for row in rows:
                 if not row.batch_job_url:
                     continue
-                try:
-                    webhook_secret = self._resolve_webhook_secret(row.caller_id)
-                except Exception as exc:
-                    logger.error(
-                        "Cannot resolve webhook secret for caller %s (job %s skipped): %s",
-                        row.caller_id,
-                        row.id,
-                        exc,
-                    )
-                    sentry_sdk.capture_exception(exc)
-                    continue
+                # Webhook secrets are only needed when the job has a callback URL.
+                # JWT-submitted jobs have caller_id=None and no callback_url, so
+                # skip secret resolution for them — attempting it would always fail
+                # and cause the job to be silently dropped from the polling queue.
+                webhook_secret = None
+                if row.callback_url:
+                    if not row.caller_id:
+                        logger.error(
+                            "Job %s has callback_url but no caller_id; "
+                            "skipping webhook secret resolution",
+                            row.id,
+                        )
+                    else:
+                        try:
+                            webhook_secret = self._resolve_webhook_secret(row.caller_id)
+                        except Exception as exc:
+                            logger.error(
+                                "Cannot resolve webhook secret for caller %s (job %s skipped): %s",
+                                row.caller_id,
+                                row.id,
+                                exc,
+                            )
+                            sentry_sdk.capture_exception(exc)
+                            continue
                 result.append(
                     _PendingJob(
                         id=row.id,
@@ -391,6 +404,12 @@ class BatchPollingService:
     async def _dispatch_success(self, job: _PendingJob, entries) -> None:
         if not job.callback_url:
             return
+        if not job.webhook_secret:
+            logger.warning(
+                "Job %s has callback_url but no webhook_secret; skipping webhook dispatch",
+                job.id,
+            )
+            return
         if not await asyncio.to_thread(self._claim_webhook_dispatch, job.id):
             logger.info(
                 "Webhook already dispatched for job %s by another replica; skipping", job.id
@@ -415,6 +434,12 @@ class BatchPollingService:
 
     async def _dispatch_failure(self, job: _PendingJob, error_msg: str) -> None:
         if not job.callback_url:
+            return
+        if not job.webhook_secret:
+            logger.warning(
+                "Job %s has callback_url but no webhook_secret; skipping webhook dispatch",
+                job.id,
+            )
             return
         if not await asyncio.to_thread(self._claim_webhook_dispatch, job.id):
             logger.info(

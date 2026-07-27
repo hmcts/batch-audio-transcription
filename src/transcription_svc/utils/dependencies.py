@@ -45,7 +45,11 @@ def _resolve_user(azure_user_id: str, email: str, roles: list[str]) -> Authentic
         user = session.exec(statement).first()
 
         if not user:
-            user = User(email=email, azure_user_id=azure_user_id, role=primary_role or "Normal")
+            user = User(
+                email=email,
+                azure_user_id=azure_user_id,
+                role=primary_role or valid_roles.get("Normal"),
+            )
             session.add(user)
             session.commit()
             session.refresh(user)
