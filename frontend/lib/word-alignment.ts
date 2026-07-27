@@ -47,23 +47,39 @@ export function tokenizeDisplayText(text: string): string[] {
   return text.split(/\s+/).filter((t) => t.length > 0);
 }
 
-// A display token expands to roughly this many lexical (spoken) words. Digits,
-// symbols (/, ., -, :) and uppercase letters are each spoken as a separate
-// lexical word (e.g. "PA/05217/2025" -> "p a slash zero five two one seven
-// slash twenty twenty five"); ordinary lowercase words map ~1:1. This is a
-// heuristic proxy — good enough to keep the highlight broadly in sync
-// (DIAAT-242), not an exact aligner.
+// A display token expands to roughly this many lexical (spoken) words:
+//   - each digit is spoken separately ("2025" -> "twenty twenty five", counted
+//     generously as one unit per digit);
+//   - the separators /, ., -, : are spoken ("slash", "dot", "dash", "colon");
+//   - an ACRONYM is spelled out letter-by-letter ("PA" -> "p a"), so its
+//     uppercase letters each count.
+// So "PA/05217/2025" -> "p a slash zero five two one seven slash twenty twenty
+// five". Ordinary words map ~1:1 and get weight 1. Crucially, this must NOT
+// inflate normal prose: a single leading capital (title-case, e.g. "Judge") is
+// part of the base word, not a spelled-out acronym, so uppercase letters only
+// count when there are 2+ of them; and non-spoken punctuation (commas, quotes,
+// parentheses, trailing "." on "Judge.") is ignored. This is a heuristic proxy
+// — good enough to keep the highlight broadly in sync (DIAAT-242), not an exact
+// aligner.
+const SPOKEN_SEPARATORS = new Set(["/", ".", "-", ":"]);
+
 export function estimateLexicalWeight(token: string): number {
   let weight = 0;
+  let uppercaseCount = 0;
   for (const ch of token) {
     if (ch >= "0" && ch <= "9") {
       weight += 1; // each digit ~ one spoken word
+    } else if (SPOKEN_SEPARATORS.has(ch)) {
+      weight += 1; // separators spoken aloud ("slash", "dot", ...)
     } else if (ch >= "A" && ch <= "Z") {
-      weight += 1; // uppercase letters (acronyms) spelled out
-    } else if (!/[a-z\s]/.test(ch)) {
-      weight += 1; // punctuation/symbols spoken ("slash", "dot")
+      uppercaseCount += 1; // tallied; only counts if this is an acronym (2+)
     }
+    // Lowercase letters and other punctuation (commas, quotes, brackets)
+    // contribute nothing — they don't add spoken lexical words.
   }
+  // 2+ uppercase letters => acronym spelled out letter-by-letter; a single
+  // leading capital is just title case and adds no extra spoken words.
+  if (uppercaseCount >= 2) weight += uppercaseCount;
   return Math.max(1, weight);
 }
 

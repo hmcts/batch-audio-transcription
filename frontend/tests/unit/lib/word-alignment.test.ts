@@ -150,6 +150,21 @@ describe("estimateLexicalWeight", () => {
   it("treats a title-case word as one spoken word (leading capital only)", () => {
     expect(estimateLexicalWeight("Before")).toBe(1);
   });
+
+  it("ignores non-spoken punctuation so ordinary prose isn't inflated", () => {
+    // A trailing period / comma is not a spoken lexical word, and a single
+    // leading capital is just title case — so these stay at weight 1 and
+    // don't skew the distribution of a normal sentence (DIAAT-242 review).
+    expect(estimateLexicalWeight("Judge.")).toBe(1);
+    expect(estimateLexicalWeight("morning,")).toBe(1);
+    expect(estimateLexicalWeight("(hearing)")).toBe(1);
+  });
+
+  it("counts only the spoken separators / . - :", () => {
+    expect(estimateLexicalWeight("a/b")).toBe(1); // "/" spoken: 0 + 1 => max(1,1)
+    expect(estimateLexicalWeight("9-5")).toBe(3); // 9, -, 5
+    expect(estimateLexicalWeight("10:30")).toBe(5); // 1,0,:,3,0
+  });
 });
 
 describe("alignWordsToDisplayTokens drift regression (DIAAT-242)", () => {
