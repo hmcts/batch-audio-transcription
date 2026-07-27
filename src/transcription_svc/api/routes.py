@@ -183,7 +183,6 @@ class SubmitJobRequest(BaseModel):
     blob_name: str | None = None
     locale: str = "en-GB"
     enable_diarization: bool = True
-    callback_url: str | None = None
     idempotency_key: str | None = None
     # Total duration of the source audio, in seconds — supplied by the caller
     # (the frontend reads it client-side from the file before upload) since
@@ -222,13 +221,6 @@ class SubmitJobRequest(BaseModel):
             raise ValueError(
                 f"metadata must not exceed {_METADATA_MAX_BYTES} bytes when serialised"
             )
-        return v
-
-    @field_validator("callback_url")
-    @classmethod
-    def validate_callback_url(cls, v: str | None) -> str | None:
-        if v is not None:
-            _reject_private_url(v, "callback_url")
         return v
 
     @field_validator("idempotency_key")
@@ -622,16 +614,6 @@ async def submit_job(
     session: Session = Depends(get_session),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> JobResponse:
-    if body.callback_url is not None:
-        # Webhook dispatch requires a caller_id to resolve the webhook secret.
-        # JWT-authenticated submissions have no caller_id, so callbacks cannot
-        # be delivered. Reject explicitly rather than silently dropping the
-        # callback after accepting the request.
-        raise HTTPException(
-            status_code=422,
-            detail="callback_url is not supported for user-authenticated submissions",
-        )
-
     if body.idempotency_key:
         existing = get_job_by_idempotency_key_for_user(
             session, body.idempotency_key, current_user.id
@@ -652,7 +634,6 @@ async def submit_job(
             audio_url=body.audio_url,
             locale=body.locale,
             enable_diarization=body.enable_diarization,
-            callback_url=body.callback_url,
             idempotency_key=body.idempotency_key,
             metadata=body.metadata,
             audio_duration_seconds=body.audio_duration_seconds,

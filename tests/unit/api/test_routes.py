@@ -621,10 +621,18 @@ class TestSubmitJob:
         )
         assert response.status_code == 422
 
-    def test_rejects_callback_url_for_jwt_submission(self, client, as_current_user, mocker):
-        # JWT jobs have caller_id=None so the polling service cannot resolve a
-        # webhook secret. Accepting callback_url would silently drop the callback;
-        # reject it at the boundary instead so the caller knows upfront.
+    def test_callback_url_not_accepted(self, client, as_current_user, mocker):
+        # callback_url is removed from SubmitJobRequest so it is not part of the
+        # OpenAPI schema. Sending it in the body is harmless (Pydantic drops unknown
+        # fields) but the submission should succeed — the field is simply not wired up.
+        mocker.patch(
+            "transcription_svc.api.routes.submit_and_queue_batch_job",
+            return_value=_make_job(),
+        )
+        mocker.patch(
+            "transcription_svc.api.routes.get_job_by_idempotency_key_for_user",
+            return_value=None,
+        )
         response = client.post(
             "/api/v1/jobs",
             json={
@@ -632,8 +640,7 @@ class TestSubmitJob:
                 "callback_url": "https://example.com/webhook",
             },
         )
-        assert response.status_code == 422
-        assert "callback_url" in response.json()["detail"]
+        assert response.status_code == 201
 
     @pytest.mark.parametrize("bad_value", ["NaN", "Infinity", "-Infinity"])
     def test_rejects_non_finite_audio_duration_seconds(
