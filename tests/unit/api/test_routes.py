@@ -651,7 +651,7 @@ class TestSubmitJob:
 
 class TestGetJob:
     def test_returns_job(self, client, as_current_user, mocker):
-        job = _make_job()
+        job = _make_job(user_id=as_current_user.db_user.id)
         mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
 
         response = client.get(f"/api/v1/jobs/{job.id}")

@@ -25,7 +25,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install runtime dependencies
-        run: uv sync
+        run: uv sync --frozen
 
       - name: Generate CycloneDX SBOM
         run: |
