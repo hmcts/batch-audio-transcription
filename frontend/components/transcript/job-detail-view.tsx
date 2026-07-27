@@ -325,12 +325,22 @@ export function JobDetailView({ jobId, initialJob }: JobDetailViewProps) {
 
           <div className="flex gap-6 items-start">
             <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center justify-between mb-1">
                 <h2 className="text-lg font-semibold">Transcript</h2>
                 <p className="text-sm text-muted-foreground">
                   {job.segments.length} segments
                 </p>
               </div>
+              {/* Reframe the highlighting as "review", not "error" (DIAAT-249):
+                  a highlighted word had lower recognition confidence, not a
+                  confirmed mistake. Only shown for confidence-scored jobs (those
+                  with accuracy data), so clean/older transcripts don't show it. */}
+              {job.accuracy && (
+                <p className="text-sm text-muted-foreground mb-3">
+                  Highlighted words had lower recognition confidence — review
+                  and confirm or edit.
+                </p>
+              )}
               <div className="border border-border rounded-lg divide-y divide-border">
                 {job.segments.map((segment, index) => {
                   const isActive =

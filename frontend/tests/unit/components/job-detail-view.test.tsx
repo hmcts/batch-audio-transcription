@@ -78,6 +78,28 @@ describe("JobDetailView review panel sidebar", () => {
   });
 });
 
+// DIAAT-249: reframe the highlight as "review", not "error" — a muted caption
+// near the Transcript heading, shown only for confidence-scored jobs so clean
+// transcripts aren't cluttered with it.
+describe("JobDetailView highlight caption", () => {
+  it("shows the review caption for confidence-scored jobs", () => {
+    const job = makeJob();
+    render(<JobDetailView jobId={job.id} initialJob={job} />);
+    expect(
+      screen.getByText(/lower recognition confidence — review and confirm/i)
+    ).toBeDefined();
+  });
+
+  it("omits the caption when there is no accuracy data", () => {
+    const job = makeJob({
+      accuracy: undefined,
+      lowConfidenceSegments: undefined,
+    });
+    render(<JobDetailView jobId={job.id} initialJob={job} />);
+    expect(screen.queryByText(/lower recognition confidence/i)).toBeNull();
+  });
+});
+
 // DIAAT-246: the sync-highlight preference is owned here, defaults on, and is
 // persisted to localStorage so it survives reloads.
 describe("JobDetailView sync-highlight toggle", () => {
