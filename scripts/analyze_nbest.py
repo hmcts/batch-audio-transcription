@@ -67,6 +67,7 @@ import json
 import statistics
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
@@ -292,6 +293,15 @@ def load_from_api(
     The list endpoint already embeds each job's dialogue_entries (and their
     alternatives) via _to_response, so no per-job follow-up fetch is needed.
     """
+    # Enforce http/https ourselves: urllib.request would otherwise happily
+    # open file://, ftp:// etc. from a mistyped/hostile --api-base. Suppressing
+    # Ruff S310 is not a substitute for this check.
+    scheme = urllib.parse.urlparse(api_base).scheme.lower()
+    if scheme not in ("http", "https"):
+        raise SystemExit(
+            f"--api-base must be an http(s) URL, got scheme '{scheme or '(none)'}': {api_base}"
+        )
+
     base = api_base.rstrip("/")
     jobs: list[dict] = []
     offset = 0
@@ -300,8 +310,9 @@ def load_from_api(
         if limit <= 0:
             break
         url = f"{base}/jobs?status={status}&limit={limit}&offset={offset}"
-        # noqa S310: the base URL is caller-supplied (an operator on the CLI),
-        # not attacker-controlled, and only ever fetches over http(s).
+        # S310 is suppressed because the scheme is validated to be http(s)
+        # above and the base URL is caller-supplied (a CLI operator), not
+        # attacker-controlled.
         req = urllib.request.Request(  # noqa: S310
             url, headers={"Authorization": f"Bearer {token}"}
         )
@@ -355,6 +366,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--examples", action="store_true", help="Print anonymised example margins.")
     parser.add_argument("--json", action="store_true", help="Emit aggregate stats as JSON.")
     args = parser.parse_args(argv)
+
+    # File/stdin input and --api-base are two distinct sources for the same
+    # data; accepting both is ambiguous (the path would be silently ignored),
+    # so reject it rather than pick one.
+    if args.input and args.api_base:
+        parser.error("provide either an input file/'-' for stdin OR --api-base, not both")
 
     if args.api_base:
         import os

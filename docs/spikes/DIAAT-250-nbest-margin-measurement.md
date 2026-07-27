@@ -18,11 +18,12 @@
   (top candidate `< 0.65`).
 - **Real dev data: NOT obtained.** The dev API is reachable (`/health` → 200) but
   every authenticated endpoint returns **HTTP 401** with the only credential
-  available in the repo. The repo `.env` holds only the **local-dev placeholder**
-  key (`local-dev-key-change-me`); the real dev key lives in Azure Key Vault, not
-  the repo. So the tool has been validated against a fixture, and the exact
-  one-command procedure to run it against dev is documented below for whoever
-  holds the dev key.
+  available locally. `.env` is **git-ignored (not committed)**; the committed
+  `.env.example` only sets the **local-dev placeholder** `LOCAL_API_KEY=local-dev-key-change-me`
+  (`FRONTEND_SERVICE_API_KEY` is left commented out). The real dev key lives in
+  Azure Key Vault, not the repo. So the tool has been validated against a
+  fixture, and the exact one-command procedure to run it against dev is
+  documented below for whoever holds the dev key.
 - **Recommendation (provisional, pending real numbers): conditional GO to
   *prototype* option 2, but do NOT ship it as a standalone flag yet.** The margin
   is only defined for phrases with ≥2 candidates, and DIAAT-232 + the Azure docs
@@ -42,7 +43,7 @@ remains the same blocking gap flagged by DIAAT-232 and DIAAT-245.
 | --- | --- | --- |
 | Dev API `GET /api/v1/health` | **Yes — 200** | Confirms the dev service is up and reachable from here. |
 | Dev API `GET /api/v1/jobs` (authenticated) | **No — 401** | Would give real jobs+alternatives. Repo credential rejected (see below). |
-| Repo `.env` credentials | **Placeholder only** | `FRONTEND_SERVICE_API_KEY` / `LOCAL_API_KEY` both = `local-dev-key-change-me`; `.env.example` confirms this is the local-dev default. The real dev key is in Key Vault. |
+| Repo credentials | **Placeholder only** | `.env` is git-ignored (not committed). The committed `.env.example` sets only `LOCAL_API_KEY=local-dev-key-change-me` (a local-dev default) and leaves `FRONTEND_SERVICE_API_KEY` commented out. The real dev key is in Key Vault. |
 | Recorded real Azure nBest responses in the repo | **No — none exist** | Only synthetic inline dicts in `tests/unit/audio/*`. Same finding as DIAAT-232. |
 | Azure v3.2 documented `nBest` example ("hello world", 5 candidates) | **Yes** | Illustrative fixture for validating the tool; **not measured data**. |
 | The analysis tool itself (`scripts/analyze_nbest.py`) | **Yes — self-tested** | Produces the aggregate stats; correctness verified on the fixture below. |
@@ -60,11 +61,14 @@ transcripts.**
   deployed (non-local) environment the backend validates the token against
   **bcrypt-hashed keys in its Postgres DB**; the plaintext frontend key is
   injected from **Azure Key Vault** at runtime.
-- The only key material in the repo is the local `.env`, whose
-  `FRONTEND_SERVICE_API_KEY` and `LOCAL_API_KEY` are both the placeholder
-  `local-dev-key-change-me` (`.env.example` documents this: *"the frontend's
-  `TRANSCRIPTION_API_KEY` must match [`LOCAL_API_KEY`]"* — a local-only pairing).
-- Both keys, used as bearer tokens against dev `GET /jobs`, return
+- No usable key is committed to the repo: `.env` is git-ignored (`.gitignore`
+  covers `.env` / `.env.*`, excluding only `.env.example`), and the committed
+  `.env.example` sets just the local-dev placeholder
+  `LOCAL_API_KEY=local-dev-key-change-me`, with `FRONTEND_SERVICE_API_KEY` left
+  commented out (`# FRONTEND_SERVICE_API_KEY=change-me`). A developer's local,
+  uncommitted `.env` likewise only carries local-dev placeholder values.
+- The only key material available anywhere locally is that placeholder; used as
+  a bearer token against dev `GET /jobs` it returns
   **HTTP 401 `{"detail":"Invalid API key"}`** — expected, since the dev DB has no
   caller row hashing to the local placeholder.
 - **Conclusion:** capturing real numbers needs the actual dev API key (from Key
