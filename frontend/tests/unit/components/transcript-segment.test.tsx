@@ -430,7 +430,9 @@ describe("TranscriptSegment", () => {
       const input = screen.getByRole("textbox");
       await user.clear(input);
       await user.type(input, "afternoon");
-      await user.click(screen.getByRole("button", { name: /save/i }));
+      // The low-confidence edit box confirm button now reads "Accept"
+      // (DIAAT-234 review), distinct from the whole-segment "Save".
+      await user.click(screen.getByRole("button", { name: "Accept" }));
 
       // "morning" is word index 1 — only that index is corrected, the
       // untouched words never pass through this callback at all.
@@ -454,6 +456,53 @@ describe("TranscriptSegment", () => {
 
       expect(onCorrectRange).not.toHaveBeenCalled();
       expect(screen.queryByRole("textbox")).toBeNull();
+    });
+
+    // Comment 1 (DIAAT-234 review): the low-confidence edit box confirm button
+    // reads "Accept" (not "Save"), so it reads as confirming the recognition of
+    // an actually-correct word as well as fitting a manual change.
+    it("labels the edit box confirm button 'Accept'", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, words: WORDS }}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      const run = Array.from(
+        wordsParagraph(container).querySelectorAll('[role="button"]')
+      ).find((el) => el.textContent?.includes("morning"));
+      await user.click(run as Element);
+
+      expect(screen.getByRole("button", { name: "Accept" })).toBeDefined();
+      // The old label is gone from the low-confidence edit box.
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    });
+
+    // Comment 2 (DIAAT-234 review): the editor is now an in-place popover
+    // anchored at the clicked word, not a full paragraph replacement — so the
+    // rest of the segment's words stay visible while editing.
+    it("keeps the rest of the segment's words visible while the editor is open", async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <TranscriptSegment
+          segment={{ ...SEGMENT, words: WORDS }}
+          onCorrectRange={vi.fn()}
+        />
+      );
+      const run = Array.from(
+        wordsParagraph(container).querySelectorAll('[role="button"]')
+      ).find((el) => el.textContent?.includes("morning"));
+      await user.click(run as Element);
+
+      // The editor is present...
+      expect(screen.getByRole("textbox")).toBeDefined();
+      // ...and other words from the same segment are STILL rendered (the
+      // paragraph was not replaced by a before/input/after form).
+      expect(screen.getByText("Good", { exact: false })).toBeDefined();
+      expect(screen.getByText("record.", { exact: false })).toBeDefined();
+      // The editor sits inside a dialog popover anchored at the word.
+      expect(screen.getByRole("dialog")).toBeDefined();
     });
   });
 
