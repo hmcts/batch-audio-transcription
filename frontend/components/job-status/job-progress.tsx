@@ -4,7 +4,7 @@ import { Progress } from "@/components/ui/progress";
 import {
   audioDurationMessage,
   computeElapsedSeconds,
-  estimateRemainingSeconds,
+  computeProcessingProgress,
   formatDuration,
 } from "@/lib/progress";
 import type { TranscriptionJob } from "@/lib/types";
@@ -27,30 +27,40 @@ export function JobProgress({ job, compact = false }: JobProgressProps) {
 
   const elapsedSeconds =
     now !== null ? computeElapsedSeconds(job.uploadedAt, now) : null;
-  const remainingSeconds =
-    elapsedSeconds !== null
-      ? estimateRemainingSeconds({
-          elapsedSeconds,
-          progressPercent: job.progressPercent,
+
+  // The bar and the countdown are BOTH derived from this single time-based
+  // model (DIAAT-244), so they can never disagree. It needs the live clock, so
+  // it's only computed once the client has taken over (elapsedSeconds !== null)
+  // — except COMPLETED, whose bar is a static 100% (elapsed is ignored by the
+  // model) and can safely render on the server without a clock.
+  const model =
+    elapsedSeconds !== null || job.status === "COMPLETED"
+      ? computeProcessingProgress({
+          status: job.status,
+          elapsedSeconds: elapsedSeconds ?? 0,
           audioDurationSeconds: job.audioDurationSeconds,
         })
-      : undefined;
+      : null;
+
+  const barPercent = model?.barPercent;
+  const remainingSeconds = model?.remainingSeconds;
+  const overrun = model?.overrun ?? false;
   const durationMessage = audioDurationMessage(job.audioDurationSeconds);
 
   return (
     <div className={compact ? "space-y-1" : "space-y-2"}>
-      {job.progressPercent !== undefined && (
+      {barPercent !== undefined && (
         <div
           className={`flex items-center gap-3 ${compact ? "w-fit" : "max-w-sm"}`}
         >
           <Progress
-            value={job.progressPercent}
+            value={barPercent}
             className={compact ? "w-24" : "flex-1"}
           />
           <span
             className={`text-muted-foreground tabular-nums ${compact ? "text-xs" : "text-sm"}`}
           >
-            {job.progressPercent}%
+            {barPercent}%
           </span>
         </div>
       )}
@@ -65,12 +75,13 @@ export function JobProgress({ job, compact = false }: JobProgressProps) {
           {elapsedSeconds !== null && (
             <span>Elapsed: {formatDuration(elapsedSeconds)}</span>
           )}
-          {remainingSeconds !== undefined && (
+          {model && !overrun && remainingSeconds !== undefined && (
             <span>
               {" "}
               · Estimated remaining: {formatDuration(remainingSeconds)}
             </span>
           )}
+          {model && overrun && <span> · Taking longer than usual…</span>}
         </p>
       )}
     </div>

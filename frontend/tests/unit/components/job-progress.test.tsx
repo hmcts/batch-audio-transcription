@@ -12,7 +12,6 @@ function makeJob(overrides: Partial<TranscriptionJob> = {}): TranscriptionJob {
     audioFileName: "hearing.wav",
     uploadedAt: "2026-07-15T09:00:00Z",
     status: "PROCESSING",
-    progressPercent: 60,
     ...overrides,
   };
 }
@@ -39,7 +38,6 @@ describe("JobProgress", () => {
     const html = renderToStaticMarkup(
       <JobProgress
         job={makeJob({
-          progressPercent: undefined,
           audioDurationSeconds: undefined,
         })}
       />
@@ -57,24 +55,52 @@ describe("JobProgress", () => {
     expect(screen.queryByText(/Transcribing/)).toBeNull();
   });
 
-  it("shows an estimated remaining time when audio duration is known", () => {
+  it("derives a time-based bar percentage from the Azure 5x model", () => {
+    // est = 9360 / 5 = 1872s; elapsed = 600s (10m) -> round(600/1872*100) = 32%.
     render(<JobProgress job={makeJob({ audioDurationSeconds: 9360 })} />);
-    expect(screen.getByText(/Estimated remaining:/)).toBeDefined();
+    expect(screen.getByText("32%")).toBeDefined();
+    expect(screen.getByRole("progressbar")).toBeDefined();
   });
 
-  it("omits estimated remaining time when there's no basis to estimate from", () => {
-    render(
-      <JobProgress
-        job={makeJob({ progressPercent: undefined, status: "PENDING" })}
-      />
-    );
+  it("shows an estimated remaining time consistent with the bar", () => {
+    // remaining = 1872 - 600 = 1272s ≈ 21m — the same model as the bar above.
+    render(<JobProgress job={makeJob({ audioDurationSeconds: 9360 })} />);
+    expect(screen.getByText(/Estimated remaining: 21m/)).toBeDefined();
+  });
+
+  it("shows an elapsed-only display (no bar, no estimate) when duration is unknown", () => {
+    render(<JobProgress job={makeJob({ status: "PROCESSING" })} />);
+    expect(screen.getByText(/Elapsed: 10m/)).toBeDefined();
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.queryByText(/Estimated remaining:/)).toBeNull();
+    expect(screen.queryByText(/Taking longer than usual/)).toBeNull();
+  });
+
+  it("holds at 99% and says 'Taking longer than usual' once past the estimate", () => {
+    // est = 60 / 5 = 12s; elapsed = 600s is well past it.
+    render(<JobProgress job={makeJob({ audioDurationSeconds: 60 })} />);
+    expect(screen.getByText("99%")).toBeDefined();
+    expect(screen.getByText(/Taking longer than usual/)).toBeDefined();
     expect(screen.queryByText(/Estimated remaining:/)).toBeNull();
   });
 
-  it("still shows the percentage progress bar alongside the new text", () => {
-    render(<JobProgress job={makeJob()} />);
-    expect(screen.getByText("60%")).toBeDefined();
-    expect(screen.getByRole("progressbar")).toBeDefined();
+  it("shows a full 100% bar and no countdown for a COMPLETED job", () => {
+    render(
+      <JobProgress
+        job={makeJob({ status: "COMPLETED", audioDurationSeconds: 9360 })}
+      />
+    );
+    expect(screen.getByText("100%")).toBeDefined();
+    expect(screen.queryByText(/Estimated remaining:/)).toBeNull();
+  });
+
+  it("renders no bar for a FAILED job (its failed state is shown separately)", () => {
+    render(
+      <JobProgress
+        job={makeJob({ status: "FAILED", audioDurationSeconds: 9360 })}
+      />
+    );
+    expect(screen.queryByRole("progressbar")).toBeNull();
   });
 
   it("updates the elapsed time as polling/ticking advances, without remounting", () => {
@@ -89,24 +115,21 @@ describe("JobProgress", () => {
     expect(screen.getByText(/Elapsed: 15m/)).toBeDefined();
   });
 
-  it("updates the estimated remaining time as the job's reported progress advances", () => {
-    const { rerender } = render(
-      <JobProgress
-        job={makeJob({ progressPercent: 25, audioDurationSeconds: 9360 })}
-      />
-    );
-    const early = screen.getByText(/Estimated remaining:/).textContent;
+  it("advances the bar and shrinks the estimate as the live clock ticks", () => {
+    render(<JobProgress job={makeJob({ audioDurationSeconds: 9360 })} />);
+    const earlyRemaining = screen.getByText(/Estimated remaining:/).textContent;
+    const earlyBar = screen.getByText(/%$/).textContent;
 
     act(() => {
-      vi.setSystemTime(new Date("2026-07-15T09:30:00Z"));
+      vi.setSystemTime(new Date("2026-07-15T09:20:00Z"));
+      vi.advanceTimersByTime(1000);
     });
-    rerender(
-      <JobProgress
-        job={makeJob({ progressPercent: 60, audioDurationSeconds: 9360 })}
-      />
-    );
 
-    const later = screen.getByText(/Estimated remaining:/).textContent;
-    expect(later).not.toBe(early);
+    // est = 1872s; elapsed now 1200s -> round(1200/1872*100) = 64%, remaining 11m.
+    expect(screen.getByText("64%")).toBeDefined();
+    const laterRemaining = screen.getByText(/Estimated remaining:/).textContent;
+    const laterBar = screen.getByText(/%$/).textContent;
+    expect(laterRemaining).not.toBe(earlyRemaining);
+    expect(laterBar).not.toBe(earlyBar);
   });
 });

@@ -36,15 +36,20 @@ describe("JobsTable", () => {
     expect(screen.getAllByText(/view details/i).length).toBe(failedJobs.length);
   });
 
-  it("shows percentage alongside the progress bar for processing jobs", () => {
+  it("shows a time-derived percentage alongside the progress bar for processing jobs", () => {
+    // Just submitted with a known audio duration, so the bar is early (a low,
+    // non-overrun percentage) and derived from the Azure 5x model, not a static
+    // status placeholder.
     const processingJob = {
       ...MOCK_JOBS[0],
       id: "job-processing-test",
       status: "PROCESSING" as const,
-      progressPercent: 60,
+      uploadedAt: new Date().toISOString(),
+      audioDurationSeconds: 9360,
     };
     render(<JobsTable jobs={[processingJob]} />);
-    expect(screen.getByText("60%")).toBeDefined();
+    expect(screen.getByRole("progressbar")).toBeDefined();
+    expect(screen.getByText(/^\d{1,2}%$/)).toBeDefined();
   });
 
   it("gives each row a real, keyboard/screen-reader accessible link", () => {
