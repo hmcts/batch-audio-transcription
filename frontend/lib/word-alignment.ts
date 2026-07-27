@@ -10,13 +10,25 @@ import type { Word } from "./types";
 //
 // This module renders the properly-formatted phrase text, but still needs
 // per-word confidence/timing for highlighting and word-range corrections —
-// so it proportionally maps each whitespace-separated display token to the
-// range of lexical words it most likely corresponds to. This is inherently
-// approximate: a single display token like "PA/04471/2026" can span many
-// lexical words ("PA", "slash", "zero", "four", ...), and the boundary
-// between two display tokens won't always land exactly where the lexical
-// boundary does. It's good enough for highlighting and phrase-level
-// correction; it is not a token-for-token transcript alignment.
+// so it maps each whitespace-separated display token to the range of lexical
+// words it most likely corresponds to. This is inherently approximate: a
+// single display token like "PA/04471/2026" can span many lexical words
+// ("PA", "slash", "zero", "four", ...), and the boundary between two display
+// tokens won't always land exactly where the lexical boundary does.
+//
+// DIAAT-242: the mapping used to divide by UNIFORM TOKEN INDEX, i.e. it gave
+// every display token roughly the same share of lexical words. That badly
+// mislocates compressed tokens: a case reference like "PA/05217/2025" expands
+// to ~12 spoken lexical words but only got its equal share, so the overflow
+// spilled into the FOLLOWING tokens' ranges. Those tokens then inherited the
+// number's EARLIER lexical times, so their highlight lit up early and stayed
+// ahead of speech for the rest of the segment. We now WEIGHT each display
+// token by an estimate of how many lexical words it expands to (digits,
+// symbols and uppercase letters are each spoken separately) and distribute
+// the lexical words proportionally to those weights using the largest-
+// remainder method. It's good enough to keep highlighting broadly in sync
+// and phrase-level correction consistent; it is not a token-for-token
+// transcript alignment.
 
 export interface DisplayToken {
   text: string;
@@ -35,18 +47,72 @@ export function tokenizeDisplayText(text: string): string[] {
   return text.split(/\s+/).filter((t) => t.length > 0);
 }
 
-// Splits `count` lexical words into `bucketCount` contiguous buckets as
-// evenly as possible. Requires bucketCount <= count (callers must collapse
-// any excess buckets first) so every bucket gets at least one distinct
-// word and consecutive buckets never share or overlap a word index.
-function proportionalBucket(
-  index: number,
-  bucketCount: number,
+// A display token expands to roughly this many lexical (spoken) words. Digits,
+// symbols (/, ., -, :) and uppercase letters are each spoken as a separate
+// lexical word (e.g. "PA/05217/2025" -> "p a slash zero five two one seven
+// slash twenty twenty five"); ordinary lowercase words map ~1:1. This is a
+// heuristic proxy — good enough to keep the highlight broadly in sync
+// (DIAAT-242), not an exact aligner.
+export function estimateLexicalWeight(token: string): number {
+  let weight = 0;
+  for (const ch of token) {
+    if (ch >= "0" && ch <= "9") {
+      weight += 1; // each digit ~ one spoken word
+    } else if (ch >= "A" && ch <= "Z") {
+      weight += 1; // uppercase letters (acronyms) spelled out
+    } else if (!/[a-z\s]/.test(ch)) {
+      weight += 1; // punctuation/symbols spoken ("slash", "dot")
+    }
+  }
+  return Math.max(1, weight);
+}
+
+// Distributes `count` lexical words across `tokens` contiguous ranges,
+// proportional to each token's estimated lexical weight, using the largest-
+// remainder method. Requires tokens.length <= count (callers must collapse
+// any excess tokens first) so every token gets at least one distinct word and
+// consecutive ranges never share or overlap a word index. Returns one
+// inclusive [start, end] range per token, in order, covering [0, count - 1]
+// with no gaps or overlaps.
+function distributeByWeight(
+  tokens: string[],
   count: number
-): [number, number] {
-  const start = Math.floor((index * count) / bucketCount);
-  const end = Math.floor(((index + 1) * count) / bucketCount) - 1;
-  return [start, Math.max(start, end)];
+): Array<[number, number]> {
+  const d = tokens.length;
+  const counts = new Array<number>(d).fill(1);
+  const remaining = count - d;
+
+  if (remaining > 0) {
+    const weights = tokens.map(estimateLexicalWeight);
+    const total = weights.reduce((sum, w) => sum + w, 0);
+    const idealExtra = weights.map((w) => (w / total) * remaining);
+    const floorExtra = idealExtra.map((x) => Math.floor(x));
+    for (let i = 0; i < d; i++) {
+      counts[i] += floorExtra[i];
+    }
+    const rem = remaining - floorExtra.reduce((sum, x) => sum + x, 0);
+    // Give the leftover words to the tokens with the largest fractional
+    // remainder; tie-break on lower index first for determinism.
+    const order = Array.from({ length: d }, (_, i) => i).sort((a, b) => {
+      const fracA = idealExtra[a] - floorExtra[a];
+      const fracB = idealExtra[b] - floorExtra[b];
+      if (fracB !== fracA) return fracB - fracA;
+      return a - b;
+    });
+    for (let k = 0; k < rem; k++) {
+      counts[order[k]] += 1;
+    }
+  }
+
+  const ranges: Array<[number, number]> = [];
+  let cursor = 0;
+  for (let i = 0; i < d; i++) {
+    const start = cursor;
+    const end = start + counts[i] - 1;
+    ranges.push([start, end]);
+    cursor = end + 1;
+  }
+  return ranges;
 }
 
 // Maps each display-text token to the proportional range of lexical
@@ -73,8 +139,10 @@ export function alignWordsToDisplayTokens(
           rawTokens.slice(words.length - 1).join(" "),
         ];
 
+  const ranges = distributeByWeight(tokens, words.length);
+
   return tokens.map((text, i) => {
-    const [start, end] = proportionalBucket(i, tokens.length, words.length);
+    const [start, end] = ranges[i];
     // A plain loop rather than Math.min(...span.map(...)) — spreading a
     // large array as call arguments risks exceeding the JS engine's
     // argument-count limit, and this avoids the intermediate arrays too.

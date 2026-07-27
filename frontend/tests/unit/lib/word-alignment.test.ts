@@ -3,6 +3,7 @@ import type { Word } from "@/lib/types";
 import {
   alignWordsToDisplayTokens,
   displayRangeForWordRange,
+  estimateLexicalWeight,
   tokenizeDisplayText,
 } from "@/lib/word-alignment";
 
@@ -119,6 +120,108 @@ describe("alignWordsToDisplayTokens", () => {
     expect(tokens).toHaveLength(2);
     expect(tokens[0].text).toBe("one");
     expect(tokens[1].text).toBe("two three four");
+  });
+});
+
+describe("estimateLexicalWeight", () => {
+  it("maps an ordinary lowercase word to ~1", () => {
+    expect(estimateLexicalWeight("before")).toBe(1);
+    expect(estimateLexicalWeight("reference")).toBe(1);
+  });
+
+  it("counts each uppercase letter of an acronym as a spoken word", () => {
+    expect(estimateLexicalWeight("PA")).toBe(2);
+  });
+
+  it("counts each digit as a spoken word", () => {
+    expect(estimateLexicalWeight("05217")).toBe(5);
+  });
+
+  it("sums digits, symbols and uppercase letters for a case reference", () => {
+    // "PA/05217/2025" -> "p a slash zero five two one seven slash twenty
+    // twenty five": PA=2, /=1, 05217=5, /=1, 2025=4 => 13.
+    expect(estimateLexicalWeight("PA/05217/2025")).toBe(13);
+  });
+
+  it("treats a lowercase word as one spoken word", () => {
+    expect(estimateLexicalWeight("tribunal")).toBe(1);
+  });
+
+  it("treats a title-case word as one spoken word (leading capital only)", () => {
+    expect(estimateLexicalWeight("Before")).toBe(1);
+  });
+});
+
+describe("alignWordsToDisplayTokens drift regression (DIAAT-242)", () => {
+  it("keeps tokens after a case reference near the tail instead of drifting ahead", () => {
+    // Reported scenario: a segment carrying a case reference number. The
+    // display token "PA/05217/2025" expands to many spoken lexical words, so
+    // the tokens that FOLLOW it must map to the tail of the lexical stream —
+    // not to the number's earlier words.
+    //
+    // Old uniform-index bucketing: 5 display tokens over 16 lexical words gave
+    // "before" (index 2) the range words 6-8 (the digits "two one seven"),
+    // lighting its highlight up early and staying ahead for the rest of the
+    // segment. Weighted distribution pushes "before" out to words ~11+.
+    const lexical = [
+      "reference",
+      "p",
+      "a",
+      "slash",
+      "zero",
+      "five",
+      "two",
+      "one",
+      "seven",
+      "slash",
+      "twenty",
+      "twenty",
+      "five",
+      "before",
+      "the",
+      "tribunal",
+    ];
+    const words = lexical.map((text, i) => word(text, 0.9, i, i + 1));
+    const tokens = alignWordsToDisplayTokens(
+      "reference PA/05217/2025 before the tribunal",
+      words
+    );
+
+    const byText = (t: string) => tokens.find((tok) => tok.text === t);
+    const ref = byText("PA/05217/2025");
+    const before = byText("before");
+    if (!(ref && before)) throw new Error("expected tokens not found");
+
+    // (a) the case reference spans a wide lexical range.
+    expect(ref.endWordIndex - ref.startWordIndex).toBeGreaterThanOrEqual(7);
+
+    // (b) "before" maps near the tail, far past the old buggy value of 6.
+    expect(before.startWordIndex).toBeGreaterThanOrEqual(9);
+
+    // (c) token startTimes are non-decreasing across the whole segment.
+    for (let i = 1; i < tokens.length; i++) {
+      expect(tokens[i].startTime).toBeGreaterThanOrEqual(
+        tokens[i - 1].startTime
+      );
+    }
+  });
+});
+
+describe("alignWordsToDisplayTokens weighted invariants", () => {
+  it("keeps ranges contiguous and covering all words for a mixed-weight case", () => {
+    const words = Array.from({ length: 20 }, (_, i) =>
+      word(`w${i}`, 0.9, i, i + 1)
+    );
+    const tokens = alignWordsToDisplayTokens("hi PA/05217/2025 ok", words);
+
+    expect(tokens[0].startWordIndex).toBe(0);
+    expect(tokens[tokens.length - 1].endWordIndex).toBe(19);
+    for (const t of tokens) {
+      expect(t.startWordIndex).toBeLessThanOrEqual(t.endWordIndex);
+    }
+    for (let i = 1; i < tokens.length; i++) {
+      expect(tokens[i].startWordIndex).toBe(tokens[i - 1].endWordIndex + 1);
+    }
   });
 });
 
