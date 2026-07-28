@@ -864,26 +864,36 @@ export function TranscriptSegment({
   const hasHistory = (segment.correctionHistory?.length ?? 0) > 0;
   const accepted = segment.accepted ?? false;
   // Whether the segment still shows at least one *un-reviewed* orange
-  // highlight: a word below the per-word highlight threshold
-  // (lowConfidenceThreshold) that ISN'T already covered by a word-correction.
-  // This mirrors exactly what the Words component renders — it splices
-  // corrected runs out and highlights only the remaining sub-threshold runs —
-  // so the checkmark's visibility tracks the actual orange highlights. A
-  // whole-segment rewrite (correctedText) replaces the per-word view entirely,
-  // leaving nothing highlighted. WordCorrection start/endWordIndex are lexical
-  // indices into words[] (see lib/types.ts), the same space as the array index
-  // i, so excluding i inside any correction's inclusive range correctly drops
-  // words that have already been corrected.
-  const hasRemainingLowConfidenceHighlights =
-    segment.correctedText === undefined &&
-    (segment.words?.some(
-      (w, i) =>
-        w.confidence < lowConfidenceThreshold &&
-        !(segment.wordCorrections ?? []).some(
-          (c) => i >= c.startWordIndex && i <= c.endWordIndex
-        )
-    ) ??
-      false);
+  // highlight left to clear. Derived from the SAME pipeline the Words
+  // component renders with — alignWordsToDisplayTokens() + buildRuns() — so
+  // the checkmark's visibility tracks EXACTLY the orange runs shown in the
+  // transcript, not the raw per-word confidence. This matters because a
+  // display token's confidence is the MEAN across the lexical words it maps to
+  // (DIAAT-249): a compressed multi-word token whose mean sits above the
+  // threshold renders no highlight even if one sub-word is below it, and the
+  // checkmark must not appear when nothing is highlighted. buildRuns() also
+  // splices out corrected ranges (so a corrected word never counts) and
+  // applies suppressHighlighting when accepted (so an accepted segment yields
+  // no low-confidence runs). A whole-segment rewrite (correctedText) replaces
+  // the per-word view entirely, so there's nothing to highlight then.
+  const hasRemainingLowConfidenceHighlights = useMemo(() => {
+    if (segment.correctedText !== undefined || !segment.words) return false;
+    const tokens = alignWordsToDisplayTokens(segment.text, segment.words);
+    const runs = buildRuns(
+      tokens,
+      segment.wordCorrections,
+      lowConfidenceThreshold,
+      accepted
+    );
+    return runs.some((r) => r.kind === "original" && r.lowConfidence);
+  }, [
+    segment.text,
+    segment.words,
+    segment.wordCorrections,
+    segment.correctedText,
+    lowConfidenceThreshold,
+    accepted,
+  ]);
   // Offer "accept as-is" while un-reviewed low-confidence highlights remain, so
   // a clerk can bulk-accept the rest of a section after correcting some of its
   // words (DIAAT-229 follow-up). It's hidden only when nothing is left to

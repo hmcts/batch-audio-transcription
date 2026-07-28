@@ -801,6 +801,34 @@ describe("TranscriptSegment", () => {
       expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
     });
 
+    // DIAAT-249 consistency (Copilot review on PR #64): the checkmark is
+    // derived from the same display-token runs the transcript renders, whose
+    // confidence is the MEAN across the token's lexical words — not raw
+    // per-word confidence. A compressed multi-word token ("PA/0475") with one
+    // weak sub-word ("zero" @0.5) but a mean ABOVE threshold shows NO orange
+    // highlight, so there's nothing to accept and the checkmark stays hidden.
+    it("does not offer accept when a low sub-word's display-token mean is above threshold (DIAAT-249)", () => {
+      render(
+        <TranscriptSegment
+          segment={{
+            ...SEGMENT,
+            text: "PA/0475",
+            words: [
+              { text: "pa", startTime: 0, endTime: 0.5, confidence: 0.95 },
+              { text: "slash", startTime: 0.5, endTime: 0.8, confidence: 0.9 },
+              { text: "zero", startTime: 0.8, endTime: 1.1, confidence: 0.5 },
+              { text: "four", startTime: 1.1, endTime: 1.4, confidence: 0.92 },
+              { text: "seven", startTime: 1.4, endTime: 1.7, confidence: 0.88 },
+            ],
+          }}
+          onAccept={vi.fn()}
+        />
+      );
+      // mean = (0.95 + 0.9 + 0.5 + 0.92 + 0.88) / 5 = 0.83 > 0.65: not flagged,
+      // so no orange run and no accept checkmark.
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
     it("does not offer accept for a phrase-only segment with no per-word data", () => {
       // No words array -> no per-word highlights -> nothing to accept.
       render(
