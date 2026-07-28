@@ -11,13 +11,6 @@ def _resolve_user(azure_user_id="azure-123", email="test@example.com", roles=Non
     return _fn(azure_user_id, email, roles if roles is not None else ["Normal"])
 
 
-def _patched_session(mock_session):
-    """Context manager pair that wires mock_session into the Session() call."""
-    engine_patch = patch("transcription_svc.utils.dependencies.get_engine")
-    session_patch = patch("transcription_svc.utils.dependencies.Session")
-    return engine_patch, session_patch, mock_session
-
-
 class TestResolveUserCreatesNewUser:
     def _setup(self, roles=None):
         mock_session = MagicMock()
