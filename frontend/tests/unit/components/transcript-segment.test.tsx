@@ -812,10 +812,54 @@ describe("TranscriptSegment", () => {
       expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
     });
 
-    it("does not offer accept once the segment has been corrected", () => {
+    it("does not offer accept once the whole segment has been rewritten (correctedText)", () => {
       render(
         <TranscriptSegment
           segment={{ ...LOW_CONF, correctedText: "fixed text" }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    // DIAAT-229 follow-up: correcting ONE low-confidence word must NOT hide the
+    // accept-all checkmark while another low-confidence word is still
+    // un-reviewed. Two low-confidence words ("morning" @0.6 idx 1, "record"
+    // @0.4 idx 6); a word-correction covers only "morning", so "record" remains
+    // an orange highlight to clear -> the checkmark stays offered.
+    it("still offers accept when a correction leaves another low-confidence word un-reviewed", () => {
+      const twoLowConf = WORDS.map((w) =>
+        w.text === "record" ? { ...w, confidence: 0.4 } : w
+      );
+      render(
+        <TranscriptSegment
+          segment={{
+            ...SEGMENT,
+            words: twoLowConf,
+            wordCorrections: [
+              { startWordIndex: 1, endWordIndex: 1, text: "afternoon" },
+            ],
+          }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.getByLabelText(/accept segment as-is/i)).toBeDefined();
+    });
+
+    // DIAAT-229 follow-up: once the ONLY low-confidence word has been covered by
+    // a word-correction there are no orange highlights left, so there's nothing
+    // to bulk-accept and the checkmark is hidden. ("morning" idx 1 is the sole
+    // sub-threshold word in WORDS, and the correction covers exactly it.)
+    it("does not offer accept when the only low-confidence word has been corrected", () => {
+      render(
+        <TranscriptSegment
+          segment={{
+            ...SEGMENT,
+            words: WORDS,
+            wordCorrections: [
+              { startWordIndex: 1, endWordIndex: 1, text: "afternoon" },
+            ],
+          }}
           onAccept={vi.fn()}
         />
       );

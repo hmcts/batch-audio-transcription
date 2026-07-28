@@ -863,20 +863,41 @@ export function TranscriptSegment({
     (segment.wordCorrections?.length ?? 0) > 0;
   const hasHistory = (segment.correctionHistory?.length ?? 0) > 0;
   const accepted = segment.accepted ?? false;
-  // Whether the segment has any word highlighted below the SAME per-word
-  // threshold used for the highlighting itself (lowConfidenceThreshold) — i.e.
-  // there are orange highlights for "accept all" to clear. Whether the segment
-  // has been edited is handled separately by !hasCorrections in canAccept.
-  const hasLowConfidenceWords =
-    segment.words?.some((w) => w.confidence < lowConfidenceThreshold) ?? false;
-  // Only offer "accept as-is" when the segment has low-confidence highlights to
-  // clear, hasn't been edited, and hasn't already been accepted. Previously
-  // this was gated on the segment-level 85% average confidence (isLowConf) —
-  // a different threshold and granularity than the per-word highlighting — so
-  // segments that showed highlighted words but had a high segment average (or
-  // no segment-level confidence at all) never offered the checkmark (DIAAT-229).
+  // Whether the segment still shows at least one *un-reviewed* orange
+  // highlight: a word below the per-word highlight threshold
+  // (lowConfidenceThreshold) that ISN'T already covered by a word-correction.
+  // This mirrors exactly what the Words component renders — it splices
+  // corrected runs out and highlights only the remaining sub-threshold runs —
+  // so the checkmark's visibility tracks the actual orange highlights. A
+  // whole-segment rewrite (correctedText) replaces the per-word view entirely,
+  // leaving nothing highlighted. WordCorrection start/endWordIndex are lexical
+  // indices into words[] (see lib/types.ts), the same space as the array index
+  // i, so excluding i inside any correction's inclusive range correctly drops
+  // words that have already been corrected.
+  const hasRemainingLowConfidenceHighlights =
+    segment.correctedText === undefined &&
+    (segment.words?.some(
+      (w, i) =>
+        w.confidence < lowConfidenceThreshold &&
+        !(segment.wordCorrections ?? []).some(
+          (c) => i >= c.startWordIndex && i <= c.endWordIndex
+        )
+    ) ??
+      false);
+  // Offer "accept as-is" while un-reviewed low-confidence highlights remain, so
+  // a clerk can bulk-accept the rest of a section after correcting some of its
+  // words (DIAAT-229 follow-up). It's hidden only when nothing is left to
+  // accept: every low-confidence word has been corrected, the whole segment was
+  // rewritten (correctedText), there's no per-word data, or it's already been
+  // accepted. Deliberately independent of hasCorrections — the backend's accept
+  // endpoint likewise allows accepting a segment that already has
+  // word-corrections. Previously this was gated on the segment-level 85%
+  // average confidence (isLowConf), a different threshold and granularity than
+  // the per-word highlighting, so segments that showed highlighted words but
+  // had a high segment average (or no segment-level confidence at all) never
+  // offered the checkmark (DIAAT-229).
   const canAccept =
-    !!onAccept && hasLowConfidenceWords && !hasCorrections && !accepted;
+    !!onAccept && hasRemainingLowConfidenceHighlights && !accepted;
 
   const startEditing = () => {
     setDraft(displayText);
