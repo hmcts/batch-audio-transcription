@@ -68,8 +68,8 @@ def _resolve_user(azure_user_id: str, email: str, roles: list[str]) -> Authentic
         else:
             if primary_role and user.role != primary_role:
                 logger.info(
-                    "Syncing User.role from Azure AD for %s: %s -> %s",
-                    email,
+                    "Syncing User.role from Azure AD for azure_user_id=%s: %s -> %s",
+                    azure_user_id,
                     user.role,
                     primary_role,
                 )
