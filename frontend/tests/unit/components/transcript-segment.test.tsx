@@ -801,6 +801,34 @@ describe("TranscriptSegment", () => {
       expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
     });
 
+    // DIAAT-249 consistency (Copilot review on PR #64): the checkmark is
+    // derived from the same display-token runs the transcript renders, whose
+    // confidence is the MEAN across the token's lexical words — not raw
+    // per-word confidence. A compressed multi-word token ("PA/0475") with one
+    // weak sub-word ("zero" @0.5) but a mean ABOVE threshold shows NO orange
+    // highlight, so there's nothing to accept and the checkmark stays hidden.
+    it("does not offer accept when a low sub-word's display-token mean is above threshold (DIAAT-249)", () => {
+      render(
+        <TranscriptSegment
+          segment={{
+            ...SEGMENT,
+            text: "PA/0475",
+            words: [
+              { text: "pa", startTime: 0, endTime: 0.5, confidence: 0.95 },
+              { text: "slash", startTime: 0.5, endTime: 0.8, confidence: 0.9 },
+              { text: "zero", startTime: 0.8, endTime: 1.1, confidence: 0.5 },
+              { text: "four", startTime: 1.1, endTime: 1.4, confidence: 0.92 },
+              { text: "seven", startTime: 1.4, endTime: 1.7, confidence: 0.88 },
+            ],
+          }}
+          onAccept={vi.fn()}
+        />
+      );
+      // mean = (0.95 + 0.9 + 0.5 + 0.92 + 0.88) / 5 = 0.83 > 0.65: not flagged,
+      // so no orange run and no accept checkmark.
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
     it("does not offer accept for a phrase-only segment with no per-word data", () => {
       // No words array -> no per-word highlights -> nothing to accept.
       render(
@@ -812,10 +840,54 @@ describe("TranscriptSegment", () => {
       expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
     });
 
-    it("does not offer accept once the segment has been corrected", () => {
+    it("does not offer accept once the whole segment has been rewritten (correctedText)", () => {
       render(
         <TranscriptSegment
           segment={{ ...LOW_CONF, correctedText: "fixed text" }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.queryByLabelText(/accept segment as-is/i)).toBeNull();
+    });
+
+    // DIAAT-229 follow-up: correcting ONE low-confidence word must NOT hide the
+    // accept-all checkmark while another low-confidence word is still
+    // un-reviewed. Two low-confidence words ("morning" @0.6 idx 1, "record"
+    // @0.4 idx 6); a word-correction covers only "morning", so "record" remains
+    // an orange highlight to clear -> the checkmark stays offered.
+    it("still offers accept when a correction leaves another low-confidence word un-reviewed", () => {
+      const twoLowConf = WORDS.map((w) =>
+        w.text === "record" ? { ...w, confidence: 0.4 } : w
+      );
+      render(
+        <TranscriptSegment
+          segment={{
+            ...SEGMENT,
+            words: twoLowConf,
+            wordCorrections: [
+              { startWordIndex: 1, endWordIndex: 1, text: "afternoon" },
+            ],
+          }}
+          onAccept={vi.fn()}
+        />
+      );
+      expect(screen.getByLabelText(/accept segment as-is/i)).toBeDefined();
+    });
+
+    // DIAAT-229 follow-up: once the ONLY low-confidence word has been covered by
+    // a word-correction there are no orange highlights left, so there's nothing
+    // to bulk-accept and the checkmark is hidden. ("morning" idx 1 is the sole
+    // sub-threshold word in WORDS, and the correction covers exactly it.)
+    it("does not offer accept when the only low-confidence word has been corrected", () => {
+      render(
+        <TranscriptSegment
+          segment={{
+            ...SEGMENT,
+            words: WORDS,
+            wordCorrections: [
+              { startWordIndex: 1, endWordIndex: 1, text: "afternoon" },
+            ],
+          }}
           onAccept={vi.fn()}
         />
       );
