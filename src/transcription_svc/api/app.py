@@ -51,7 +51,13 @@ async def _validation_exception_handler(
 async def lifespan(app: FastAPI):
     import asyncio
 
+    from hmcts_azure_auth.roles import validate_approles_config
+
     from transcription_svc.audio.polling_service import BatchPollingService
+
+    # Fail fast if AUTH_APPROLES is set but contains invalid configuration
+    # (bad JSON, missing required role keys, non-string values).
+    validate_approles_config()
 
     settings = get_settings()
     if settings.ENVIRONMENT != "test":

@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 async def submit_and_queue_batch_job(
     session: Session,
     audio_url: str,
-    caller_id: UUID,
+    caller_id: UUID | None = None,
     locale: str = "en-GB",
     enable_diarization: bool = True,
     callback_url: str | None = None,
@@ -25,6 +25,7 @@ async def submit_and_queue_batch_job(
     metadata: dict | None = None,
     audio_duration_seconds: float | None = None,
     audio_blob_path: str | None = None,
+    user_id: UUID | None = None,
 ) -> TranscriptionJob:
     """Submit audio to Azure Batch Transcription and persist the initial job record.
 
@@ -33,6 +34,7 @@ async def submit_and_queue_batch_job(
     """
     job = TranscriptionJob(
         caller_id=caller_id,
+        user_id=user_id,
         audio_url=audio_url,
         locale=locale,
         enable_diarization=enable_diarization,

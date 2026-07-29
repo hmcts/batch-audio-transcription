@@ -1,11 +1,12 @@
-import { NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { BackendApiError, correctSegment } from "@/lib/api-client";
+import { getEasyAuthToken } from "@/lib/auth-utils";
 
 interface RouteContext {
   params: Promise<{ jobId: string; index: string }>;
 }
 
-export async function PATCH(request: Request, { params }: RouteContext) {
+export async function PATCH(request: NextRequest, { params }: RouteContext) {
   const { jobId, index } = await params;
   const segmentIndex = Number(index);
   if (!Number.isInteger(segmentIndex) || segmentIndex < 0) {
@@ -15,6 +16,7 @@ export async function PATCH(request: Request, { params }: RouteContext) {
     );
   }
 
+  const accessToken = getEasyAuthToken(request);
   try {
     const { correctedText } = await request.json();
     if (
@@ -26,7 +28,12 @@ export async function PATCH(request: Request, { params }: RouteContext) {
         { status: 422 }
       );
     }
-    const job = await correctSegment(jobId, segmentIndex, correctedText);
+    const job = await correctSegment(
+      jobId,
+      segmentIndex,
+      correctedText,
+      accessToken
+    );
     return NextResponse.json({ job });
   } catch (err) {
     if (err instanceof BackendApiError) {

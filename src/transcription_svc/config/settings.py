@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     BATCH_POLL_INTERVAL_SECONDS: int = 30
     BATCH_TRANSCRIPTION_THRESHOLD_HOURS: float = 2.0
 
+    # Azure AD / JWT authentication
+    AZURE_AD_CLIENT_ID: str = ""
+    AZURE_AD_TENANT_ID: str = ""
+    JWT_ENABLE_VERIFICATION: bool = True
+    JWT_VERIFICATION_STRICT: bool = True
+    AUTH_APPROLES: str | None = None
+
     # Auth
     LOCAL_API_KEY: str = "local-dev-key-change-me"
     # Fernet key (URL-safe base64, 32 bytes) used to encrypt webhook_secret at rest.

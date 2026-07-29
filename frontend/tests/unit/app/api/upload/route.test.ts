@@ -1,3 +1,4 @@
+import type { NextRequest } from "next/server";
 import { describe, expect, it, vi } from "vitest";
 
 const { mockUploadAndSubmit } = vi.hoisted(() => ({
@@ -11,16 +12,24 @@ vi.mock("@/lib/api-client", () => ({
 // jsdom's FormData/File brand checks are unreliable in this test
 // environment, so stub Request.formData() directly rather than round-
 // tripping a real multipart body through the DOM FormData/File classes.
-function requestWithFile(file: Blob | null, durationSeconds?: string) {
+function requestWithFile(
+  file: Blob | null,
+  durationSeconds?: string,
+  easyAuthToken?: string
+) {
   const fields: Record<string, unknown> = { file };
   if (durationSeconds !== undefined) {
     fields.audio_duration_seconds = durationSeconds;
   }
   return {
+    headers: {
+      get: (name: string) =>
+        name === "x-ms-token-aad-access-token" ? (easyAuthToken ?? null) : null,
+    },
     formData: async () => ({
       get: (key: string) => fields[key] ?? null,
     }),
-  } as unknown as Request;
+  } as unknown as NextRequest;
 }
 
 function audioBlob() {
@@ -40,7 +49,8 @@ describe("POST /api/upload", () => {
     expect(mockUploadAndSubmit).toHaveBeenCalledWith(
       expect.any(Blob),
       "audio",
-      undefined
+      undefined,
+      null
     );
   });
 
@@ -53,7 +63,8 @@ describe("POST /api/upload", () => {
     expect(mockUploadAndSubmit).toHaveBeenCalledWith(
       expect.any(Blob),
       "audio",
-      9360.5
+      9360.5,
+      null
     );
   });
 
@@ -66,7 +77,8 @@ describe("POST /api/upload", () => {
     expect(mockUploadAndSubmit).toHaveBeenCalledWith(
       expect.any(Blob),
       "audio",
-      undefined
+      undefined,
+      null
     );
   });
 
@@ -80,7 +92,22 @@ describe("POST /api/upload", () => {
     expect(mockUploadAndSubmit).toHaveBeenCalledWith(
       expect.any(Blob),
       "audio",
-      undefined
+      undefined,
+      null
+    );
+  });
+
+  it("forwards the Easy Auth token to uploadAndSubmit when present", async () => {
+    mockUploadAndSubmit.mockResolvedValue({ id: "job-1", status: "PENDING" });
+    const { POST } = await import("@/app/api/upload/route");
+
+    await POST(requestWithFile(audioBlob(), undefined, "user-jwt-token"));
+
+    expect(mockUploadAndSubmit).toHaveBeenCalledWith(
+      expect.any(Blob),
+      "audio",
+      undefined,
+      "user-jwt-token"
     );
   });
 

@@ -29,7 +29,6 @@ from slowapi.util import get_remote_address
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
-from transcription_svc.api.dependencies import get_caller
 from transcription_svc.audio import local_storage
 from transcription_svc.audio.accuracy import DEFAULT_CONFIDENCE_THRESHOLD, compute_accuracy
 from transcription_svc.audio.azure_utils import AsyncAzureBlobManager
@@ -38,18 +37,20 @@ from transcription_svc.config.settings import get_settings
 from transcription_svc.database.engine import get_session
 from transcription_svc.database.interface import (
     get_job_by_id,
-    get_job_by_idempotency_key,
-    list_jobs_for_caller,
+    get_job_by_idempotency_key_for_user,
+    list_jobs_paginated,
     record_correction_dataset_entry,
 )
 from transcription_svc.database.models import (
-    Caller,
     CorrectionEntry,
     DialogueEntry,
     JobStatus,
     TranscriptionJob,
     WordCorrection,
 )
+from transcription_svc.utils.approles import get_valid_roles
+from transcription_svc.utils.auth_models import AuthenticatedUser
+from transcription_svc.utils.dependencies import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
@@ -182,7 +183,6 @@ class SubmitJobRequest(BaseModel):
     blob_name: str | None = None
     locale: str = "en-GB"
     enable_diarization: bool = True
-    callback_url: str | None = None
     idempotency_key: str | None = None
     # Total duration of the source audio, in seconds — supplied by the caller
     # (the frontend reads it client-side from the file before upload) since
@@ -221,13 +221,6 @@ class SubmitJobRequest(BaseModel):
             raise ValueError(
                 f"metadata must not exceed {_METADATA_MAX_BYTES} bytes when serialised"
             )
-        return v
-
-    @field_validator("callback_url")
-    @classmethod
-    def validate_callback_url(cls, v: str | None) -> str | None:
-        if v is not None:
-            _reject_private_url(v, "callback_url")
         return v
 
     @field_validator("idempotency_key")
@@ -316,14 +309,6 @@ class JobResponse(BaseModel):
     needs_review: list[NeedsReviewItemResponse] | None = None
     error_message: str | None = None
     metadata: dict = Field(default_factory=dict)
-    # The caller (API client / clerk identity) that owns this job. Every
-    # correction endpoint enforces job.caller_id == caller.id, so all
-    # modification-history entries on the job were made by this caller — it's
-    # the best available "who made the change" attribution. Note this is
-    # job-level, not per-action: CorrectionEntry does not record a separate
-    # identity per correction, so it cannot distinguish two people editing
-    # under the same caller. In local dev this is always "local-dev".
-    caller_name: str | None = None
     # Run metadata (DIAAT-227): audio length, how long the transcription
     # itself took, and which model/engine produced it. audio_duration is
     # known from submission; the other two only once the job succeeds.
@@ -404,7 +389,7 @@ def _to_dialogue_entries(job: TranscriptionJob) -> list[DialogueEntry] | None:
     ]
 
 
-def _to_response(job: TranscriptionJob, caller_name: str | None = None) -> JobResponse:
+def _to_response(job: TranscriptionJob) -> JobResponse:
     entries = _to_dialogue_entries(job)
     accuracy = None
     needs_review = None
@@ -513,7 +498,6 @@ def _to_response(job: TranscriptionJob, caller_name: str | None = None) -> JobRe
         needs_review=needs_review,
         error_message=job.error_message,
         metadata=job.metadata_,
-        caller_name=caller_name,
         audio_duration_seconds=job.audio_duration_seconds,
         transcription_duration_seconds=job.transcription_duration_seconds,
         model_identifier=job.model_identifier,
@@ -568,7 +552,7 @@ async def _read_upload_capped(
 async def upload_audio(
     request: Request,
     file: UploadFile = File(...),
-    caller: Caller = Depends(get_caller),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> UploadResponse:
     extension = PurePosixPath(file.filename or "").suffix.lower()
     if extension not in _ALLOWED_AUDIO_EXTENSIONS:
@@ -581,7 +565,7 @@ async def upload_audio(
     content = await _read_upload_capped(file, _MAX_UPLOAD_BYTES)
 
     safe_filename = _sanitize_filename(file.filename or "audio")
-    blob_name = f"uploads/{caller.id}/{uuid4()}-{safe_filename}"
+    blob_name = f"uploads/{current_user.id}/{uuid4()}-{safe_filename}"
 
     if get_settings().AUDIO_STORAGE_BACKEND == "local":
         local_storage.save(content, blob_name)
@@ -628,32 +612,33 @@ async def submit_job(
     request: Request,
     body: Annotated[SubmitJobRequest, Body()],
     session: Session = Depends(get_session),
-    caller: Caller = Depends(get_caller),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> JobResponse:
     if body.idempotency_key:
-        existing = get_job_by_idempotency_key(session, body.idempotency_key, caller.id)
+        existing = get_job_by_idempotency_key_for_user(
+            session, body.idempotency_key, current_user.id
+        )
         if existing:
-            return _to_response(existing, caller.name)
+            return _to_response(existing)
 
     # blob_name is later trusted by GET /jobs/{id}/audio to read straight from
-    # storage — without this check a caller could point it at another
-    # caller's blob (upload_audio always issues names under
-    # uploads/{caller.id}/...) and read their audio back through this job.
-    if body.blob_name is not None and not body.blob_name.startswith(f"uploads/{caller.id}/"):
-        raise HTTPException(status_code=422, detail="blob_name does not belong to this caller")
+    # storage — without this check a caller could point it at another user's
+    # blob (upload_audio issues names under uploads/{current_user.id}/...) and
+    # read their audio back through this job.
+    if body.blob_name is not None and not body.blob_name.startswith(f"uploads/{current_user.id}/"):
+        raise HTTPException(status_code=422, detail="blob_name does not belong to this user")
 
     try:
         job = await submit_and_queue_batch_job(
             session=session,
             audio_url=body.audio_url,
-            caller_id=caller.id,
             locale=body.locale,
             enable_diarization=body.enable_diarization,
-            callback_url=body.callback_url,
             idempotency_key=body.idempotency_key,
             metadata=body.metadata,
             audio_duration_seconds=body.audio_duration_seconds,
             audio_blob_path=body.blob_name,
+            user_id=current_user.id,
         )
     except IntegrityError:
         # Two concurrent requests with the same idempotency_key both passed the
@@ -661,20 +646,22 @@ async def submit_job(
         # Roll back the failed transaction and return whatever the winner created.
         session.rollback()
         if body.idempotency_key:
-            existing = get_job_by_idempotency_key(session, body.idempotency_key, caller.id)
+            existing = get_job_by_idempotency_key_for_user(
+                session, body.idempotency_key, current_user.id
+            )
             if existing:
-                return _to_response(existing, caller.name)
+                return _to_response(existing)
         raise HTTPException(
             status_code=409, detail="Concurrent submission conflict; retry"
         ) from None
 
-    return _to_response(job, caller.name)
+    return _to_response(job)
 
 
 @router.get("/jobs", response_model=ListJobsResponse)
 async def list_jobs(
     session: Session = Depends(get_session),
-    caller: Caller = Depends(get_caller),
+    current_user: AuthenticatedUser = Depends(get_current_user),
     status: str | None = Query(default=None, description="Filter by job status"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
@@ -689,9 +676,14 @@ async def list_jobs(
                 status_code=400, detail=f"Invalid status '{status}'. Valid values: {valid}"
             ) from None
 
-    jobs, total = list_jobs_for_caller(session, caller.id, parsed_status, limit, offset)
+    # SystemAdministrators see all jobs (including pre-migration jobs with
+    # user_id=NULL). Regular users see only their own JWT-created jobs;
+    # pre-migration jobs are restricted to SystemAdministrator everywhere.
+    is_admin = get_valid_roles()["SystemAdministrator"] in current_user.app_roles
+    filter_user_id = None if is_admin else current_user.id
+    jobs, total = list_jobs_paginated(session, filter_user_id, parsed_status, limit, offset)
     return ListJobsResponse(
-        jobs=[_to_response(j, caller.name) for j in jobs],
+        jobs=[_to_response(j) for j in jobs],
         total=total,
         limit=limit,
         offset=offset,
@@ -702,12 +694,13 @@ async def list_jobs(
 async def get_job(
     job_id: UUID,
     session: Session = Depends(get_session),
-    caller: Caller = Depends(get_caller),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> JobResponse:
     job = get_job_by_id(session, job_id)
-    if not job or job.caller_id != caller.id:
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return _to_response(job, caller.name)
+    _check_job_access(job, current_user)
+    return _to_response(job)
 
 
 @router.post("/jobs/{job_id}/baseline", response_model=JobResponse)
@@ -715,7 +708,7 @@ async def upload_baseline_transcript(
     job_id: UUID,
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
-    caller: Caller = Depends(get_caller),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> JobResponse:
     """Store a clerk-supplied reference transcript to compute a real WER against.
 
@@ -728,8 +721,9 @@ async def upload_baseline_transcript(
     Uploading again replaces any previously stored baseline.
     """
     job = get_job_by_id(session, job_id)
-    if not job or job.caller_id != caller.id:
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    _check_job_access(job, current_user)
     if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
         raise HTTPException(
             status_code=422, detail="Job has no transcript to compare a baseline against"
@@ -769,15 +763,41 @@ async def upload_baseline_transcript(
     session.add(job)
     session.commit()
     session.refresh(job)
-    return _to_response(job, caller.name)
+    return _to_response(job)
+
+
+def _check_job_access(
+    job: TranscriptionJob,
+    current_user: AuthenticatedUser,
+) -> None:
+    """Raise 404 if current_user neither owns the job nor is a SystemAdministrator.
+
+    404 is intentional: returning 403 would reveal that a job with this UUID
+    exists, allowing enumeration. Callers already raised 404 for a missing job,
+    so both cases look identical to the requester.
+
+    Pre-migration jobs (user_id is None) were created by API-key callers before
+    per-user auth existed. Both reads and writes on legacy jobs are restricted to
+    SystemAdministrator — legacy jobs may contain sensitive hearing content, and
+    any authenticated user who can obtain or guess a UUID should not be able to
+    access that content.
+    """
+    is_admin = get_valid_roles()["SystemAdministrator"] in current_user.app_roles
+    if job.user_id is None:
+        if not is_admin:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return
+    if job.user_id != current_user.id and not is_admin:
+        raise HTTPException(status_code=404, detail="Job not found")
 
 
 def _load_entry_for_correction(
-    session: Session, job_id: UUID, index: int, caller: Caller
+    session: Session, job_id: UUID, index: int, current_user: AuthenticatedUser
 ) -> tuple[TranscriptionJob, DialogueEntry]:
     job = get_job_by_id(session, job_id)
-    if not job or job.caller_id != caller.id:
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    _check_job_access(job, current_user)
     if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
         raise HTTPException(status_code=422, detail="Job has no transcript to correct")
     if index < 0 or index >= len(job.dialogue_entries):
@@ -821,7 +841,7 @@ async def correct_segment(
     index: int,
     body: CorrectSegmentRequest,
     session: Session = Depends(get_session),
-    caller: Caller = Depends(get_caller),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> JobResponse:
     """Record a clerk's whole-segment correction.
 
@@ -831,7 +851,7 @@ async def correct_segment(
     whole-segment override takes full precedence over any prior word-range
     corrections, so those are cleared.
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, caller)
+    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
 
     previous_text = entry.effective_text()
     entry.corrected_text = body.corrected_text
@@ -863,7 +883,7 @@ async def correct_segment(
     )
 
     _save_corrected_entry(session, job, index, entry)
-    return _to_response(job, caller.name)
+    return _to_response(job)
 
 
 @router.patch("/jobs/{job_id}/segments/{index}/words", response_model=JobResponse)
@@ -872,14 +892,14 @@ async def correct_word_range(
     index: int,
     body: CorrectWordRangeRequest,
     session: Session = Depends(get_session),
-    caller: Caller = Depends(get_caller),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> JobResponse:
     """Record a clerk's correction for just a run of words within a segment.
 
     Unlike a whole-segment correction, this keeps confidence highlighting
     and playback-sync intact for every word outside the corrected range.
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, caller)
+    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
 
     if not entry.words:
         raise HTTPException(status_code=422, detail="Segment has no word-level data to correct")
@@ -976,7 +996,7 @@ async def correct_word_range(
     )
 
     _save_corrected_entry(session, job, index, entry)
-    return _to_response(job, caller.name)
+    return _to_response(job)
 
 
 @router.post("/jobs/{job_id}/segments/{index}/rollback", response_model=JobResponse)
@@ -984,7 +1004,7 @@ async def rollback_segment(
     job_id: UUID,
     index: int,
     session: Session = Depends(get_session),
-    caller: Caller = Depends(get_caller),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> JobResponse:
     """Revert a segment entirely back to its original Speech Batch output.
 
@@ -994,7 +1014,7 @@ async def rollback_segment(
     Batch produced it. It's a deliberate "start over" action, not one more
     logged change.
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, caller)
+    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
 
     previous_text = entry.effective_text()
     if previous_text == entry.text and not entry.accepted:
@@ -1006,7 +1026,7 @@ async def rollback_segment(
     entry.accepted = False
 
     _save_corrected_entry(session, job, index, entry)
-    return _to_response(job, caller.name)
+    return _to_response(job)
 
 
 @router.post("/jobs/{job_id}/segments/{index}/accept", response_model=JobResponse)
@@ -1014,7 +1034,7 @@ async def accept_segment(
     job_id: UUID,
     index: int,
     session: Session = Depends(get_session),
-    caller: Caller = Depends(get_caller),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> JobResponse:
     """Mark a segment as reviewed/accepted without editing its text.
 
@@ -1032,7 +1052,7 @@ async def accept_segment(
     compare against — no correction was made). needs_review filtering
     additionally excludes entries with accepted=True (see compute_accuracy).
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, caller)
+    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
 
     if entry.accepted:
         raise HTTPException(status_code=422, detail="Segment has already been accepted")
@@ -1050,7 +1070,7 @@ async def accept_segment(
     ]
 
     _save_corrected_entry(session, job, index, entry)
-    return _to_response(job, caller.name)
+    return _to_response(job)
 
 
 @router.post(
@@ -1062,7 +1082,7 @@ async def rollback_to_history_entry(
     index: int,
     history_index: int,
     session: Session = Depends(get_session),
-    caller: Caller = Depends(get_caller),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> JobResponse:
     """Revert a segment to how it looked immediately before one specific past edit.
 
@@ -1077,7 +1097,7 @@ async def rollback_to_history_entry(
     since reverting to an arbitrary point in time no longer has a clean
     correspondence to the original word positions in that case.
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, caller)
+    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
 
     history = entry.correction_history or []
     if history_index < 0 or history_index >= len(history):
@@ -1167,7 +1187,7 @@ async def rollback_to_history_entry(
         ]
 
     _save_corrected_entry(session, job, index, entry)
-    return _to_response(job, caller.name)
+    return _to_response(job)
 
 
 @router.get("/jobs/{job_id}/audio")
@@ -1175,7 +1195,7 @@ async def get_job_audio(
     job_id: UUID,
     request: Request,
     session: Session = Depends(get_session),
-    caller: Caller = Depends(get_caller),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> Response:
     """Stream a job's source audio back for playback.
 
@@ -1187,8 +1207,9 @@ async def get_job_audio(
     <audio> element that hasn't downloaded the whole file silently no-ops.
     """
     job = get_job_by_id(session, job_id)
-    if not job or job.caller_id != caller.id:
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    _check_job_access(job, current_user)
     if not job.audio_blob_path:
         raise HTTPException(status_code=404, detail="Audio not available for this job")
 
@@ -1258,11 +1279,12 @@ async def _stream_and_close(
 async def delete_job(
     job_id: UUID,
     session: Session = Depends(get_session),
-    caller: Caller = Depends(get_caller),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> Response:
     job = get_job_by_id(session, job_id)
-    if not job or job.caller_id != caller.id:
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    _check_job_access(job, current_user)
     session.delete(job)
     session.commit()
     return Response(status_code=204)

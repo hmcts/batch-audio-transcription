@@ -1,12 +1,14 @@
-import { NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { BackendApiError, uploadBaselineTranscript } from "@/lib/api-client";
+import { getEasyAuthToken } from "@/lib/auth-utils";
 
 interface RouteContext {
   params: Promise<{ jobId: string }>;
 }
 
-export async function POST(request: Request, { params }: RouteContext) {
+export async function POST(request: NextRequest, { params }: RouteContext) {
   const { jobId } = await params;
+  const accessToken = getEasyAuthToken(request);
 
   try {
     const form = await request.formData();
@@ -16,7 +18,12 @@ export async function POST(request: Request, { params }: RouteContext) {
     }
     const filename = file instanceof File ? file.name : "baseline.txt";
 
-    const job = await uploadBaselineTranscript(jobId, file, filename);
+    const job = await uploadBaselineTranscript(
+      jobId,
+      file,
+      filename,
+      accessToken
+    );
     return NextResponse.json({ job });
   } catch (err) {
     if (err instanceof BackendApiError) {

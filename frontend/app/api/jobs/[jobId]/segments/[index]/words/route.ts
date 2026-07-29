@@ -1,11 +1,12 @@
-import { NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { BackendApiError, correctWordRange } from "@/lib/api-client";
+import { getEasyAuthToken } from "@/lib/auth-utils";
 
 interface RouteContext {
   params: Promise<{ jobId: string; index: string }>;
 }
 
-export async function PATCH(request: Request, { params }: RouteContext) {
+export async function PATCH(request: NextRequest, { params }: RouteContext) {
   const { jobId, index } = await params;
   const segmentIndex = Number(index);
   if (!Number.isInteger(segmentIndex) || segmentIndex < 0) {
@@ -15,6 +16,7 @@ export async function PATCH(request: Request, { params }: RouteContext) {
     );
   }
 
+  const accessToken = getEasyAuthToken(request);
   try {
     const { startWordIndex, endWordIndex, correctedText } =
       await request.json();
@@ -38,7 +40,8 @@ export async function PATCH(request: Request, { params }: RouteContext) {
       segmentIndex,
       startWordIndex,
       endWordIndex,
-      correctedText
+      correctedText,
+      accessToken
     );
     return NextResponse.json({ job });
   } catch (err) {

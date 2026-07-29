@@ -16,20 +16,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
         with:
-          python-version: '3.12'
-          cache: pip
+          enable-cache: false
+          python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: uv sync --frozen --extra dev
 
       - name: Run unit tests with coverage
         env:
           ENVIRONMENT: test
         run: |
-          coverage run -m pytest tests/unit
-          coverage report --format=text | tee coverage.txt
+          uv run coverage run -m pytest tests/unit
+          uv run coverage report --format=text | tee coverage.txt
           echo "## Test Coverage" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           cat coverage.txt >> $GITHUB_STEP_SUMMARY
@@ -48,7 +49,7 @@ jobs:
           AZURE_STORAGE_CONTAINER_NAME: dummy
           LOCAL_API_KEY: dummy-key-for-test
         run: |
-          python -c "from transcription_svc.api.app import create_app; app = create_app(); print(f'app loaded with {len(app.routes)} routes')"
+          uv run python -c "from transcription_svc.api.app import create_app; app = create_app(); print(f'app loaded with {len(app.routes)} routes')"
 
   frontend-tests:
     name: Frontend — type-check + unit tests
@@ -114,24 +115,25 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
         with:
-          python-version: '3.12'
-          cache: pip
+          enable-cache: false
+          python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: uv sync --frozen --extra dev
 
       - name: Run Alembic migrations
         env:
           DATABASE_CONNECTION_STRING: postgresql://appuser:postgres@localhost:5432/transcription_db
-        run: alembic upgrade head
+        run: uv run alembic upgrade head
 
       - name: Verify no pending migrations
         env:
           DATABASE_CONNECTION_STRING: postgresql://appuser:postgres@localhost:5432/transcription_db
         run: |
-          pending=$(alembic current 2>&1)
+          pending=$(uv run alembic current 2>&1)
           echo "$pending"
           if echo "$pending" | grep -q "(head)"; then
             echo "✓ Migrations are up to date"
