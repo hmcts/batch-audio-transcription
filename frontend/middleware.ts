@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 
 /**
- * Enforces Azure Easy Auth login on all non-static routes.
+ * Enforces Azure Easy Auth login on all routes except Next.js internals and Easy Auth endpoints.
  *
  * In production (Azure App Service with Easy Auth configured), the
  * AppServiceAuthSession cookie is set by the platform after a successful AAD
