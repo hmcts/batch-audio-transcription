@@ -185,7 +185,7 @@ jobs:
         run: node scripts/e2e-summary.mjs playwright-report/results.json >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Playwright report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: playwright-report-dev
