@@ -21,7 +21,7 @@ export function middleware(request: NextRequest) {
       const loginUrl = new URL("/.auth/login/aad", request.url);
       loginUrl.searchParams.set(
         "post_login_redirect_uri",
-        request.nextUrl.pathname
+        `${request.nextUrl.pathname}${request.nextUrl.search}`
       );
       return NextResponse.redirect(loginUrl);
     }
