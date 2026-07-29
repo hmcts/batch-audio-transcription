@@ -15,9 +15,7 @@ export function middleware(request: NextRequest) {
   const isDev = process.env.NODE_ENV === "development";
 
   if (!isDev) {
-    const authCookie =
-      request.cookies.get("AppServiceAuthSession") ??
-      request.cookies.get(".AspNetCore.Cookies");
+    const authCookie = request.cookies.get("AppServiceAuthSession");
 
     if (!authCookie) {
       const loginUrl = new URL("/.auth/login/aad", request.url);
