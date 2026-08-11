@@ -126,6 +126,32 @@ describe("listJobs", () => {
   });
 });
 
+describe("rawBackendFetch header assembly", () => {
+  it("uses the accessToken as the Bearer token when provided", async () => {
+    const fetchMock = mockFetchOnce({ jobs: [], total: 0, limit: 20, offset: 0 });
+    await listJobs(undefined, { accessToken: "user-token", clientPrincipal: null });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers.Authorization).toBe("Bearer user-token");
+  });
+
+  it("forwards clientPrincipal as x-ms-client-principal when set", async () => {
+    const fetchMock = mockFetchOnce({ jobs: [], total: 0, limit: 20, offset: 0 });
+    await listJobs(undefined, { accessToken: "user-token", clientPrincipal: "base64principal" });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers["x-ms-client-principal"]).toBe("base64principal");
+  });
+
+  it("omits x-ms-client-principal entirely when clientPrincipal is null", async () => {
+    const fetchMock = mockFetchOnce({ jobs: [], total: 0, limit: 20, offset: 0 });
+    await listJobs(undefined, { accessToken: "user-token", clientPrincipal: null });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers["x-ms-client-principal"]).toBeUndefined();
+  });
+});
+
 describe("getJob", () => {
   it("returns a mapped job when found", async () => {
     mockFetchOnce(BACKEND_JOB);
