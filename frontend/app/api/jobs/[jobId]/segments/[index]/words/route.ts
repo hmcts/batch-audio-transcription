@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { BackendApiError, correctWordRange } from "@/lib/api-client";
-import { getEasyAuthToken } from "@/lib/auth-utils";
+import { getBackendAuthContext } from "@/lib/auth-utils";
 
 interface RouteContext {
   params: Promise<{ jobId: string; index: string }>;
@@ -16,7 +16,7 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
     );
   }
 
-  const accessToken = getEasyAuthToken(request);
+  const auth = getBackendAuthContext(request);
   try {
     const { startWordIndex, endWordIndex, correctedText } =
       await request.json();
@@ -41,7 +41,7 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
       startWordIndex,
       endWordIndex,
       correctedText,
-      accessToken
+      auth
     );
     return NextResponse.json({ job });
   } catch (err) {

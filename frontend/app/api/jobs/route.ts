@@ -1,11 +1,11 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { listJobs } from "@/lib/api-client";
-import { getEasyAuthToken } from "@/lib/auth-utils";
+import { getBackendAuthContext } from "@/lib/auth-utils";
 
 export async function GET(request: NextRequest) {
-  const accessToken = getEasyAuthToken(request);
+  const auth = getBackendAuthContext(request);
   try {
-    const result = await listJobs(undefined, accessToken);
+    const result = await listJobs(undefined, auth);
     return NextResponse.json(result);
   } catch (err) {
     console.error("Failed to list jobs", err);

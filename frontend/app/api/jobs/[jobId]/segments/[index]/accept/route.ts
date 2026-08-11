@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { acceptSegment, BackendApiError } from "@/lib/api-client";
-import { getEasyAuthToken } from "@/lib/auth-utils";
+import { getBackendAuthContext } from "@/lib/auth-utils";
 
 interface RouteContext {
   params: Promise<{ jobId: string; index: string }>;
@@ -16,9 +16,9 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     );
   }
 
-  const accessToken = getEasyAuthToken(request);
+  const auth = getBackendAuthContext(request);
   try {
-    const job = await acceptSegment(jobId, segmentIndex, accessToken);
+    const job = await acceptSegment(jobId, segmentIndex, auth);
     return NextResponse.json({ job });
   } catch (err) {
     if (err instanceof BackendApiError) {
