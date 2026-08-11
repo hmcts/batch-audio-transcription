@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { mockUploadAndSubmit } = vi.hoisted(() => ({
   mockUploadAndSubmit: vi.fn(),
@@ -42,6 +42,9 @@ function audioBlob() {
 }
 
 describe("POST /api/upload", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
   it("uploads and submits the file, returning the created job", async () => {
     mockUploadAndSubmit.mockResolvedValue({ id: "job-1", status: "PENDING" });
     const { POST } = await import("@/app/api/upload/route");
@@ -103,6 +106,7 @@ describe("POST /api/upload", () => {
   });
 
   it("forwards both Easy Auth headers to uploadAndSubmit when present", async () => {
+    vi.stubEnv("EASY_AUTH_ENABLED", "true");
     mockUploadAndSubmit.mockResolvedValue({ id: "job-1", status: "PENDING" });
     const { POST } = await import("@/app/api/upload/route");
 

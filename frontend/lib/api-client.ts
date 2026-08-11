@@ -156,7 +156,7 @@ async function rawBackendFetch(
 ): Promise<Response> {
   const token = auth?.accessToken ?? apiKey();
   const extraHeaders: Record<string, string> = {};
-  if (auth?.accessToken && auth.clientPrincipal) {
+  if (auth?.clientPrincipal) {
     extraHeaders["x-ms-client-principal"] = auth.clientPrincipal;
   }
   return fetch(`${backendUrl()}${path}`, {
