@@ -32,6 +32,7 @@ from sqlmodel import Session
 from transcription_svc.audio import local_storage
 from transcription_svc.audio.accuracy import DEFAULT_CONFIDENCE_THRESHOLD, compute_accuracy
 from transcription_svc.audio.azure_utils import AsyncAzureBlobManager
+from transcription_svc.audio.preprocessing import AudioDecodeError, normalize_to_wav
 from transcription_svc.audio.submission import submit_and_queue_batch_job
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.engine import get_session
@@ -564,8 +565,24 @@ async def upload_audio(
 
     content = await _read_upload_capped(file, _MAX_UPLOAD_BYTES)
 
+    # Transcode every accepted upload to 16 kHz mono PCM WAV — the format Azure
+    # Speech handles most reliably — before storing. A file that cannot be
+    # decoded is rejected here rather than creating a job doomed to fail with a
+    # cryptic "The recordings URI contains invalid data" from Speech.
+    try:
+        content = await normalize_to_wav(content, extension)
+    except AudioDecodeError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "The audio file could not be decoded. "
+                "It may be corrupt or in an unsupported format."
+            ),
+        ) from exc
+
     safe_filename = _sanitize_filename(file.filename or "audio")
-    blob_name = f"uploads/{current_user.id}/{uuid4()}-{safe_filename}"
+    wav_filename = f"{PurePosixPath(safe_filename).stem}.wav"
+    blob_name = f"uploads/{current_user.id}/{uuid4()}-{wav_filename}"
 
     if get_settings().AUDIO_STORAGE_BACKEND == "local":
         local_storage.save(content, blob_name)
