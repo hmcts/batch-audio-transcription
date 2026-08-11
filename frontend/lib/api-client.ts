@@ -1,4 +1,5 @@
 import "server-only";
+import type { BackendAuthContext } from "./auth-utils";
 import type {
   CorrectionEntry,
   JobStatus,
@@ -10,7 +11,6 @@ import type {
   Word,
   WordCorrection,
 } from "./types";
-import type { BackendAuthContext } from "./auth-utils";
 
 // Server-only client for the transcription_svc backend. Never import this
 // from a "use client" component — it reads the backend API key, which must

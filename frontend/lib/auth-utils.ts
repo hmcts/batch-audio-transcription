@@ -6,7 +6,9 @@ export interface BackendAuthContext {
   clientPrincipal: string | null;
 }
 
-export function getBackendAuthContext(request: NextRequest): BackendAuthContext {
+export function getBackendAuthContext(
+  request: NextRequest
+): BackendAuthContext {
   return {
     accessToken: request.headers.get("x-ms-token-aad-access-token"),
     clientPrincipal: request.headers.get("x-ms-client-principal"),

@@ -25,7 +25,8 @@ function requestWithFile(
   return {
     headers: {
       get: (name: string) => {
-        if (name === "x-ms-token-aad-access-token") return easyAuthToken ?? null;
+        if (name === "x-ms-token-aad-access-token")
+          return easyAuthToken ?? null;
         if (name === "x-ms-client-principal") return clientPrincipal ?? null;
         return null;
       },
@@ -105,7 +106,14 @@ describe("POST /api/upload", () => {
     mockUploadAndSubmit.mockResolvedValue({ id: "job-1", status: "PENDING" });
     const { POST } = await import("@/app/api/upload/route");
 
-    await POST(requestWithFile(audioBlob(), undefined, "user-jwt-token", "base64principal"));
+    await POST(
+      requestWithFile(
+        audioBlob(),
+        undefined,
+        "user-jwt-token",
+        "base64principal"
+      )
+    );
 
     expect(mockUploadAndSubmit).toHaveBeenCalledWith(
       expect.any(Blob),

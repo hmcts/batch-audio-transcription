@@ -128,24 +128,48 @@ describe("listJobs", () => {
 
 describe("rawBackendFetch header assembly", () => {
   it("uses the accessToken as the Bearer token when provided", async () => {
-    const fetchMock = mockFetchOnce({ jobs: [], total: 0, limit: 20, offset: 0 });
-    await listJobs(undefined, { accessToken: "user-token", clientPrincipal: null });
+    const fetchMock = mockFetchOnce({
+      jobs: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+    });
+    await listJobs(undefined, {
+      accessToken: "user-token",
+      clientPrincipal: null,
+    });
 
     const [, init] = fetchMock.mock.calls[0];
     expect(init.headers.Authorization).toBe("Bearer user-token");
   });
 
   it("forwards clientPrincipal as x-ms-client-principal when set", async () => {
-    const fetchMock = mockFetchOnce({ jobs: [], total: 0, limit: 20, offset: 0 });
-    await listJobs(undefined, { accessToken: "user-token", clientPrincipal: "base64principal" });
+    const fetchMock = mockFetchOnce({
+      jobs: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+    });
+    await listJobs(undefined, {
+      accessToken: "user-token",
+      clientPrincipal: "base64principal",
+    });
 
     const [, init] = fetchMock.mock.calls[0];
     expect(init.headers["x-ms-client-principal"]).toBe("base64principal");
   });
 
   it("omits x-ms-client-principal entirely when clientPrincipal is null", async () => {
-    const fetchMock = mockFetchOnce({ jobs: [], total: 0, limit: 20, offset: 0 });
-    await listJobs(undefined, { accessToken: "user-token", clientPrincipal: null });
+    const fetchMock = mockFetchOnce({
+      jobs: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+    });
+    await listJobs(undefined, {
+      accessToken: "user-token",
+      clientPrincipal: null,
+    });
 
     const [, init] = fetchMock.mock.calls[0];
     expect(init.headers["x-ms-client-principal"]).toBeUndefined();
@@ -191,11 +215,17 @@ describe("submitJob", () => {
       dialogue_entries: null,
     });
 
-    await submitJob("https://storage.example.com/audio.wav?sig=abc", {
-      caseReference: "PA/00002/2026",
-      tribunal: "Tribunal",
-      audioFileName: "hearing2.wav",
-    }, undefined, undefined, null);
+    await submitJob(
+      "https://storage.example.com/audio.wav?sig=abc",
+      {
+        caseReference: "PA/00002/2026",
+        tribunal: "Tribunal",
+        audioFileName: "hearing2.wav",
+      },
+      undefined,
+      undefined,
+      null
+    );
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain("/api/v1/jobs");
@@ -283,7 +313,12 @@ describe("uploadAndSubmit", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const file = new Blob(["fake-bytes"], { type: "audio/wav" });
-    const job = await uploadAndSubmit(file, "PA_00003_2026.wav", undefined, null);
+    const job = await uploadAndSubmit(
+      file,
+      "PA_00003_2026.wav",
+      undefined,
+      null
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(job.caseReference).toBe("PA/00003/2026");
