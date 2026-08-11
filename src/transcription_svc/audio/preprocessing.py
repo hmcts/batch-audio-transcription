@@ -86,7 +86,7 @@ async def _run_ffmpeg_to_wav(input_path: Path, output_path: Path) -> None:
         "-ac",
         "1",
         "-ar",
-        "16000",
+        str(_SAMPLE_RATE),
         "-c:a",
         "pcm_s16le",
         "-f",
