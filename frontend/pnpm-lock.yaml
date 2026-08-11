@@ -30,7 +30,7 @@ importers:
         specifier: ^1.14.0
         version: 1.22.0(react@19.2.7)
       next:
-        specifier: ~16.2.6
+        specifier: 16.2.9
         version: 16.2.9(@playwright/test@1.61.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       next-themes:
         specifier: ^0.4.6
