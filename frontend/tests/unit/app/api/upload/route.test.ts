@@ -145,4 +145,20 @@ describe("POST /api/upload", () => {
     expect(response.status).toBe(413);
     expect(mockUploadAndSubmit).not.toHaveBeenCalled();
   });
+
+  it("rethrows unexpected body errors instead of masking them as 413", async () => {
+    // Only the known FormData truncation/boundary error should become a 413;
+    // an unexpected runtime error must surface as a real 500.
+    const { POST } = await import("@/app/api/upload/route");
+
+    const request = {
+      headers: { get: () => null },
+      formData: async () => {
+        throw new Error("unexpected runtime failure");
+      },
+    } as unknown as NextRequest;
+
+    await expect(POST(request)).rejects.toThrow("unexpected runtime failure");
+    expect(mockUploadAndSubmit).not.toHaveBeenCalled();
+  });
 });

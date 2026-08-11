@@ -14,7 +14,9 @@ const nextConfig: NextConfig = {
     // Next.js clones every request body against this limit (default 10MB) and
     // truncates anything larger, which corrupts multipart uploads. The batch
     // service accepts long audio recordings (up to ~2h), so raise the ceiling
-    // well above realistic audio file sizes. See DIAAT-268.
+    // well above realistic audio file sizes while still bounding it (the
+    // frontend is behind Easy Auth, so this is not an anonymous surface).
+    // See DIAAT-268.
     proxyClientMaxBodySize: "500mb",
   },
 };

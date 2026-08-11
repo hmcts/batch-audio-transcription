@@ -2,18 +2,34 @@ import { type NextRequest, NextResponse } from "next/server";
 import { uploadAndSubmit } from "@/lib/api-client";
 import { getEasyAuthToken } from "@/lib/auth-utils";
 
+// Next.js truncates request bodies larger than experimental.proxyClientMaxBodySize
+// (configured in next.config.ts); the truncated multipart body then fails to
+// parse with a TypeError referencing the missing FormData boundary. Match that
+// specific failure so we can return 413, while letting anything unexpected
+// surface as a normal 500 rather than being mislabelled.
+function isBodyParseError(err: unknown): boolean {
+  if (!(err instanceof TypeError)) {
+    return false;
+  }
+  const cause = err.cause instanceof Error ? err.cause.message : "";
+  const message = `${err.message} ${cause}`;
+  return (
+    message.includes("Failed to parse body as FormData") ||
+    message.includes("boundary")
+  );
+}
+
 export async function POST(request: NextRequest) {
   const accessToken = getEasyAuthToken(request);
 
-  // Next.js truncates request bodies larger than
-  // experimental.proxyClientMaxBodySize (configured in next.config.ts), which
-  // corrupts the multipart payload so formData() throws. Handle it here to
-  // return a clear 413 instead of an opaque 500.
   let form: FormData;
   try {
     form = await request.formData();
   } catch (err) {
-    console.error("Failed to parse upload request body", err);
+    if (!isBodyParseError(err)) {
+      throw err;
+    }
+    console.error("Rejected oversized or malformed upload body", err);
     return NextResponse.json(
       {
         error: "Uploaded file is too large or the request body was malformed.",
