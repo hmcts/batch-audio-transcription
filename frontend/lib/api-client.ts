@@ -151,8 +151,8 @@ function apiKey(): string {
 // backend's hmcts_azure_auth dependency can validate the caller's identity.
 async function rawBackendFetch(
   path: string,
-  init?: RequestInit,
-  auth?: BackendAuthContext | null
+  init: RequestInit | undefined,
+  auth: BackendAuthContext | null
 ): Promise<Response> {
   const token = auth?.accessToken ?? apiKey();
   const extraHeaders: Record<string, string> = {};
@@ -174,8 +174,8 @@ async function rawBackendFetch(
 
 async function backendFetch(
   path: string,
-  init?: RequestInit,
-  auth?: BackendAuthContext | null
+  init: RequestInit | undefined,
+  auth: BackendAuthContext | null
 ): Promise<Response> {
   const response = await rawBackendFetch(path, init, auth);
 
@@ -371,8 +371,8 @@ function toTranscriptionJob(job: BackendJob): TranscriptionJob {
 }
 
 export async function listJobs(
-  params?: { status?: string; limit?: number; offset?: number },
-  auth?: BackendAuthContext | null
+  params: { status?: string; limit?: number; offset?: number } | undefined,
+  auth: BackendAuthContext | null
 ): Promise<{
   jobs: TranscriptionJob[];
   total: number;
@@ -400,7 +400,7 @@ export async function listJobs(
 
 export async function getJob(
   jobId: string,
-  auth?: BackendAuthContext | null
+  auth: BackendAuthContext | null
 ): Promise<TranscriptionJob | null> {
   try {
     const response = await backendFetch(
@@ -430,8 +430,8 @@ export async function getJob(
 // the browser rather than every non-2xx collapsing into a generic error.
 export async function getJobAudio(
   jobId: string,
-  rangeHeader?: string | null,
-  auth?: BackendAuthContext | null
+  rangeHeader: string | null | undefined,
+  auth: BackendAuthContext | null
 ): Promise<Response> {
   return rawBackendFetch(
     `/api/v1/jobs/${jobId}/audio`,
@@ -443,7 +443,7 @@ export async function getJobAudio(
 export async function uploadAudio(
   file: Blob,
   filename: string,
-  auth?: BackendAuthContext | null
+  auth: BackendAuthContext | null
 ): Promise<BackendUpload> {
   const form = new FormData();
   form.append("file", file, filename);
@@ -465,9 +465,9 @@ export interface SubmitJobMetadata {
 export async function submitJob(
   audioUrl: string,
   metadata: SubmitJobMetadata,
-  blobName?: string,
-  audioDurationSeconds?: number,
-  auth?: BackendAuthContext | null
+  blobName: string | undefined,
+  audioDurationSeconds: number | undefined,
+  auth: BackendAuthContext | null
 ): Promise<TranscriptionJob> {
   const response = await backendFetch(
     "/api/v1/jobs",
@@ -495,7 +495,7 @@ export async function correctSegment(
   jobId: string,
   index: number,
   correctedText: string,
-  auth?: BackendAuthContext | null
+  auth: BackendAuthContext | null
 ): Promise<TranscriptionJob> {
   const response = await backendFetch(
     `/api/v1/jobs/${jobId}/segments/${index}`,
@@ -516,7 +516,7 @@ export async function correctWordRange(
   startWordIndex: number,
   endWordIndex: number,
   correctedText: string,
-  auth?: BackendAuthContext | null
+  auth: BackendAuthContext | null
 ): Promise<TranscriptionJob> {
   const response = await backendFetch(
     `/api/v1/jobs/${jobId}/segments/${index}/words`,
@@ -538,7 +538,7 @@ export async function correctWordRange(
 export async function rollbackSegment(
   jobId: string,
   index: number,
-  auth?: BackendAuthContext | null
+  auth: BackendAuthContext | null
 ): Promise<TranscriptionJob> {
   const response = await backendFetch(
     `/api/v1/jobs/${jobId}/segments/${index}/rollback`,
@@ -552,7 +552,7 @@ export async function rollbackSegment(
 export async function acceptSegment(
   jobId: string,
   index: number,
-  auth?: BackendAuthContext | null
+  auth: BackendAuthContext | null
 ): Promise<TranscriptionJob> {
   const response = await backendFetch(
     `/api/v1/jobs/${jobId}/segments/${index}/accept`,
@@ -567,7 +567,7 @@ export async function rollbackToHistoryEntry(
   jobId: string,
   index: number,
   historyIndex: number,
-  auth?: BackendAuthContext | null
+  auth: BackendAuthContext | null
 ): Promise<TranscriptionJob> {
   const response = await backendFetch(
     `/api/v1/jobs/${jobId}/segments/${index}/history/${historyIndex}/rollback`,
@@ -582,7 +582,7 @@ export async function uploadBaselineTranscript(
   jobId: string,
   file: Blob,
   filename: string,
-  auth?: BackendAuthContext | null
+  auth: BackendAuthContext | null
 ): Promise<TranscriptionJob> {
   const form = new FormData();
   form.append("file", file, filename);
@@ -599,8 +599,8 @@ export async function uploadBaselineTranscript(
 export async function uploadAndSubmit(
   file: Blob,
   filename: string,
-  audioDurationSeconds?: number,
-  auth?: BackendAuthContext | null
+  audioDurationSeconds: number | undefined,
+  auth: BackendAuthContext | null
 ): Promise<TranscriptionJob> {
   const { audio_url, blob_name } = await uploadAudio(file, filename, auth);
   const caseReference = filename.replace(/\.[^.]+$/, "").replace(/_/g, "/");

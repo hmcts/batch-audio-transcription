@@ -48,13 +48,16 @@ describe("GET /api/jobs", () => {
     const { GET } = await import("@/app/api/jobs/route");
 
     const request = new NextRequest("http://localhost/api/jobs", {
-      headers: { "x-ms-token-aad-access-token": "user-jwt-token" },
+      headers: {
+        "x-ms-token-aad-access-token": "user-jwt-token",
+        "x-ms-client-principal": "base64principal",
+      },
     });
     await GET(request);
 
     expect(mockListJobs).toHaveBeenCalledWith(undefined, {
       accessToken: "user-jwt-token",
-      clientPrincipal: null,
+      clientPrincipal: "base64principal",
     });
   });
 

@@ -12,8 +12,3 @@ export function getBackendAuthContext(request: NextRequest): BackendAuthContext 
     clientPrincipal: request.headers.get("x-ms-client-principal"),
   };
 }
-
-// Kept for callers that only need the token (e.g. tests).
-export function getEasyAuthToken(request: NextRequest): string | null {
-  return request.headers.get("x-ms-token-aad-access-token");
-}
