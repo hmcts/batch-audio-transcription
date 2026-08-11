@@ -175,7 +175,7 @@ describe("rawBackendFetch header assembly", () => {
     expect(init.headers["x-ms-client-principal"]).toBeUndefined();
   });
 
-  it("forwards x-ms-client-principal when clientPrincipal is set even if accessToken is null", async () => {
+  it("forwards x-ms-client-principal even when accessToken is null (token store disabled)", async () => {
     const fetchMock = mockFetchOnce({
       jobs: [],
       total: 0,
