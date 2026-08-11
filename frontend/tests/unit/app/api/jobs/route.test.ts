@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { mockListJobs } = vi.hoisted(() => ({ mockListJobs: vi.fn() }));
 
@@ -12,6 +12,9 @@ function makeRequest(url = "http://localhost/api/jobs") {
 }
 
 describe("GET /api/jobs", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
   it("returns jobs from the backend", async () => {
     mockListJobs.mockResolvedValue({
       jobs: [{ id: "job-1" }],
@@ -39,6 +42,7 @@ describe("GET /api/jobs", () => {
   });
 
   it("forwards the Easy Auth context to listJobs when headers are present", async () => {
+    vi.stubEnv("EASY_AUTH_ENABLED", "true");
     mockListJobs.mockResolvedValue({
       jobs: [],
       total: 0,
