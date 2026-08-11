@@ -112,7 +112,7 @@ describe("listJobs", () => {
     expect(jobs[0].modelDisplayName).toBeUndefined();
   });
 
-  it("sends the bearer token from TRANSCRIPTION_API_KEY", async () => {
+  it("sends the bearer token from TRANSCRIPTION_API_KEY when no auth headers are forwarded", async () => {
     const fetchMock = mockFetchOnce({
       jobs: [],
       total: 0,
@@ -123,6 +123,27 @@ describe("listJobs", () => {
 
     const [, init] = fetchMock.mock.calls[0];
     expect(init.headers.Authorization).toBe("Bearer test-api-key");
+  });
+
+  it("forwards the client-principal header and user Authorization to the backend", async () => {
+    const fetchMock = mockFetchOnce({
+      jobs: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+    });
+
+    await listJobs(undefined, {
+      "x-ms-client-principal": "abc",
+      Authorization: "Bearer t",
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    // The X-Ms-Client-Principal header the backend requires is passed through
+    // verbatim, and the forwarded user Authorization wins over the api-key
+    // fallback.
+    expect(init.headers["x-ms-client-principal"]).toBe("abc");
+    expect(init.headers.Authorization).toBe("Bearer t");
   });
 });
 

@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { uploadAndSubmit } from "@/lib/api-client";
-import { getEasyAuthToken } from "@/lib/auth-utils";
+import { getBackendAuthHeaders } from "@/lib/auth-utils";
 
 // Next.js truncates request bodies larger than experimental.proxyClientMaxBodySize
 // (configured in next.config.ts); the truncated multipart body then fails to
@@ -20,7 +20,7 @@ function isBodyParseError(err: unknown): boolean {
 }
 
 export async function POST(request: NextRequest) {
-  const accessToken = getEasyAuthToken(request);
+  const authHeaders = getBackendAuthHeaders(request);
 
   let form: FormData;
   try {
@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
       file,
       filename,
       audioDurationSeconds,
-      accessToken
+      authHeaders
     );
     return NextResponse.json({ job }, { status: 201 });
   } catch (err) {

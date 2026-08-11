@@ -15,7 +15,7 @@ vi.mock("@/lib/api-client", () => ({
 function requestWithFile(
   file: Blob | null,
   durationSeconds?: string,
-  easyAuthToken?: string
+  easyAuthHeaders?: Record<string, string>
 ) {
   const fields: Record<string, unknown> = { file };
   if (durationSeconds !== undefined) {
@@ -23,8 +23,7 @@ function requestWithFile(
   }
   return {
     headers: {
-      get: (name: string) =>
-        name === "x-ms-token-aad-access-token" ? (easyAuthToken ?? null) : null,
+      get: (name: string) => easyAuthHeaders?.[name] ?? null,
     },
     formData: async () => ({
       get: (key: string) => fields[key] ?? null,
@@ -50,7 +49,7 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       undefined,
-      null
+      {}
     );
   });
 
@@ -64,7 +63,7 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       9360.5,
-      null
+      {}
     );
   });
 
@@ -78,7 +77,7 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       undefined,
-      null
+      {}
     );
   });
 
@@ -93,21 +92,29 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       undefined,
-      null
+      {}
     );
   });
 
-  it("forwards the Easy Auth token to uploadAndSubmit when present", async () => {
+  it("forwards the Easy Auth identity headers to uploadAndSubmit when present", async () => {
     mockUploadAndSubmit.mockResolvedValue({ id: "job-1", status: "PENDING" });
     const { POST } = await import("@/app/api/upload/route");
 
-    await POST(requestWithFile(audioBlob(), undefined, "user-jwt-token"));
+    await POST(
+      requestWithFile(audioBlob(), undefined, {
+        "x-ms-client-principal": "principal-blob",
+        "x-ms-token-aad-access-token": "user-jwt-token",
+      })
+    );
 
     expect(mockUploadAndSubmit).toHaveBeenCalledWith(
       expect.any(Blob),
       "audio",
       undefined,
-      "user-jwt-token"
+      {
+        "x-ms-client-principal": "principal-blob",
+        Authorization: "Bearer user-jwt-token",
+      }
     );
   });
 

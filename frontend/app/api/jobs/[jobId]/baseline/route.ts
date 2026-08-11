@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { BackendApiError, uploadBaselineTranscript } from "@/lib/api-client";
-import { getEasyAuthToken } from "@/lib/auth-utils";
+import { getBackendAuthHeaders } from "@/lib/auth-utils";
 
 interface RouteContext {
   params: Promise<{ jobId: string }>;
@@ -8,7 +8,7 @@ interface RouteContext {
 
 export async function POST(request: NextRequest, { params }: RouteContext) {
   const { jobId } = await params;
-  const accessToken = getEasyAuthToken(request);
+  const authHeaders = getBackendAuthHeaders(request);
 
   try {
     const form = await request.formData();
@@ -22,7 +22,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       jobId,
       file,
       filename,
-      accessToken
+      authHeaders
     );
     return NextResponse.json({ job });
   } catch (err) {

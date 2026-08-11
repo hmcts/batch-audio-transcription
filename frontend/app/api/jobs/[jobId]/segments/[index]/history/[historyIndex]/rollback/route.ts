@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { BackendApiError, rollbackToHistoryEntry } from "@/lib/api-client";
-import { getEasyAuthToken } from "@/lib/auth-utils";
+import { getBackendAuthHeaders } from "@/lib/auth-utils";
 
 interface RouteContext {
   params: Promise<{ jobId: string; index: string; historyIndex: string }>;
@@ -22,13 +22,13 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     );
   }
 
-  const accessToken = getEasyAuthToken(request);
+  const authHeaders = getBackendAuthHeaders(request);
   try {
     const job = await rollbackToHistoryEntry(
       jobId,
       segmentIndex,
       targetHistoryIndex,
-      accessToken
+      authHeaders
     );
     return NextResponse.json({ job });
   } catch (err) {
