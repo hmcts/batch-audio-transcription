@@ -8,7 +8,7 @@ interface PageProps {
 
 export default async function TranscriptPage({ params }: PageProps) {
   const { jobId } = await params;
-  const job = await getJob(jobId);
+  const job = await getJob(jobId, null);
 
   if (!job) {
     notFound();

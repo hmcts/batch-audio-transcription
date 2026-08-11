@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { BackendApiError, correctSegment } from "@/lib/api-client";
-import { getEasyAuthToken } from "@/lib/auth-utils";
+import { getBackendAuthContext } from "@/lib/auth-utils";
 
 interface RouteContext {
   params: Promise<{ jobId: string; index: string }>;
@@ -16,7 +16,7 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
     );
   }
 
-  const accessToken = getEasyAuthToken(request);
+  const auth = getBackendAuthContext(request);
   try {
     const { correctedText } = await request.json();
     if (
@@ -28,12 +28,7 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
         { status: 422 }
       );
     }
-    const job = await correctSegment(
-      jobId,
-      segmentIndex,
-      correctedText,
-      accessToken
-    );
+    const job = await correctSegment(jobId, segmentIndex, correctedText, auth);
     return NextResponse.json({ job });
   } catch (err) {
     if (err instanceof BackendApiError) {

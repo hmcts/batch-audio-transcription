@@ -15,7 +15,8 @@ vi.mock("@/lib/api-client", () => ({
 function requestWithFile(
   file: Blob | null,
   durationSeconds?: string,
-  easyAuthToken?: string
+  easyAuthToken?: string,
+  clientPrincipal?: string
 ) {
   const fields: Record<string, unknown> = { file };
   if (durationSeconds !== undefined) {
@@ -23,8 +24,12 @@ function requestWithFile(
   }
   return {
     headers: {
-      get: (name: string) =>
-        name === "x-ms-token-aad-access-token" ? (easyAuthToken ?? null) : null,
+      get: (name: string) => {
+        if (name === "x-ms-token-aad-access-token")
+          return easyAuthToken ?? null;
+        if (name === "x-ms-client-principal") return clientPrincipal ?? null;
+        return null;
+      },
     },
     formData: async () => ({
       get: (key: string) => fields[key] ?? null,
@@ -50,7 +55,7 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       undefined,
-      null
+      { accessToken: null, clientPrincipal: null }
     );
   });
 
@@ -64,7 +69,7 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       9360.5,
-      null
+      { accessToken: null, clientPrincipal: null }
     );
   });
 
@@ -78,7 +83,7 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       undefined,
-      null
+      { accessToken: null, clientPrincipal: null }
     );
   });
 
@@ -93,11 +98,32 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       undefined,
-      null
+      { accessToken: null, clientPrincipal: null }
     );
   });
 
-  it("forwards the Easy Auth token to uploadAndSubmit when present", async () => {
+  it("forwards both Easy Auth headers to uploadAndSubmit when present", async () => {
+    mockUploadAndSubmit.mockResolvedValue({ id: "job-1", status: "PENDING" });
+    const { POST } = await import("@/app/api/upload/route");
+
+    await POST(
+      requestWithFile(
+        audioBlob(),
+        undefined,
+        "user-jwt-token",
+        "base64principal"
+      )
+    );
+
+    expect(mockUploadAndSubmit).toHaveBeenCalledWith(
+      expect.any(Blob),
+      "audio",
+      undefined,
+      { accessToken: "user-jwt-token", clientPrincipal: "base64principal" }
+    );
+  });
+
+  it("forwards only the access token when clientPrincipal is absent", async () => {
     mockUploadAndSubmit.mockResolvedValue({ id: "job-1", status: "PENDING" });
     const { POST } = await import("@/app/api/upload/route");
 
@@ -107,7 +133,7 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       undefined,
-      "user-jwt-token"
+      { accessToken: "user-jwt-token", clientPrincipal: null }
     );
   });
 

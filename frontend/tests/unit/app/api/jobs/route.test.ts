@@ -38,7 +38,7 @@ describe("GET /api/jobs", () => {
     expect(response.status).toBe(502);
   });
 
-  it("forwards the Easy Auth token to listJobs when present", async () => {
+  it("forwards the Easy Auth context to listJobs when headers are present", async () => {
     mockListJobs.mockResolvedValue({
       jobs: [],
       total: 0,
@@ -48,14 +48,20 @@ describe("GET /api/jobs", () => {
     const { GET } = await import("@/app/api/jobs/route");
 
     const request = new NextRequest("http://localhost/api/jobs", {
-      headers: { "x-ms-token-aad-access-token": "user-jwt-token" },
+      headers: {
+        "x-ms-token-aad-access-token": "user-jwt-token",
+        "x-ms-client-principal": "base64principal",
+      },
     });
     await GET(request);
 
-    expect(mockListJobs).toHaveBeenCalledWith(undefined, "user-jwt-token");
+    expect(mockListJobs).toHaveBeenCalledWith(undefined, {
+      accessToken: "user-jwt-token",
+      clientPrincipal: "base64principal",
+    });
   });
 
-  it("passes null when the Easy Auth header is absent", async () => {
+  it("passes a BackendAuthContext with nulls when Easy Auth headers are absent", async () => {
     mockListJobs.mockResolvedValue({
       jobs: [],
       total: 0,
@@ -66,6 +72,9 @@ describe("GET /api/jobs", () => {
 
     await GET(makeRequest());
 
-    expect(mockListJobs).toHaveBeenCalledWith(undefined, null);
+    expect(mockListJobs).toHaveBeenCalledWith(undefined, {
+      accessToken: null,
+      clientPrincipal: null,
+    });
   });
 });

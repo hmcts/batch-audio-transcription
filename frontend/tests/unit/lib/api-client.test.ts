@@ -65,7 +65,7 @@ describe("listJobs", () => {
   it("maps backend jobs to frontend TranscriptionJob shape", async () => {
     mockFetchOnce({ jobs: [BACKEND_JOB], total: 1, limit: 20, offset: 0 });
 
-    const result = await listJobs();
+    const result = await listJobs(undefined, null);
 
     expect(result.total).toBe(1);
     expect(result.jobs).toHaveLength(1);
@@ -84,7 +84,7 @@ describe("listJobs", () => {
   it("maps run metadata (audio duration, transcription duration, model)", async () => {
     mockFetchOnce({ jobs: [BACKEND_JOB], total: 1, limit: 20, offset: 0 });
 
-    const { jobs } = await listJobs();
+    const { jobs } = await listJobs(undefined, null);
 
     expect(jobs[0].audioDurationSeconds).toBe(754.2);
     expect(jobs[0].transcriptionDurationSeconds).toBe(41.8);
@@ -104,7 +104,7 @@ describe("listJobs", () => {
     };
     mockFetchOnce({ jobs: [pendingJob], total: 1, limit: 20, offset: 0 });
 
-    const { jobs } = await listJobs();
+    const { jobs } = await listJobs(undefined, null);
 
     expect(jobs[0].audioDurationSeconds).toBe(754.2);
     expect(jobs[0].transcriptionDurationSeconds).toBeUndefined();
@@ -119,41 +119,107 @@ describe("listJobs", () => {
       limit: 20,
       offset: 0,
     });
-    await listJobs();
+    await listJobs(undefined, null);
 
     const [, init] = fetchMock.mock.calls[0];
     expect(init.headers.Authorization).toBe("Bearer test-api-key");
   });
 });
 
+describe("rawBackendFetch header assembly", () => {
+  it("uses the accessToken as the Bearer token when provided", async () => {
+    const fetchMock = mockFetchOnce({
+      jobs: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+    });
+    await listJobs(undefined, {
+      accessToken: "user-token",
+      clientPrincipal: null,
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers.Authorization).toBe("Bearer user-token");
+  });
+
+  it("forwards clientPrincipal as x-ms-client-principal when set", async () => {
+    const fetchMock = mockFetchOnce({
+      jobs: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+    });
+    await listJobs(undefined, {
+      accessToken: "user-token",
+      clientPrincipal: "base64principal",
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers["x-ms-client-principal"]).toBe("base64principal");
+  });
+
+  it("omits x-ms-client-principal entirely when clientPrincipal is null", async () => {
+    const fetchMock = mockFetchOnce({
+      jobs: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+    });
+    await listJobs(undefined, {
+      accessToken: "user-token",
+      clientPrincipal: null,
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers["x-ms-client-principal"]).toBeUndefined();
+  });
+
+  it("omits x-ms-client-principal when accessToken is null even if clientPrincipal is set", async () => {
+    const fetchMock = mockFetchOnce({
+      jobs: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+    });
+    await listJobs(undefined, {
+      accessToken: null,
+      clientPrincipal: "base64principal",
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers["x-ms-client-principal"]).toBeUndefined();
+  });
+});
+
 describe("getJob", () => {
   it("returns a mapped job when found", async () => {
     mockFetchOnce(BACKEND_JOB);
-    const job = await getJob(BACKEND_JOB.job_id);
+    const job = await getJob(BACKEND_JOB.job_id, null);
     expect(job?.caseReference).toBe("PA/00001/2026");
   });
 
   it("always leaves caller undefined (caller_name removed in DIAAT-20)", async () => {
     mockFetchOnce(BACKEND_JOB);
-    const job = await getJob(BACKEND_JOB.job_id);
+    const job = await getJob(BACKEND_JOB.job_id, null);
     expect(job?.caller).toBeUndefined();
   });
 
   it("returns null on 404", async () => {
     mockFetchOnce({ detail: "Job not found" }, { ok: false, status: 404 });
-    const job = await getJob("unknown");
+    const job = await getJob("unknown", null);
     expect(job).toBeNull();
   });
 
   it("returns null on 422 (backend rejects non-UUID job ids before lookup)", async () => {
     mockFetchOnce({ detail: "Invalid UUID" }, { ok: false, status: 422 });
-    const job = await getJob("not-a-uuid");
+    const job = await getJob("not-a-uuid", null);
     expect(job).toBeNull();
   });
 
   it("does not swallow non-404 errors", async () => {
     mockFetchOnce({ detail: "boom" }, { ok: false, status: 500 });
-    await expect(getJob("x")).rejects.toThrow();
+    await expect(getJob("x", null)).rejects.toThrow();
   });
 });
 
@@ -165,11 +231,17 @@ describe("submitJob", () => {
       dialogue_entries: null,
     });
 
-    await submitJob("https://storage.example.com/audio.wav?sig=abc", {
-      caseReference: "PA/00002/2026",
-      tribunal: "Tribunal",
-      audioFileName: "hearing2.wav",
-    });
+    await submitJob(
+      "https://storage.example.com/audio.wav?sig=abc",
+      {
+        caseReference: "PA/00002/2026",
+        tribunal: "Tribunal",
+        audioFileName: "hearing2.wav",
+      },
+      undefined,
+      undefined,
+      null
+    );
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain("/api/v1/jobs");
@@ -195,7 +267,8 @@ describe("submitJob", () => {
         audioFileName: "hearing2.wav",
       },
       "uploads/x/hearing2.wav",
-      9360
+      9360,
+      null
     );
 
     const [, init] = fetchMock.mock.calls[0];
@@ -205,7 +278,7 @@ describe("submitJob", () => {
 
   it("maps audio_duration_seconds from the backend onto the job", async () => {
     mockFetchOnce({ ...BACKEND_JOB, audio_duration_seconds: 9360 });
-    const job = await getJob(BACKEND_JOB.job_id);
+    const job = await getJob(BACKEND_JOB.job_id, null);
     expect(job?.audioDurationSeconds).toBe(9360);
   });
 });
@@ -218,7 +291,7 @@ describe("uploadAudio", () => {
     });
 
     const file = new Blob(["fake-bytes"], { type: "audio/wav" });
-    const result = await uploadAudio(file, "hearing.wav");
+    const result = await uploadAudio(file, "hearing.wav", null);
 
     expect(result.audio_url).toBe(
       "https://storage.example.com/audio.wav?sig=xyz"
@@ -256,7 +329,12 @@ describe("uploadAndSubmit", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const file = new Blob(["fake-bytes"], { type: "audio/wav" });
-    const job = await uploadAndSubmit(file, "PA_00003_2026.wav");
+    const job = await uploadAndSubmit(
+      file,
+      "PA_00003_2026.wav",
+      undefined,
+      null
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(job.caseReference).toBe("PA/00003/2026");
@@ -272,7 +350,7 @@ describe("getJobAudio", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const response = await getJobAudio("job-1", "bytes=0-9");
+    const response = await getJobAudio("job-1", "bytes=0-9", null);
     expect(response.status).toBe(206);
     const [, init] = fetchMock.mock.calls[0];
     expect(init.headers.Range).toBe("bytes=0-9");
@@ -286,7 +364,7 @@ describe("getJobAudio", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const response = await getJobAudio("job-1", "bytes=999-1000");
+    const response = await getJobAudio("job-1", "bytes=999-1000", null);
     expect(response.status).toBe(416);
     expect(response.headers.get("Content-Range")).toBe("bytes */20");
   });
@@ -316,7 +394,7 @@ describe("acceptSegment", () => {
       ],
     });
 
-    const job = await acceptSegment(BACKEND_JOB.job_id, 0);
+    const job = await acceptSegment(BACKEND_JOB.job_id, 0, null);
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain(
@@ -331,7 +409,7 @@ describe("acceptSegment", () => {
 
   it("defaults accepted to false when the backend omits it", async () => {
     mockFetchOnce(BACKEND_JOB);
-    const job = await acceptSegment(BACKEND_JOB.job_id, 0);
+    const job = await acceptSegment(BACKEND_JOB.job_id, 0, null);
     expect(job.segments?.[0].accepted).toBe(false);
   });
 });
@@ -365,7 +443,7 @@ describe("alternatives mapping (DIAAT-233)", () => {
       ],
     });
 
-    const job = await getJob(BACKEND_JOB.job_id);
+    const job = await getJob(BACKEND_JOB.job_id, null);
     const alternatives = job?.segments?.[0].alternatives;
     expect(alternatives).toHaveLength(1);
     expect(alternatives?.[0].startWordIndex).toBe(0);
@@ -400,7 +478,7 @@ describe("alternatives mapping (DIAAT-233)", () => {
       ],
     });
 
-    const job = await getJob(BACKEND_JOB.job_id);
+    const job = await getJob(BACKEND_JOB.job_id, null);
     const group = job?.segments?.[0].alternatives?.[0];
     expect(group?.startWordIndex).toBeUndefined();
     expect(group?.endWordIndex).toBeUndefined();
@@ -408,7 +486,7 @@ describe("alternatives mapping (DIAAT-233)", () => {
 
   it("leaves alternatives undefined when the backend omits them", async () => {
     mockFetchOnce(BACKEND_JOB);
-    const job = await getJob(BACKEND_JOB.job_id);
+    const job = await getJob(BACKEND_JOB.job_id, null);
     expect(job?.segments?.[0].alternatives).toBeUndefined();
   });
 });
