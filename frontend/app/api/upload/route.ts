@@ -4,7 +4,24 @@ import { getEasyAuthToken } from "@/lib/auth-utils";
 
 export async function POST(request: NextRequest) {
   const accessToken = getEasyAuthToken(request);
-  const form = await request.formData();
+
+  // Next.js truncates request bodies larger than
+  // experimental.proxyClientMaxBodySize (configured in next.config.ts), which
+  // corrupts the multipart payload so formData() throws. Handle it here to
+  // return a clear 413 instead of an opaque 500.
+  let form: FormData;
+  try {
+    form = await request.formData();
+  } catch (err) {
+    console.error("Failed to parse upload request body", err);
+    return NextResponse.json(
+      {
+        error: "Uploaded file is too large or the request body was malformed.",
+      },
+      { status: 413 }
+    );
+  }
+
   const file = form.get("file");
 
   if (!(file instanceof Blob)) {

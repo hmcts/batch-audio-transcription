@@ -125,4 +125,24 @@ describe("POST /api/upload", () => {
 
     expect(response.status).toBe(502);
   });
+
+  it("returns 413 when the request body is truncated or unparseable", async () => {
+    // Next.js truncates bodies larger than experimental.proxyClientMaxBodySize,
+    // which corrupts the multipart payload and makes formData() throw. The route
+    // must surface a clear 413 rather than an opaque 500, and must not call the
+    // backend.
+    const { POST } = await import("@/app/api/upload/route");
+
+    const request = {
+      headers: { get: () => null },
+      formData: async () => {
+        throw new TypeError("Failed to parse body as FormData.");
+      },
+    } as unknown as NextRequest;
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(413);
+    expect(mockUploadAndSubmit).not.toHaveBeenCalled();
+  });
 });
