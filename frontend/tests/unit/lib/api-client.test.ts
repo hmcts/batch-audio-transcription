@@ -174,6 +174,22 @@ describe("rawBackendFetch header assembly", () => {
     const [, init] = fetchMock.mock.calls[0];
     expect(init.headers["x-ms-client-principal"]).toBeUndefined();
   });
+
+  it("omits x-ms-client-principal when accessToken is null even if clientPrincipal is set", async () => {
+    const fetchMock = mockFetchOnce({
+      jobs: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+    });
+    await listJobs(undefined, {
+      accessToken: null,
+      clientPrincipal: "base64principal",
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers["x-ms-client-principal"]).toBeUndefined();
+  });
 });
 
 describe("getJob", () => {
