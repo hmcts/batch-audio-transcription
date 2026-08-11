@@ -17,7 +17,13 @@ describe("auth-utils", () => {
   });
 
   afterEach(() => {
-    process.env.EASY_AUTH_ENABLED = original;
+    // Restore precisely: assigning `undefined` would leak the string
+    // "undefined" into the env for later tests that expect it unset.
+    if (original === undefined) {
+      delete process.env.EASY_AUTH_ENABLED;
+    } else {
+      process.env.EASY_AUTH_ENABLED = original;
+    }
   });
 
   describe("getBackendAuthContext", () => {
