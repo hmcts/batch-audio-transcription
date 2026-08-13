@@ -2576,3 +2576,47 @@ class TestDeleteJob:
         assert response.status_code == 502
         mock_session.delete.assert_not_called()
         mock_session.commit.assert_not_called()
+
+    def test_deletes_batch_job_best_effort(self, client, as_current_user, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job()
+        job.batch_job_url = "https://region.api.cognitive.microsoft.com/.../transcriptions/abc"
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        delete_batch_job_mock = mocker.patch(
+            "transcription_svc.api.routes.delete_batch_job", new=mocker.AsyncMock()
+        )
+
+        mock_session = MagicMock()
+        client.app.dependency_overrides[get_session] = lambda: mock_session
+        try:
+            response = client.delete(f"/api/v1/jobs/{job.id}")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 204
+        delete_batch_job_mock.assert_awaited_once_with(job.batch_job_url)
+        mock_session.delete.assert_called_once_with(job)
+        mock_session.commit.assert_called_once()
+
+    def test_batch_job_deletion_failure_still_deletes_row(self, client, as_current_user, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job()
+        job.batch_job_url = "https://region.api.cognitive.microsoft.com/.../transcriptions/abc"
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mocker.patch(
+            "transcription_svc.api.routes.delete_batch_job",
+            new=mocker.AsyncMock(side_effect=RuntimeError("batch API down")),
+        )
+
+        mock_session = MagicMock()
+        client.app.dependency_overrides[get_session] = lambda: mock_session
+        try:
+            response = client.delete(f"/api/v1/jobs/{job.id}")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 204
+        mock_session.delete.assert_called_once_with(job)
+        mock_session.commit.assert_called_once()
