@@ -424,6 +424,15 @@ export async function getJob(
   }
 }
 
+export async function deleteJob(
+  jobId: string,
+  auth: BackendAuthContext | null
+): Promise<void> {
+  // 204 No Content — backendFetch throws BackendApiError on any non-2xx, so a
+  // clean return here means the job (transcript + audio) was deleted.
+  await backendFetch(`/api/v1/jobs/${jobId}`, { method: "DELETE" }, auth);
+}
+
 // Returns the backend's raw Response — including non-2xx ones (404 if the
 // job/blob doesn't exist, 416 for an unsatisfiable range, etc.) — so the
 // route handler can forward the real status, headers, and body straight to

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acceptSegment,
   colorForSpeaker,
+  deleteJob,
   getJob,
   getJobAudio,
   listJobs,
@@ -411,6 +412,27 @@ describe("acceptSegment", () => {
     mockFetchOnce(BACKEND_JOB);
     const job = await acceptSegment(BACKEND_JOB.job_id, 0, null);
     expect(job.segments?.[0].accepted).toBe(false);
+  });
+});
+
+describe("deleteJob", () => {
+  it("issues a DELETE to the job endpoint and resolves on 204", async () => {
+    const fetchMock = mockFetchOnce(null, { ok: true, status: 204 });
+
+    await expect(deleteJob("job-1", null)).resolves.toBeUndefined();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("/api/v1/jobs/job-1");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("throws BackendApiError with the status on failure", async () => {
+    mockFetchOnce({ detail: "nope" }, { ok: false, status: 404 });
+
+    await expect(deleteJob("job-1", null)).rejects.toMatchObject({
+      name: "BackendApiError",
+      status: 404,
+    });
   });
 });
 
