@@ -26,11 +26,13 @@ const STATUS_ORDER: JobStatus[] = [
 interface FilterableJobsSectionProps {
   title: string;
   jobs: TranscriptionJob[];
+  onDelete?: (jobId: string) => void;
 }
 
 export function FilterableJobsSection({
   title,
   jobs,
+  onDelete,
 }: FilterableJobsSectionProps) {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<JobsSortKey>("uploadedAt");
@@ -139,6 +141,7 @@ export function FilterableJobsSection({
         sortKey={sortKey}
         sortDirection={sortDirection}
         onSortChange={handleSortChange}
+        onDelete={onDelete}
       />
     </section>
   );

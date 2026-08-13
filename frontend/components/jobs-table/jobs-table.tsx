@@ -10,6 +10,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { JobProgress } from "@/components/job-status/job-progress";
 import { JobStatusBadge } from "@/components/job-status/job-status-badge";
+import { DeleteJobButton } from "@/components/jobs-table/delete-job-button";
 import {
   hasRunMetadata,
   JobMetadataPopover,
@@ -31,6 +32,7 @@ interface JobsTableProps {
   sortKey?: JobsSortKey;
   sortDirection?: SortDirection;
   onSortChange?: (key: JobsSortKey) => void;
+  onDelete?: (jobId: string) => void;
 }
 
 function SortableHeader({
@@ -78,6 +80,7 @@ export function JobsTable({
   sortKey,
   sortDirection,
   onSortChange,
+  onDelete,
 }: JobsTableProps) {
   const router = useRouter();
 
@@ -117,6 +120,9 @@ export function JobsTable({
               onSortChange={onSortChange}
             />
             <th className="px-4 py-3 text-left font-semibold">Transcript</th>
+            <th className="px-4 py-3 text-left font-semibold">
+              <span className="sr-only">Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
@@ -168,6 +174,15 @@ export function JobsTable({
                 >
                   {TRANSCRIPT_LINK_LABEL[job.status]}
                 </Link>
+              </td>
+              <td className="px-4 py-3">
+                {onDelete && (
+                  <DeleteJobButton
+                    jobId={job.id}
+                    caseReference={job.caseReference}
+                    onDeleted={onDelete}
+                  />
+                )}
               </td>
             </tr>
           ))}
