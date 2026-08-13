@@ -79,4 +79,31 @@ describe("DeleteJobButton", () => {
     expect(onDeleted).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
+
+  it("does not let a click on the dialog overlay bubble to an ancestor handler", async () => {
+    // The button renders inside a click-to-navigate table row. React replays
+    // events through the component tree even across the dialog's portal, so a
+    // click on the backdrop (overlay) must not reach the row's onClick.
+    const user = userEvent.setup();
+    const ancestorClick = vi.fn();
+    render(
+      <button type="button" onClick={ancestorClick}>
+        <DeleteJobButton
+          jobId="job-1"
+          caseReference="PA/1"
+          onDeleted={vi.fn()}
+        />
+      </button>
+    );
+
+    await user.click(screen.getByRole("button", { name: /delete PA\/1/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    const overlay = dialog.previousElementSibling as HTMLElement;
+    expect(overlay).not.toBeNull();
+
+    ancestorClick.mockClear();
+    await user.click(overlay);
+
+    expect(ancestorClick).not.toHaveBeenCalled();
+  });
 });

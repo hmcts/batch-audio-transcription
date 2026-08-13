@@ -29,7 +29,15 @@ const AlertDialogContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>
 >(({ className, ...props }, ref) => (
   <AlertDialogPortal>
-    <AlertDialogOverlay />
+    {/*
+      Stop click events on the backdrop from bubbling. Radix portals the
+      overlay to <body>, but React still replays events through the component
+      tree — so without this, a backdrop click reaches whatever ancestor
+      rendered the dialog (e.g. a click-to-navigate table row). Radix's own
+      outside-dismiss uses document-level pointer events, so this does not
+      interfere with it.
+    */}
+    <AlertDialogOverlay onClick={(e) => e.stopPropagation()} />
     <AlertDialogPrimitive.Content
       ref={ref}
       className={cn(
