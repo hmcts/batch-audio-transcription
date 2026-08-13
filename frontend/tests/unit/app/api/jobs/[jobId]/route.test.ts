@@ -47,6 +47,8 @@ describe("DELETE /api/jobs/[jobId]", () => {
     const response = await DELETE(makeRequest(), context);
 
     expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body).toEqual({ error: expect.any(String) });
   });
 
   it("maps any other backend error to 502", async () => {
@@ -56,5 +58,7 @@ describe("DELETE /api/jobs/[jobId]", () => {
     const response = await DELETE(makeRequest(), context);
 
     expect(response.status).toBe(502);
+    const body = await response.json();
+    expect(body).toEqual({ error: expect.any(String) });
   });
 });
