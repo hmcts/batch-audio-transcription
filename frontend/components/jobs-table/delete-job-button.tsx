@@ -65,7 +65,9 @@ export function DeleteJobButton({
           <Trash2 className="size-4" />
         </Button>
       </AlertDialogTrigger>
-      {/* Portaled to <body>, so clicks inside never bubble to the row. */}
+      {/* React replays events through the React component tree, not the DOM
+          tree, so a click here (e.g. Cancel) would still bubble to the
+          parent row's click-to-navigate handler despite the DOM portal. */}
       <AlertDialogContent onClick={(e) => e.stopPropagation()}>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this record?</AlertDialogTitle>
