@@ -72,6 +72,16 @@ def read_range(blob_name: str, start: int, length: int) -> bytes:
         return f.read(length)
 
 
+def delete(blob_name: str) -> None:
+    """Remove a locally-stored blob. Idempotent: a missing file is a no-op.
+
+    Mirrors the Azure backend's not-found handling so a re-issued delete (or a
+    job whose blob was already cleaned up) doesn't error.
+    """
+    target = _storage_root() / _flat_filename(blob_name)
+    target.unlink(missing_ok=True)
+
+
 def build_url(blob_name: str) -> str:
     base = get_settings().LOCAL_AUDIO_BASE_URL
     if not base:

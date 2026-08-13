@@ -203,7 +203,13 @@ class AsyncAzureBlobManager:
         Returns
         -------
         bool
-            True if successful, False otherwise.
+            True if the blob was deleted, False if it did not exist.
+
+        Raises
+        ------
+        Exception
+            On a genuine storage error (anything other than not-found), so
+            callers can distinguish "already gone" from "delete failed".
         """
         try:
             container = container_name or self.container_name
@@ -214,11 +220,15 @@ class AsyncAzureBlobManager:
 
             logger.info(f"Successfully deleted blob: {container}/{blob_name}")
         except ResourceNotFoundError:
+            # Not found is idempotent success for callers: there is nothing
+            # left to remove. Distinguished from a genuine storage error
+            # (re-raised below) so a delete endpoint can 502 on the latter
+            # while treating this as "already deleted".
             logger.warning(f"Blob not found: {container}/{blob_name}")
             return False
         except Exception as e:
             logger.error(f"Failed to delete blob {container}/{blob_name}: {e}")
-            return False
+            raise
         else:
             return True
 

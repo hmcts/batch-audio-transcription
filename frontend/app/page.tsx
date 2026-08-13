@@ -96,6 +96,10 @@ export default function DashboardPage() {
     [refresh]
   );
 
+  const handleDelete = useCallback((jobId: string) => {
+    setJobs((prev) => prev.filter((job) => job.id !== jobId));
+  }, []);
+
   const completedJobs = jobs.filter((job) => job.status === "COMPLETED");
 
   return (
@@ -128,11 +132,19 @@ export default function DashboardPage() {
             <p className="text-muted-foreground">Loading…</p>
           </section>
         ) : (
-          <FilterableJobsSection title="Transcripts" jobs={completedJobs} />
+          <FilterableJobsSection
+            title="Transcripts"
+            jobs={completedJobs}
+            onDelete={handleDelete}
+          />
         )}
 
         {/* Uploads: every job regardless of status — full history */}
-        <FilterableJobsSection title="Uploads" jobs={jobs} />
+        <FilterableJobsSection
+          title="Uploads"
+          jobs={jobs}
+          onDelete={handleDelete}
+        />
       </div>
     </main>
   );

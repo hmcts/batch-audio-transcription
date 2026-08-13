@@ -32,6 +32,7 @@ from sqlmodel import Session
 from transcription_svc.audio import local_storage
 from transcription_svc.audio.accuracy import DEFAULT_CONFIDENCE_THRESHOLD, compute_accuracy
 from transcription_svc.audio.azure_utils import AsyncAzureBlobManager
+from transcription_svc.audio.batch_client import delete_batch_job
 from transcription_svc.audio.preprocessing import AudioDecodeError, normalize_to_wav
 from transcription_svc.audio.submission import submit_and_queue_batch_job
 from transcription_svc.config.settings import get_settings
@@ -1298,10 +1299,42 @@ async def delete_job(
     session: Session = Depends(get_session),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> Response:
+    """Permanently delete a job: its transcript (the DB row) and audio blob.
+
+    Ownership is enforced by _check_job_access (404 for a non-owner who is
+    not a SystemAdministrator). The audio blob is removed before the row so a
+    genuine storage failure surfaces as a 502 with the record left intact,
+    rather than orphaning audio behind a deleted row. A blob that's already
+    gone is treated as success (idempotent). An in-flight Azure batch job is
+    cleaned up best-effort so deleting a still-processing job doesn't leave it
+    running.
+    """
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     _check_job_access(job, current_user)
+
+    if job.audio_blob_path:
+        try:
+            if get_settings().AUDIO_STORAGE_BACKEND == "local":
+                local_storage.delete(job.audio_blob_path)
+            else:
+                async with AsyncAzureBlobManager() as blob_manager:
+                    await blob_manager.delete_blob(job.audio_blob_path)
+        except Exception as exc:  # noqa: BLE001 — surfaced to the caller as a 502
+            logger.error("Failed to delete audio blob %s: %s", job.audio_blob_path, exc)
+            raise HTTPException(
+                status_code=502, detail="Failed to delete the audio file; job not deleted"
+            ) from exc
+
+    # Best-effort: an in-flight batch job would otherwise keep running on
+    # Azure after its DB row is gone. Never blocks the delete.
+    if job.batch_job_url:
+        try:
+            await delete_batch_job(job.batch_job_url)
+        except Exception as exc:  # noqa: BLE001 — best-effort cleanup
+            logger.warning("Could not delete batch job %s: %s", job.batch_job_url, exc)
+
     session.delete(job)
     session.commit()
     return Response(status_code=204)

@@ -105,3 +105,19 @@ class TestBuildUrl:
 
         with pytest.raises(ValueError, match="LOCAL_AUDIO_BASE_URL"):
             local_storage.build_url("uploads/caller-1/file.wav")
+
+
+class TestDelete:
+    def test_removes_stored_file(self, local_storage_dir):
+        local_storage.save(b"audio", "uploads/caller-1/file.wav")
+        local_storage.delete("uploads/caller-1/file.wav")
+        with pytest.raises(FileNotFoundError):
+            local_storage.read("uploads/caller-1/file.wav")
+
+    def test_missing_file_is_a_noop(self):
+        # Idempotent: deleting a file that was never stored must not raise.
+        local_storage.delete("uploads/caller-1/never-existed.wav")
+
+    def test_rejects_path_traversal(self):
+        with pytest.raises(ValueError, match="invalid blob_name"):
+            local_storage.delete("../../etc/passwd")

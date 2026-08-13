@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { JobsTable } from "@/components/jobs-table/jobs-table";
@@ -7,6 +7,12 @@ import { MOCK_JOBS } from "@/lib/mock-data";
 const push = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push }),
+}));
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
+vi.mock("@/lib/base-path", () => ({
+  apiPath: (p: string) => `http://localhost${p}`,
 }));
 
 describe("JobsTable", () => {
@@ -62,6 +68,31 @@ describe("JobsTable", () => {
   it("keeps rows queryable by their table row role", () => {
     render(<JobsTable jobs={[MOCK_JOBS[0]]} />);
     expect(screen.getAllByRole("row").length).toBeGreaterThan(0);
+  });
+
+  it("renders a delete button for each job", () => {
+    render(<JobsTable jobs={MOCK_JOBS} onDelete={vi.fn()} />);
+    expect(screen.getAllByRole("button", { name: /delete/i }).length).toBe(
+      MOCK_JOBS.length
+    );
+  });
+
+  it("calls onDelete after a confirmed deletion", async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, status: 204 })
+    );
+
+    const oneJob = [MOCK_JOBS[0]];
+    render(<JobsTable jobs={oneJob} onDelete={onDelete} />);
+
+    await user.click(screen.getByRole("button", { name: /delete/i }));
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+
+    await waitFor(() => expect(onDelete).toHaveBeenCalledWith(oneJob[0].id));
+    vi.unstubAllGlobals();
   });
 });
 

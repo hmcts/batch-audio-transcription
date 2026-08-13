@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from transcription_svc.api.app import create_app
+from transcription_svc.config.settings import get_settings
 from transcription_svc.database.models import JobStatus, TranscriptionJob, User
 
 _TEST_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -2479,3 +2480,143 @@ class TestDeleteJob:
 
         assert response.status_code == 204
         mock_session.delete.assert_called_once_with(job)
+
+    def test_deletes_local_audio_blob(self, client, as_current_user, mocker, tmp_path, monkeypatch):
+        from transcription_svc.database.engine import get_session
+
+        monkeypatch.setenv("AUDIO_STORAGE_BACKEND", "local")
+        monkeypatch.setenv("LOCAL_AUDIO_STORAGE_DIR", str(tmp_path))
+        get_settings.cache_clear()
+
+        job = _make_job()
+        job.audio_blob_path = "uploads/caller-1/file.wav"
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        delete_mock = mocker.patch("transcription_svc.api.routes.local_storage.delete")
+
+        mock_session = MagicMock()
+        client.app.dependency_overrides[get_session] = lambda: mock_session
+        try:
+            response = client.delete(f"/api/v1/jobs/{job.id}")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+            get_settings.cache_clear()
+
+        assert response.status_code == 204
+        delete_mock.assert_called_once_with("uploads/caller-1/file.wav")
+        mock_session.delete.assert_called_once_with(job)
+        mock_session.commit.assert_called_once()
+
+    def test_deletes_azure_audio_blob(self, client, as_current_user, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job()
+        job.audio_blob_path = "uploads/caller-1/file.wav"
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        manager = mocker.AsyncMock()
+        manager.delete_blob = mocker.AsyncMock(return_value=True)
+        manager.__aenter__ = mocker.AsyncMock(return_value=manager)
+        manager.__aexit__ = mocker.AsyncMock(return_value=False)
+        mocker.patch("transcription_svc.api.routes.AsyncAzureBlobManager", return_value=manager)
+
+        mock_session = MagicMock()
+        client.app.dependency_overrides[get_session] = lambda: mock_session
+        try:
+            response = client.delete(f"/api/v1/jobs/{job.id}")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 204
+        manager.delete_blob.assert_awaited_once_with("uploads/caller-1/file.wav")
+        mock_session.delete.assert_called_once_with(job)
+
+    def test_missing_azure_blob_still_deletes_row(self, client, as_current_user, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job()
+        job.audio_blob_path = "uploads/caller-1/file.wav"
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        manager = mocker.AsyncMock()
+        manager.delete_blob = mocker.AsyncMock(return_value=False)  # not found
+        manager.__aenter__ = mocker.AsyncMock(return_value=manager)
+        manager.__aexit__ = mocker.AsyncMock(return_value=False)
+        mocker.patch("transcription_svc.api.routes.AsyncAzureBlobManager", return_value=manager)
+
+        mock_session = MagicMock()
+        client.app.dependency_overrides[get_session] = lambda: mock_session
+        try:
+            response = client.delete(f"/api/v1/jobs/{job.id}")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 204
+        mock_session.delete.assert_called_once_with(job)
+
+    def test_genuine_blob_error_returns_502_and_keeps_row(self, client, as_current_user, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job()
+        job.audio_blob_path = "uploads/caller-1/file.wav"
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+
+        manager = mocker.AsyncMock()
+        manager.delete_blob = mocker.AsyncMock(side_effect=RuntimeError("storage down"))
+        manager.__aenter__ = mocker.AsyncMock(return_value=manager)
+        manager.__aexit__ = mocker.AsyncMock(return_value=False)
+        mocker.patch("transcription_svc.api.routes.AsyncAzureBlobManager", return_value=manager)
+
+        mock_session = MagicMock()
+        client.app.dependency_overrides[get_session] = lambda: mock_session
+        try:
+            response = client.delete(f"/api/v1/jobs/{job.id}")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 502
+        mock_session.delete.assert_not_called()
+        mock_session.commit.assert_not_called()
+
+    def test_deletes_batch_job_best_effort(self, client, as_current_user, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job()
+        job.batch_job_url = "https://region.api.cognitive.microsoft.com/.../transcriptions/abc"
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        delete_batch_job_mock = mocker.patch(
+            "transcription_svc.api.routes.delete_batch_job", new=mocker.AsyncMock()
+        )
+
+        mock_session = MagicMock()
+        client.app.dependency_overrides[get_session] = lambda: mock_session
+        try:
+            response = client.delete(f"/api/v1/jobs/{job.id}")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 204
+        delete_batch_job_mock.assert_awaited_once_with(job.batch_job_url)
+        mock_session.delete.assert_called_once_with(job)
+        mock_session.commit.assert_called_once()
+
+    def test_batch_job_deletion_failure_still_deletes_row(self, client, as_current_user, mocker):
+        from transcription_svc.database.engine import get_session
+
+        job = _make_job()
+        job.batch_job_url = "https://region.api.cognitive.microsoft.com/.../transcriptions/abc"
+        mocker.patch("transcription_svc.api.routes.get_job_by_id", return_value=job)
+        mocker.patch(
+            "transcription_svc.api.routes.delete_batch_job",
+            new=mocker.AsyncMock(side_effect=RuntimeError("batch API down")),
+        )
+
+        mock_session = MagicMock()
+        client.app.dependency_overrides[get_session] = lambda: mock_session
+        try:
+            response = client.delete(f"/api/v1/jobs/{job.id}")
+        finally:
+            client.app.dependency_overrides.pop(get_session, None)
+
+        assert response.status_code == 204
+        mock_session.delete.assert_called_once_with(job)
+        mock_session.commit.assert_called_once()
