@@ -15,32 +15,40 @@ describe("middleware auth gate", () => {
     vi.unstubAllEnvs();
   });
 
-  it("lets the version endpoint through without auth (public for the deploy gate)", () => {
-    vi.stubEnv("NODE_ENV", "production");
-    const res = middleware(request("/api/version"));
-    // NextResponse.next() has no redirect Location header.
-    expect(res.headers.get("location")).toBeNull();
+  describe("when Easy Auth is enforced (EASY_AUTH_ENABLED=true — stg/prod)", () => {
+    it("redirects unauthenticated requests to the Easy Auth login endpoint", () => {
+      vi.stubEnv("EASY_AUTH_ENABLED", "true");
+      const res = middleware(request("/some/protected/page"));
+      const location = res.headers.get("location");
+      expect(location).toContain("/.auth/login/aad");
+      expect(location).toContain(
+        "post_login_redirect_uri=%2Fsome%2Fprotected%2Fpage"
+      );
+    });
+
+    it("allows authenticated requests (AppServiceAuthSession cookie present)", () => {
+      vi.stubEnv("EASY_AUTH_ENABLED", "true");
+      const res = middleware(request("/some/protected/page", { cookie: true }));
+      expect(res.headers.get("location")).toBeNull();
+    });
+
+    it("still lets the public version endpoint through without auth", () => {
+      vi.stubEnv("EASY_AUTH_ENABLED", "true");
+      const res = middleware(request("/api/version"));
+      expect(res.headers.get("location")).toBeNull();
+    });
   });
 
-  it("redirects unauthenticated requests to the Easy Auth login endpoint", () => {
-    vi.stubEnv("NODE_ENV", "production");
-    const res = middleware(request("/some/protected/page"));
-    const location = res.headers.get("location");
-    expect(location).toContain("/.auth/login/aad");
-    expect(location).toContain(
-      "post_login_redirect_uri=%2Fsome%2Fprotected%2Fpage"
-    );
-  });
+  describe("when Easy Auth is not enforced (dev / local)", () => {
+    it("leaves the app open when EASY_AUTH_ENABLED=false (deployed dev)", () => {
+      vi.stubEnv("EASY_AUTH_ENABLED", "false");
+      const res = middleware(request("/some/protected/page"));
+      expect(res.headers.get("location")).toBeNull();
+    });
 
-  it("allows authenticated requests (AppServiceAuthSession cookie present)", () => {
-    vi.stubEnv("NODE_ENV", "production");
-    const res = middleware(request("/some/protected/page", { cookie: true }));
-    expect(res.headers.get("location")).toBeNull();
-  });
-
-  it("skips the gate entirely in development", () => {
-    vi.stubEnv("NODE_ENV", "development");
-    const res = middleware(request("/some/protected/page"));
-    expect(res.headers.get("location")).toBeNull();
+    it("leaves the app open when EASY_AUTH_ENABLED is unset (local dev)", () => {
+      const res = middleware(request("/some/protected/page"));
+      expect(res.headers.get("location")).toBeNull();
+    });
   });
 });
