@@ -82,7 +82,11 @@ jobs:
       run:
         working-directory: frontend
     env:
-      API_VERSION_URL: https://hmcts-batch-transcription-dev.azurewebsites.net/api/v1/version
+      # The API App Service is locked to the frontend subnet (ip_restriction), so
+      # it is unreachable from this runner directly. Poll the backend version
+      # through the frontend's Caddy proxy instead (/api/* -> backend); Easy Auth
+      # excludes /api/v1/version so the proxy path is publicly reachable.
+      API_VERSION_URL: https://hmcts-batch-transcription-frontend-dev.azurewebsites.net/api/v1/version
       FRONTEND_VERSION_URL: https://hmcts-batch-transcription-frontend-dev.azurewebsites.net/batch/api/version
       FRONTEND_BASE_URL: https://hmcts-batch-transcription-frontend-dev.azurewebsites.net
       # The expected deployed version: the full git SHA of the commit that
