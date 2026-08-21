@@ -38,9 +38,27 @@ depends_on = None
 _CALLER_NAME = "frontend-service"
 
 
+# Environments where the frontend service is expected to exist, so a missing
+# FRONTEND_SERVICE_API_KEY is a misconfiguration rather than a legitimate absence.
+_DEPLOYED_ENVIRONMENTS = ("dev", "stg", "prod")
+
+
 def upgrade() -> None:
     api_key = os.environ.get("FRONTEND_SERVICE_API_KEY")
     if not api_key:
+        environment = os.environ.get("ENVIRONMENT", "local").lower()
+        if environment in _DEPLOYED_ENVIRONMENTS:
+            # Failing here (rather than returning) keeps Alembic from recording
+            # 013 as applied, so the re-seed still runs on a later deploy once the
+            # key is available. A silent return would stamp the revision and the
+            # caller would stay stranded on the old hash forever.
+            raise RuntimeError(
+                "FRONTEND_SERVICE_API_KEY is not set but ENVIRONMENT="
+                f"{environment!r}; refusing to record migration 013 as applied "
+                "without re-seeding the frontend-service caller. Fix the Key "
+                "Vault reference / app setting and re-deploy."
+            )
+        # local / test / CI: no frontend service is configured — nothing to seed.
         return
 
     from transcription_svc.auth.validators import (
