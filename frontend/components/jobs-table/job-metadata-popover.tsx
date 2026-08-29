@@ -13,7 +13,7 @@ interface JobMetadataPopoverProps {
 // authenticated model.self endpoint. Linked only when we're showing a
 // resolved friendly name so a clerk can read what a base model is.
 const SPEECH_MODELS_DOCS_URL =
-  "https://learn.microsoft.com/azure/ai-services/speech-service/how-to-custom-speech-choose-model";
+  "https://learn.microsoft.com/en-us/azure/ai-services/speech-service/batch-transcription";
 
 // Neutral label shown when the only thing we have is a raw authenticated
 // model.self URL (historical jobs / failed resolution). The raw URL is an
@@ -106,7 +106,10 @@ export function JobMetadataPopover({ job }: JobMetadataPopoverProps) {
         </div>
         <div className="flex items-baseline justify-between gap-3">
           <dt className="text-muted-foreground shrink-0">Model</dt>
-          <dd className="truncate font-medium" title={safeLabel ?? undefined}>
+          <dd
+            className="min-w-0 break-words text-right font-medium"
+            title={safeLabel ?? undefined}
+          >
             {modelLabel}
           </dd>
         </div>
