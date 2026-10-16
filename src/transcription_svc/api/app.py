@@ -9,11 +9,13 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from hmcts_otel.fastapi import instrument_fastapi
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from transcription_svc.api.routes import limiter, router
 from transcription_svc.config.settings import get_settings
+from transcription_svc.telemetry import configure_telemetry
 
 _polling_task = None
 
@@ -74,8 +76,15 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
+    # Telemetry is flushed by hmcts-otel's exit hook when the process ends; shutting it
+    # down here would leave the rest of the process unconfigured and unredacted.
+
 
 def create_app() -> FastAPI:
+    # Before the app exists: logging, tracing, metrics and Sentry (DIAAT-205).
+    # This is also what initialises Sentry, which was configured but never
+    # started (DIAAT-264).
+    configure_telemetry()
     settings = get_settings()
 
     app = FastAPI(
@@ -103,4 +112,6 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(router)
+    # Request spans and metrics (health probes excluded) and X-Request-Id correlation.
+    instrument_fastapi(app)
     return app

@@ -36,6 +36,9 @@ dependencies = [
     "python-multipart>=0.0.9",
     "rapidfuzz>=3.14.5",
     "hmcts-fastapi-azure-auth",
+    # Telemetry (DIAAT-205). Brings azure-monitor-opentelemetry and the FastAPI
+    # instrumentation; configured in src/transcription_svc/telemetry.py.
+    "hmcts-otel[fastapi,sentry]",
 ]
 
 [project.optional-dependencies]
@@ -49,6 +52,8 @@ dev = [
 
 [tool.uv.sources]
 hmcts-fastapi-azure-auth = { path = "./vendor/hmcts_fastapi_azure_auth-0.2.0-py3-none-any.whl" }
+# TEMPORARY: vendored until hmcts/hmcts-otel is published to the hmcts-lib feed (OBS-1).
+hmcts-otel = { path = "./vendor/hmcts_otel-0.1.0-py3-none-any.whl" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/transcription_svc"]

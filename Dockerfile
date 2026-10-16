@@ -14,9 +14,10 @@ WORKDIR /app
 COPY vendor/ vendor/
 COPY pyproject.toml .
 COPY src/ src/
-# pip does not understand [tool.uv.sources], so install the vendored wheel
+# pip does not understand [tool.uv.sources], so install the vendored wheels
 # explicitly before pip resolves the main package's dependencies.
 RUN pip install --no-cache-dir vendor/hmcts_fastapi_azure_auth-*.whl \
+ && pip install --no-cache-dir "$(ls vendor/hmcts_otel-*.whl)[fastapi,sentry]" \
  && pip install --no-cache-dir "." \
  && rm -rf vendor/
 COPY migrations/ migrations/
