@@ -307,6 +307,12 @@ class TranscriptionJob(BaseTable, table=True):
     needs_cleanup: bool = Field(default=False)
     cleanup_failure_reason: str | None = Field(default=None)
 
+    # W3C traceparent of the request that created the job (DIAAT-276). The poller,
+    # minutes or hours later and possibly in another replica, links its spans to it,
+    # so the job's whole lifecycle is one linked trace in App Insights. Not secret:
+    # trace and span IDs only.
+    trace_parent: str | None = Field(default=None, max_length=64)
+
     # Webhook delivery guard — set atomically by the replica that wins the dispatch race.
     # NULL means no webhook has been dispatched yet for this job.
     webhook_dispatched_at: datetime | None = Field(default=None)

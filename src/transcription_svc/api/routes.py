@@ -23,6 +23,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
+from hmcts_otel import StageHandle, journey, stage
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -50,6 +51,7 @@ from transcription_svc.database.models import (
     TranscriptionJob,
     WordCorrection,
 )
+from transcription_svc.telemetry import JOURNEY_UPLOAD
 from transcription_svc.utils.approles import get_valid_roles
 from transcription_svc.utils.auth_models import AuthenticatedUser
 from transcription_svc.utils.dependencies import get_current_user
@@ -556,15 +558,31 @@ async def upload_audio(
     file: UploadFile = File(...),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> UploadResponse:
+    # DIAAT-276: the upload is its own journey, identified by the UUID that also goes
+    # into the blob name; the job created from it carries that ID as its parent.
+    upload_id = uuid4()
+    with journey(JOURNEY_UPLOAD, str(upload_id)), stage("upload") as upload_stage:
+        return await _upload_audio(file, current_user, upload_id, upload_stage)
+
+
+async def _upload_audio(
+    file: UploadFile, current_user: AuthenticatedUser, upload_id: UUID, upload_stage: StageHandle
+) -> UploadResponse:
     extension = PurePosixPath(file.filename or "").suffix.lower()
     if extension not in _ALLOWED_AUDIO_EXTENSIONS:
+        upload_stage.fail("upload.unsupported_format")
         raise HTTPException(
             status_code=422,
             detail=f"Unsupported file type '{extension}'. "
             f"Allowed: {', '.join(sorted(_ALLOWED_AUDIO_EXTENSIONS))}",
         )
+    upload_stage.set_attribute("audio.format", extension.lstrip("."))
 
-    content = await _read_upload_capped(file, _MAX_UPLOAD_BYTES)
+    try:
+        content = await _read_upload_capped(file, _MAX_UPLOAD_BYTES)
+    except HTTPException as exc:
+        upload_stage.fail("upload.too_large" if exc.status_code == 413 else "upload.read_failed")
+        raise
 
     # Transcode every accepted upload to 16 kHz mono PCM WAV — the format Azure
     # Speech handles most reliably — before storing. A file that cannot be
@@ -573,6 +591,7 @@ async def upload_audio(
     try:
         content = await normalize_to_wav(content, extension)
     except AudioDecodeError as exc:
+        upload_stage.fail("upload.undecodable")
         raise HTTPException(
             status_code=422,
             detail=(
@@ -583,7 +602,7 @@ async def upload_audio(
 
     safe_filename = _sanitize_filename(file.filename or "audio")
     wav_filename = f"{PurePosixPath(safe_filename).stem}.wav"
-    blob_name = f"uploads/{current_user.id}/{uuid4()}-{wav_filename}"
+    blob_name = f"uploads/{current_user.id}/{upload_id}-{wav_filename}"
 
     if get_settings().AUDIO_STORAGE_BACKEND == "local":
         local_storage.save(content, blob_name)
@@ -596,6 +615,7 @@ async def upload_audio(
     async with AsyncAzureBlobManager() as blob_manager:
         uploaded = await blob_manager.create_blob_from_bytes(content, blob_name)
         if not uploaded:
+            upload_stage.fail("storage.write_failed")
             raise HTTPException(status_code=502, detail="Failed to store audio file")
         audio_url = blob_manager.build_blob_url(blob_name)
 

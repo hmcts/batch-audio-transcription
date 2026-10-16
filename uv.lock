@@ -941,7 +941,7 @@ dependencies = [
     { name = "pydantic-settings" },
 ]
 wheels = [
-    { filename = "hmcts_otel-0.1.0-py3-none-any.whl", hash = "sha256:e6a9fd41f04cf4bf54100f06d0cdd40c17f1fe6662c8999d9fc247a198329583" },
+    { filename = "hmcts_otel-0.1.0-py3-none-any.whl", hash = "sha256:e1c51894ed274a4529ceb9a2e76406e3a75c5f83b38f5153e1d154aa0a1d2ad8" },
 ]
 
 [package.optional-dependencies]
