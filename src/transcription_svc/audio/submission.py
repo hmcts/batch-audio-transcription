@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from hmcts_otel import capture_trace_context, journey, record_event, stage
+from hmcts_otel import capture_trace_context, client_failure_code, journey, record_event, stage
 from hmcts_otel import conventions as c
 from sqlmodel import Session
 
@@ -72,8 +72,10 @@ async def _submit(
                 "job.finished", {c.OUTCOME: "error", c.ERROR_CODE: "speech.submission_rejected"}
             )
             raise
-        except Exception:
-            record_event("job.finished", {c.OUTCOME: "error", c.ERROR_CODE: "job.submission_error"})
+        except Exception as exc:
+            # Same rule as the stage: a client error is a failure, anything else an error.
+            outcome = "failure" if client_failure_code(exc) else "error"
+            record_event("job.finished", {c.OUTCOME: outcome, c.ERROR_CODE: "job.submission_error"})
             raise
 
 

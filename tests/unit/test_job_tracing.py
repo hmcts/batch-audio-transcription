@@ -268,3 +268,16 @@ def test_storage_failure_on_upload_is_an_error(tel, mocker):
     assert response.status_code == 502
     (failed,) = tel.events("upload.failed")
     assert failed[c.OUTCOME] == "error" and failed[c.ERROR_CODE] == "storage.write_failed"
+
+
+async def test_client_error_during_submission_is_a_failure_like_its_stage(tel, mocker):
+    from fastapi import HTTPException
+
+    submission, _ = _submit(mocker, error=HTTPException(status_code=400))
+    with pytest.raises(HTTPException):
+        await submission.submit_and_queue_batch_job(
+            session=MagicMock(), audio_url="https://x/y.wav"
+        )
+    (finished,) = tel.events("job.finished")
+    assert finished[c.OUTCOME] == "failure"
+    assert tel.events("speech_submission.failed")[0][c.OUTCOME] == "failure"
