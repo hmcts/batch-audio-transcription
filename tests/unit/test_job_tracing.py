@@ -152,7 +152,7 @@ async def test_rejected_submission_records_failure_and_component(tel, mocker):
             session=MagicMock(), audio_url="https://x/y.wav"
         )
     (finished,) = tel.events("job.finished")
-    assert finished[c.OUTCOME] == "failure"
+    assert finished[c.OUTCOME] == "error"  # dependency failure: counted as an error
     assert finished[c.ERROR_CODE] == "speech.submission_rejected"
     assert tel.events("speech_submission.failed")[0][c.ERROR_CODE] == "speech.submission_rejected"
     tel.assert_no_prohibited_content(SECRET)
@@ -235,7 +235,7 @@ async def test_azure_failure_identifies_the_component_without_its_message(tel):
     assert _ordered(tel, str(pending.id)) == ["speech.job_failed", "job.finished"]
     assert tel.events("speech.job_failed")[0][c.DEPENDENCY_REF] == SPEECH_JOB_ID
     finished = tel.events("job.finished")[0]
-    assert finished[c.OUTCOME] == "failure" and finished[c.ERROR_CODE] == "speech.job_failed"
+    assert finished[c.OUTCOME] == "error" and finished[c.ERROR_CODE] == "speech.job_failed"
     tel.assert_no_prohibited_content(SECRET)
 
 
@@ -253,5 +253,18 @@ async def test_results_unavailable_is_attributed_to_result_processing(tel):
         await service._process_job(pending)
 
     failed = tel.events("result_processing.failed")[0]
+    assert failed[c.OUTCOME] == "error"
     assert failed[c.ERROR_CODE] == "speech.results_unavailable"
     assert tel.events("job.finished")[0][c.ERROR_CODE] == "speech.results_unavailable"
+
+
+def test_storage_failure_on_upload_is_an_error(tel, mocker):
+    client = _client_with_user(mocker)
+    from transcription_svc.api import routes
+
+    manager = routes.AsyncAzureBlobManager.return_value
+    manager.create_blob_from_bytes.return_value = False
+    response = client.post("/api/v1/uploads", files={"file": ("hearing.mp3", b"b", "audio/mpeg")})
+    assert response.status_code == 502
+    (failed,) = tel.events("upload.failed")
+    assert failed[c.OUTCOME] == "error" and failed[c.ERROR_CODE] == "storage.write_failed"

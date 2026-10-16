@@ -187,10 +187,14 @@ def _extract_transcription_duration_seconds(
 
 
 def _job_failed(processing: StageHandle | None, error_code: str) -> None:
-    """Mark the processing stage and the job as failed with a controlled code."""
+    """Mark the processing stage and the job as failed with a controlled code.
+
+    These are Azure Speech (dependency) failures, so they count as errors (rule:
+    client-caused rejections use fail(), server and dependency failures use error()).
+    """
     if processing is not None:
-        processing.fail(error_code)
-    record_event("job.finished", {c.OUTCOME: "failure", c.ERROR_CODE: error_code})
+        processing.error(error_code)
+    record_event("job.finished", {c.OUTCOME: "error", c.ERROR_CODE: error_code})
 
 
 class BatchPollingService:
@@ -311,7 +315,7 @@ class BatchPollingService:
                         "speech.job_failed", {**speech_ref, c.ERROR_CODE: "speech.job_failed"}
                     )
                     record_event(
-                        "job.finished", {c.OUTCOME: "failure", c.ERROR_CODE: "speech.job_failed"}
+                        "job.finished", {c.OUTCOME: "error", c.ERROR_CODE: "speech.job_failed"}
                     )
                     await self._handle_failed(job, status_data)
 

@@ -66,9 +66,10 @@ async def _submit(
                 session, job, audio_url, locale, enable_diarization, submission
             )
         except BatchSubmissionError:
-            submission.fail("speech.submission_rejected")
+            # Azure Speech refused the job: a dependency failure, counted as an error.
+            submission.error("speech.submission_rejected")
             record_event(
-                "job.finished", {c.OUTCOME: "failure", c.ERROR_CODE: "speech.submission_rejected"}
+                "job.finished", {c.OUTCOME: "error", c.ERROR_CODE: "speech.submission_rejected"}
             )
             raise
         except Exception:

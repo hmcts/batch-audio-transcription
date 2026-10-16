@@ -615,7 +615,7 @@ async def _upload_audio(
     async with AsyncAzureBlobManager() as blob_manager:
         uploaded = await blob_manager.create_blob_from_bytes(content, blob_name)
         if not uploaded:
-            upload_stage.fail("storage.write_failed")
+            upload_stage.error("storage.write_failed")  # server-side: counts as an error
             raise HTTPException(status_code=502, detail="Failed to store audio file")
         audio_url = blob_manager.build_blob_url(blob_name)
 
