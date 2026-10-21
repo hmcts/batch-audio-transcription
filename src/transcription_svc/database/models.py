@@ -313,6 +313,15 @@ class TranscriptionJob(BaseTable, table=True):
     # trace and span IDs only.
     trace_parent: str | None = Field(default=None, max_length=64)
 
+    # DIAAT-281: when Azure Speech entered the Running state (its lastActionDateTime
+    # on the first poll that saw Running, else the poll's time). Separates queue wait
+    # (created -> here) from processing (here -> finished). NULL until then, and for
+    # jobs that went from NotStarted to finished between two polls.
+    processing_started_datetime: datetime | None = Field(default=None)
+    # Set once, atomically, by the replica that reports the job as stuck, so job.stuck
+    # is emitted once per job rather than on every poll of every replica.
+    stuck_reported_at: datetime | None = Field(default=None)
+
     # Webhook delivery guard — set atomically by the replica that wins the dispatch race.
     # NULL means no webhook has been dispatched yet for this job.
     webhook_dispatched_at: datetime | None = Field(default=None)

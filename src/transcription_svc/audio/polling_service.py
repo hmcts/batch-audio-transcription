@@ -24,6 +24,7 @@ from hmcts_otel import StageHandle, journey, record_event, stage
 from hmcts_otel import conventions as c
 from sqlmodel import Session
 
+from transcription_svc.audio import job_telemetry
 from transcription_svc.audio.azure_utils import AsyncAzureBlobManager
 from transcription_svc.audio.batch_client import (
     BatchResultError,
@@ -44,7 +45,15 @@ from transcription_svc.database.interface import (
     update_job_batch_status,
 )
 from transcription_svc.database.models import BatchJobStatus
-from transcription_svc.telemetry import JOURNEY_JOB, batch_job_id_from_url, upload_id_from_blob
+from transcription_svc.telemetry import (
+    EVENT_JOB_FAILED_IN_SPEECH,
+    EVENT_JOB_POLL_FAILED,
+    EVENT_TRANSCRIPT_AVAILABLE,
+    EVENT_WEBHOOK_DELIVERY_FAILED,
+    JOURNEY_JOB,
+    batch_job_id_from_url,
+    upload_id_from_blob,
+)
 from transcription_svc.webhook.dispatcher import dispatch
 
 logger = logging.getLogger(__name__)
@@ -65,6 +74,7 @@ class _PendingJob:
     audio_blob_path: str | None = None
     locale: str = "en-GB"
     created_datetime: datetime | None = None
+    processing_started_datetime: datetime | None = None
 
 
 def _extract_model_identifier(status_data: dict, locale: str) -> str:
@@ -186,7 +196,22 @@ def _extract_transcription_duration_seconds(
     return None
 
 
-def _job_failed(processing: StageHandle | None, error_code: str) -> None:
+def _job_finished(
+    job: _PendingJob, status_data: dict, outcome: str, error_code: str | None = None
+) -> None:
+    """job.finished with the job's queue wait, processing and end-to-end time (DIAAT-281)."""
+    job_telemetry.record_job_finished(
+        outcome,
+        error_code,
+        created_at=job.created_datetime,
+        processing_started=job.processing_started_datetime,
+        processing_ended=job_telemetry.azure_last_action(status_data),
+    )
+
+
+def _job_failed(
+    processing: StageHandle | None, error_code: str, job: _PendingJob, status_data: dict
+) -> None:
     """Mark the processing stage and the job as failed with a controlled code.
 
     These are Azure Speech (dependency) failures, so they count as errors (rule:
@@ -194,7 +219,7 @@ def _job_failed(processing: StageHandle | None, error_code: str) -> None:
     """
     if processing is not None:
         processing.error(error_code)
-    record_event("job.finished", {c.OUTCOME: "error", c.ERROR_CODE: error_code})
+    _job_finished(job, status_data, "error", error_code)
 
 
 class BatchPollingService:
@@ -229,6 +254,7 @@ class BatchPollingService:
                         "Unexpected error in polling loop (%s)", type(exc).__name__, exc_info=exc
                     )
                     sentry_sdk.capture_exception(exc)
+                await self._report_stuck_jobs()
                 await asyncio.sleep(self.settings.BATCH_POLL_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             logger.info("BatchPollingService cancelled")
@@ -243,6 +269,17 @@ class BatchPollingService:
             *[self._process_job(job) for job in jobs],
             return_exceptions=True,
         )
+
+    async def _report_stuck_jobs(self) -> None:
+        """job.stuck for jobs past their threshold (DIAAT-281). Never fails the loop."""
+        try:
+            await asyncio.to_thread(self._claim_and_report_stuck_jobs)
+        except Exception as exc:
+            logger.warning("Stuck-job check skipped (%s)", type(exc).__name__)
+
+    def _claim_and_report_stuck_jobs(self) -> None:
+        with Session(get_engine()) as session:
+            job_telemetry.report_stuck_jobs(session)
 
     def _fetch_pending_jobs(self) -> list[_PendingJob]:
         with Session(get_engine()) as session:
@@ -287,6 +324,7 @@ class BatchPollingService:
                         audio_blob_path=row.audio_blob_path,
                         locale=row.locale,
                         created_datetime=row.created_datetime,
+                        processing_started_datetime=row.processing_started_datetime,
                         trace_parent=row.trace_parent,
                     )
                 )
@@ -302,8 +340,16 @@ class BatchPollingService:
 
                 if azure_status == BatchJobStatus.RUNNING:
                     if job.batch_job_status == BatchJobStatus.NOT_STARTED:
-                        await asyncio.to_thread(self._update_status, job.id, BatchJobStatus.RUNNING)
-                        record_event("speech.job_running", speech_ref)
+                        # DIAAT-281: processing starts; the queue wait ends here.
+                        started = job_telemetry.processing_started_at(
+                            status_data, job.created_datetime
+                        )
+                        await asyncio.to_thread(
+                            self._update_status, job.id, BatchJobStatus.RUNNING, started
+                        )
+                        job_telemetry.record_processing_started(
+                            speech_ref, job.created_datetime, started
+                        )
                 elif azure_status == BatchJobStatus.SUCCEEDED:
                     with stage(
                         "result_processing", attributes=speech_ref, link_from=job.trace_parent
@@ -312,11 +358,10 @@ class BatchPollingService:
                 elif azure_status == BatchJobStatus.FAILED:
                     # Azure's error text is stored on the job, never exported in telemetry.
                     record_event(
-                        "speech.job_failed", {**speech_ref, c.ERROR_CODE: "speech.job_failed"}
+                        EVENT_JOB_FAILED_IN_SPEECH,
+                        {**speech_ref, c.ERROR_CODE: "speech.job_failed"},
                     )
-                    record_event(
-                        "job.finished", {c.OUTCOME: "error", c.ERROR_CODE: "speech.job_failed"}
-                    )
+                    _job_finished(job, status_data, "error", "speech.job_failed")
                     await self._handle_failed(job, status_data)
 
             except Exception as exc:
@@ -324,10 +369,17 @@ class BatchPollingService:
                     "Error polling batch job %s (%s)", job.id, type(exc).__name__, exc_info=exc
                 )
                 sentry_sdk.capture_exception(exc)
+                # DIAAT-281: the job stays unfinished and is polled again next interval.
+                record_event(
+                    EVENT_JOB_POLL_FAILED,
+                    {c.ERROR_CODE: job_telemetry.failure_code(exc, "speech")},
+                )
 
-    def _update_status(self, job_id: UUID, status: BatchJobStatus) -> None:
+    def _update_status(
+        self, job_id: UUID, status: BatchJobStatus, processing_started: datetime | None = None
+    ) -> None:
         with Session(get_engine()) as session:
-            update_job_batch_status(session, job_id, status)
+            update_job_batch_status(session, job_id, status, processing_started)
 
     async def _handle_succeeded(
         self, job: _PendingJob, status_data: dict, processing: StageHandle | None = None
@@ -340,7 +392,7 @@ class BatchPollingService:
             logger.error(
                 "Failed to retrieve batch results for job %s (%s)", job.id, type(exc).__name__
             )
-            _job_failed(processing, "speech.results_unavailable")
+            _job_failed(processing, "speech.results_unavailable", job, status_data)
             await asyncio.to_thread(self._record_error, job.id, str(exc))
             await self._dispatch_failure(job, str(exc))
             return
@@ -348,7 +400,7 @@ class BatchPollingService:
             logger.error(
                 "Failed to retrieve batch results for job %s (%s)", job.id, type(exc).__name__
             )
-            _job_failed(processing, "speech.results_error")
+            _job_failed(processing, "speech.results_error", job, status_data)
             await asyncio.to_thread(self._record_error, job.id, str(exc))
             await self._dispatch_failure(job, str(exc))
             return
@@ -370,8 +422,8 @@ class BatchPollingService:
             model_identifier,
             model_display_name,
         )
-        record_event("transcript.available")
-        record_event("job.finished", {c.OUTCOME: "success"})
+        record_event(EVENT_TRANSCRIPT_AVAILABLE)
+        _job_finished(job, status_data, "success")
 
         await self._dispatch_success(job, processed_entries)
 
@@ -473,6 +525,7 @@ class BatchPollingService:
         }
         delivered = await dispatch(job.callback_url, job.webhook_secret, payload)
         if not delivered:
+            record_event(EVENT_WEBHOOK_DELIVERY_FAILED, {c.ERROR_CODE: "webhook.not_delivered"})
             logger.error(
                 "Webhook delivery permanently failed for job %s after all retries; "
                 "caller will not receive the success result",
@@ -502,6 +555,7 @@ class BatchPollingService:
         }
         delivered = await dispatch(job.callback_url, job.webhook_secret, payload)
         if not delivered:
+            record_event(EVENT_WEBHOOK_DELIVERY_FAILED, {c.ERROR_CODE: "webhook.not_delivered"})
             logger.error(
                 "Webhook delivery permanently failed for job %s after all retries; "
                 "caller will not receive the failure notification",

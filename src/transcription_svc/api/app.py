@@ -55,6 +55,7 @@ async def lifespan(app: FastAPI):
 
     from hmcts_azure_auth.roles import validate_approles_config
 
+    from transcription_svc.audio.job_telemetry import register_job_gauges
     from transcription_svc.audio.polling_service import BatchPollingService
 
     # Fail fast if AUTH_APPROLES is set but contains invalid configuration
@@ -63,6 +64,8 @@ async def lifespan(app: FastAPI):
 
     settings = get_settings()
     if settings.ENVIRONMENT != "test":
+        # DIAAT-281: waiting/running/stuck job gauges, read from the database on export.
+        register_job_gauges()
         service = BatchPollingService()
         global _polling_task
         _polling_task = asyncio.create_task(service.run_polling_loop())

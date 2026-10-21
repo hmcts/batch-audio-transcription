@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from uuid import UUID
 
 from hmcts_otel import capture_trace_context, client_failure_code, journey, record_event, stage
@@ -10,9 +11,15 @@ from hmcts_otel import conventions as c
 from sqlmodel import Session
 
 from transcription_svc.audio.batch_client import BatchSubmissionError, submit_batch_job
+from transcription_svc.audio.job_telemetry import record_job_finished, seconds_between
 from transcription_svc.database.interface import save_job
 from transcription_svc.database.models import BatchJobStatus, JobStatus, TranscriptionJob
-from transcription_svc.telemetry import JOURNEY_JOB, upload_id_from_blob
+from transcription_svc.telemetry import (
+    EVENT_JOB_CREATED,
+    EVENT_JOB_QUEUED,
+    JOURNEY_JOB,
+    upload_id_from_blob,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +60,16 @@ async def submit_and_queue_batch_job(
     job = save_job(session, job)
 
     with journey(JOURNEY_JOB, str(job.id), parent_id=upload_id_from_blob(audio_blob_path)):
-        record_event("job.created")
-        return await _submit(session, job, audio_url, locale, enable_diarization)
+        record_event(EVENT_JOB_CREATED)
+        job = await _submit(session, job, audio_url, locale, enable_diarization)
+        # DIAAT-281: Azure accepted the job; it now waits for Azure to start it.
+        accepted = seconds_between(job.created_datetime, datetime.now(UTC))
+        record_event(
+            EVENT_JOB_QUEUED,
+            {c.DEPENDENCY_REF: job.batch_job_id},
+            duration_ms=accepted * 1000.0 if accepted is not None else None,
+        )
+        return job
 
 
 async def _submit(
@@ -68,14 +83,14 @@ async def _submit(
         except BatchSubmissionError:
             # Azure Speech refused the job: a dependency failure, counted as an error.
             submission.error("speech.submission_rejected")
-            record_event(
-                "job.finished", {c.OUTCOME: "error", c.ERROR_CODE: "speech.submission_rejected"}
+            record_job_finished(
+                "error", "speech.submission_rejected", created_at=job.created_datetime
             )
             raise
         except Exception as exc:
             # Same rule as the stage: a client error is a failure, anything else an error.
             outcome = "failure" if client_failure_code(exc) else "error"
-            record_event("job.finished", {c.OUTCOME: outcome, c.ERROR_CODE: "job.submission_error"})
+            record_job_finished(outcome, "job.submission_error", created_at=job.created_datetime)
             raise
 
 

@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     # Polling
     BATCH_POLL_INTERVAL_SECONDS: int = 30
     BATCH_TRANSCRIPTION_THRESHOLD_HOURS: float = 2.0
+    # DIAAT-281: a job is reported as stuck (job.stuck event, transcription.jobs.stuck
+    # gauge) once it has waited longer than this since it was created, or run longer
+    # than this since Azure Speech started processing it. Observation only: nothing
+    # is retried or failed automatically.
+    JOB_STUCK_WAITING_SECONDS: int = 30 * 60
+    JOB_STUCK_RUNNING_SECONDS: int = 3 * 60 * 60
 
     # Azure AD / JWT authentication
     AZURE_AD_CLIENT_ID: str = ""
@@ -88,6 +94,13 @@ class Settings(BaseSettings):
     def validate_threshold(cls, v: float) -> float:
         if v <= 0:
             raise ValueError("BATCH_TRANSCRIPTION_THRESHOLD_HOURS must be greater than 0")
+        return v
+
+    @field_validator("JOB_STUCK_WAITING_SECONDS", "JOB_STUCK_RUNNING_SECONDS")
+    @classmethod
+    def validate_stuck_threshold(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Stuck-job thresholds must be greater than 0 seconds")
         return v
 
     @field_validator("LOW_CONFIDENCE_THRESHOLD")

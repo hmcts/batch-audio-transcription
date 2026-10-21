@@ -8,6 +8,7 @@ import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 from uwotm8 import convert_american_to_british_spelling
 
+from transcription_svc.audio.job_telemetry import record_speech_retry
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.models import (
     DialogueEntry,
@@ -33,6 +34,8 @@ _RETRY_POLICY = retry(
     retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.TimeoutException)),
     wait=wait_exponential(multiplier=1, min=4, max=10),
     stop=stop_after_attempt(2),
+    # DIAAT-281: each retry is a job.retried event on the job's journey.
+    before_sleep=record_speech_retry,
 )
 
 

@@ -71,6 +71,35 @@ def batch_job_id_from_url(batch_job_url: str | None) -> str | None:
 EVENT_UPLOAD_VALIDATION_FAILED = "upload.validation_failed"
 UPLOAD_METADATA = ("upload.file_count", "file.size_bytes", "audio.format", "audio.format_category")
 
+# DIAAT-281: job lifecycle. Each event carries the job journey (hmcts.journey.id = job
+# id, parent = upload id). States: job.created -> job.queued (Azure accepted) ->
+# speech.job_running (processing started) -> job.finished (completed or failed).
+EVENT_JOB_CREATED = "job.created"
+EVENT_JOB_QUEUED = "job.queued"
+EVENT_JOB_RUNNING = "speech.job_running"
+EVENT_JOB_FAILED_IN_SPEECH = "speech.job_failed"
+EVENT_TRANSCRIPT_AVAILABLE = "transcript.available"
+EVENT_JOB_FINISHED = "job.finished"
+EVENT_JOB_RETRIED = "job.retried"
+EVENT_JOB_POLL_FAILED = "job.poll_failed"
+EVENT_JOB_STUCK = "job.stuck"
+EVENT_WEBHOOK_DELIVERY_FAILED = "webhook.delivery_failed"
+
+ATTR_JOB_STATE = "job.state"
+ATTR_QUEUE_WAIT_MS = "job.queue_wait_ms"
+ATTR_PROCESSING_MS = "job.processing_ms"
+ATTR_RETRY_OPERATION = "job.retry.operation"
+ATTR_RETRY_ATTEMPT = "job.retry.attempt"
+
+JOB_STATES = ("waiting", "running")
+RETRY_OPERATIONS = (
+    "speech.submit",
+    "speech.status",
+    "speech.results",
+    "speech.delete",
+    "webhook.deliver",
+)
+
 
 def _register_schema() -> None:
     default_schema.attribute(
@@ -101,6 +130,71 @@ def _register_schema() -> None:
         description="An uploaded file was rejected; hmcts.error.code says why.",
         attributes=(c.STAGE, c.ERROR_CODE, *UPLOAD_METADATA),
     )
+    _register_job_schema()
+
+
+def _register_job_schema() -> None:
+    default_schema.attribute(
+        ATTR_JOB_STATE,
+        allowed_values=JOB_STATES,
+        description="waiting: not yet processed by Azure Speech; running: being processed.",
+    )
+    default_schema.attribute(
+        ATTR_QUEUE_WAIT_MS,
+        type=float,
+        description="Queue wait: job created to Azure Speech processing started, in ms.",
+    )
+    default_schema.attribute(
+        ATTR_PROCESSING_MS,
+        type=float,
+        description="Processing: Azure Speech processing started to finished, in ms.",
+    )
+    default_schema.attribute(
+        ATTR_RETRY_OPERATION,
+        allowed_values=RETRY_OPERATIONS,
+        description="The call being retried.",
+    )
+    default_schema.attribute(
+        ATTR_RETRY_ATTEMPT,
+        type=int,
+        description="Number of the attempt that failed (1 on the first retry).",
+    )
+    job_events = (
+        (EVENT_JOB_CREATED, (), "Job row created: the upload is complete and the job exists."),
+        (EVENT_JOB_QUEUED, (), "Azure Speech accepted the job; duration_ms: created to accepted."),
+        (EVENT_JOB_RUNNING, (), "Azure Speech started processing; duration_ms: the queue wait."),
+        (EVENT_JOB_FAILED_IN_SPEECH, (), "Azure Speech reported the job as failed."),
+        (EVENT_TRANSCRIPT_AVAILABLE, (), "The transcript is saved and can be read."),
+        (
+            EVENT_JOB_FINISHED,
+            (ATTR_QUEUE_WAIT_MS, ATTR_PROCESSING_MS),
+            "Terminal state. hmcts.outcome success, or failure/error with hmcts.error.code; "
+            "duration_ms: end to end, job created to finished.",
+        ),
+        (
+            EVENT_JOB_RETRIED,
+            (ATTR_RETRY_OPERATION, ATTR_RETRY_ATTEMPT),
+            "A call for the job failed and is retried; hmcts.error.code says why.",
+        ),
+        (
+            EVENT_JOB_POLL_FAILED,
+            (),
+            "Polling the job failed; it stays unfinished and is polled again.",
+        ),
+        (
+            EVENT_JOB_STUCK,
+            (ATTR_JOB_STATE,),
+            "The job has waited or run longer than its threshold. Emitted once per job; "
+            "duration_ms: time in that state so far.",
+        ),
+        (
+            EVENT_WEBHOOK_DELIVERY_FAILED,
+            (),
+            "The caller's webhook could not be delivered after all attempts.",
+        ),
+    )
+    for name, attributes, description in job_events:
+        default_schema.event(name, description=description, attributes=attributes)
 
 
 def configure_telemetry() -> TelemetrySettings:
