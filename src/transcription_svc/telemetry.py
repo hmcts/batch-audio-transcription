@@ -34,10 +34,15 @@ APPEAL_REFERENCE = r"(?i)(?<![A-Za-z0-9])[A-Z]{2}[/_]\d{5}[/_]\d{4}(?![0-9])"
 # on by default in the Azure Monitor distro) carry url.full, of which hmcts-otel strips
 # only the query. Our own blob logs (azure_utils) print the blob name too. Remove
 # whatever follows "/{uuid}/{uuid}-", keeping the IDs so the upload stays traceable.
-# Fixed-width lookbehind; already-redacted text is skipped; the bounded name stops at
-# a path separator, query, quote or space.
+# Fixed-width lookbehind; the bounded name stops at a path separator, query, quote or
+# space. A name that is already just the marker is skipped, but a partly redacted one
+# (e.g. "[REDACTED]_Smith_v_Home_Office.wav" after the appeal_reference rule) is
+# still removed whole. Registered before appeal_reference for the same reason.
 _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-UPLOAD_FILE_NAME = rf"(?<=/{_UUID}/{_UUID}-)(?!\[REDACTED\])[^\s/?#\"'<>\\]{{1,512}}"
+_NAME_END = r"[\s/?#\"'<>\\]"
+UPLOAD_FILE_NAME = (
+    rf"(?<=/{_UUID}/{_UUID}-)(?!\[REDACTED\](?:{_NAME_END}|$))[^\s/?#\"'<>\\]{{1,512}}"
+)
 
 # Journey types (DIAAT-276). Query one identifier in App Insights:
 #   customEvents | where customDimensions["hmcts.journey.id"] == "<id>"
@@ -98,10 +103,12 @@ def configure_telemetry() -> TelemetrySettings:
     """Set up logging, tracing, metrics and Sentry for this process. Idempotent."""
     # Checked against the redactor itself, so the rules are present whenever telemetry
     # is configured, whatever happened to the library state before.
-    if "appeal_reference" not in {rule.name for rule in default_redactor.rules}:
-        default_redactor.add_rule("appeal_reference", APPEAL_REFERENCE)
+    # upload_file_name first: it removes the whole file name, including any case
+    # reference at its start (appeal_reference alone would leave the rest).
     if "upload_file_name" not in {rule.name for rule in default_redactor.rules}:
         default_redactor.add_rule("upload_file_name", UPLOAD_FILE_NAME)
+    if "appeal_reference" not in {rule.name for rule in default_redactor.rules}:
+        default_redactor.add_rule("appeal_reference", APPEAL_REFERENCE)
     if default_schema.get_event(EVENT_UPLOAD_VALIDATION_FAILED) is None:
         _register_schema()
     settings = get_settings()

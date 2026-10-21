@@ -297,7 +297,12 @@ def _assert_no_file_name(tel: TelemetryCapture, *names: str) -> None:
         assert name.lower() not in lowered
 
 
-@pytest.mark.parametrize("original", [ORIGINAL_NAME, OTHER_NAME])
+# The usual pattern: the case reference first, then party names. The case-reference
+# rule alone would redact only the start and leave the party names.
+CASE_FIRST_NAME = "PA_50123_2024 Smith v Home Office"
+
+
+@pytest.mark.parametrize("original", [ORIGINAL_NAME, OTHER_NAME, CASE_FIRST_NAME])
 def test_original_file_name_never_reaches_logs_or_telemetry(tel, mocker, original):
     from transcription_svc.api.app import create_app
     from transcription_svc.database.models import User
@@ -325,8 +330,11 @@ def test_original_file_name_never_reaches_logs_or_telemetry(tel, mocker, origina
     upload_id = upload_id_from_blob(ok.json()["blob_name"])
     assert "Request URL" in text and f"{upload_id}-[REDACTED]" in text
     assert any(s.kind is SpanKind.CLIENT for s in tel.finished_spans())
-    # ...but neither the original file name nor its sanitised form.
+    # ...but neither the original file name nor its sanitised form, nor any part of
+    # it after the case reference (e.g. party names).
     _assert_no_file_name(tel, original, sanitised)
+    tail = sanitised.split("_", 3)[-1] if sanitised.startswith("PA_") else sanitised
+    assert tail.lower() not in text.lower()
 
 
 def test_upload_file_name_redaction_rule():
@@ -344,8 +352,13 @@ def test_upload_file_name_redaction_rule():
         ),
         f"https://a/audio/{blob}?sv=1": f"https://a/audio/uploads/{USER_ID}/{upload}-[REDACTED]?",
     }
+    case_first = f"uploads/{USER_ID}/{upload}-PA_50123_2024_Smith_v_Home_Office.wav"
+    cases[f"Request URL: 'https://a/audio/{case_first}'"] = (
+        f"Request URL: 'https://a/audio/uploads/{USER_ID}/{upload}-[REDACTED]'"
+    )
     for text, expected in cases.items():
         assert default_redactor.redact(text).startswith(expected)
+        assert "Smith" not in default_redactor.redact(text)
     # Text that is not an upload blob name is left alone.
     unrelated = f"job {upload} for user {USER_ID}-ok"
     assert default_redactor.redact(unrelated) == unrelated
