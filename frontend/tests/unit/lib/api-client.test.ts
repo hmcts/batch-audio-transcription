@@ -6,7 +6,6 @@ import {
   getJob,
   getJobAudio,
   listJobs,
-  newHearingUpload,
   submitJob,
   uploadAndSubmit,
   uploadAudio,
@@ -320,35 +319,35 @@ describe("hearing correlation headers (DIAAT-280)", () => {
     };
   }
 
-  it("sends a generated hearing ID and a file count of 1 by default", async () => {
+  it("sends no hearing headers when the upload has no hearing", async () => {
     const fetchMock = vi.fn().mockResolvedValue(uploadResponse());
     vi.stubGlobal("fetch", fetchMock);
 
     await uploadAudio(new Blob(["a"]), "PA_50123_2024.wav", null);
-    await uploadAudio(new Blob(["b"]), "PA_50123_2024.wav", null);
+    await uploadAndSubmit(new Blob(["b"]), "b.wav", undefined, null);
 
-    const [first, second] = fetchMock.mock.calls.map(
-      ([, init]) => init.headers
-    );
-    expect(first["X-Hearing-Id"]).toMatch(UUID_RE);
-    expect(first["X-Hearing-File-Count"]).toBe("1");
-    // Separate hearings get separate IDs.
-    expect(second["X-Hearing-Id"]).not.toBe(first["X-Hearing-Id"]);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init.headers["X-Hearing-Id"]).toBeUndefined();
+      expect(init.headers["X-Hearing-File-Count"]).toBeUndefined();
+    }
+    const [, first] = fetchMock.mock.calls[0];
     // The file name is never put in a header.
-    expect(JSON.stringify(first)).not.toContain("PA_50123_2024");
+    expect(JSON.stringify(first.headers)).not.toContain("PA_50123_2024");
     // The backend bearer token is still set.
-    expect(first.Authorization).toMatch(/^Bearer /);
+    expect(first.headers.Authorization).toMatch(/^Bearer /);
   });
 
   it("sends one hearing ID for every file of a multi-file hearing", async () => {
     const fetchMock = vi.fn().mockResolvedValue(uploadResponse());
     vi.stubGlobal("fetch", fetchMock);
-    const hearing = newHearingUpload(2);
+    const hearing = { hearingId: crypto.randomUUID(), fileCount: 2 };
 
     await uploadAudio(new Blob(["a"]), "part1.wav", null, hearing);
     await uploadAudio(new Blob(["b"]), "part2.wav", null, hearing);
 
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     for (const [, init] of fetchMock.mock.calls) {
+      expect(init.headers["X-Hearing-Id"]).toMatch(UUID_RE);
       expect(init.headers["X-Hearing-Id"]).toBe(hearing.hearingId);
       expect(init.headers["X-Hearing-File-Count"]).toBe("2");
     }
@@ -364,7 +363,7 @@ describe("hearing correlation headers (DIAAT-280)", () => {
         json: () => Promise.resolve({ ...BACKEND_JOB, status: "pending" }),
       });
     vi.stubGlobal("fetch", fetchMock);
-    const hearing = newHearingUpload();
+    const hearing = { hearingId: crypto.randomUUID(), fileCount: 1 };
 
     await uploadAndSubmit(new Blob(["a"]), "a.wav", undefined, null, hearing);
 

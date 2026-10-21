@@ -16,9 +16,10 @@ function requestWithFile(
   file: Blob | null,
   durationSeconds?: string,
   easyAuthToken?: string,
-  clientPrincipal?: string
+  clientPrincipal?: string,
+  extraFields: Record<string, unknown> = {}
 ) {
-  const fields: Record<string, unknown> = { file };
+  const fields: Record<string, unknown> = { file, ...extraFields };
   if (durationSeconds !== undefined) {
     fields.audio_duration_seconds = durationSeconds;
   }
@@ -58,7 +59,8 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       undefined,
-      { accessToken: null, clientPrincipal: null }
+      { accessToken: null, clientPrincipal: null },
+      undefined // no hearing
     );
   });
 
@@ -72,7 +74,8 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       9360.5,
-      { accessToken: null, clientPrincipal: null }
+      { accessToken: null, clientPrincipal: null },
+      undefined // no hearing
     );
   });
 
@@ -86,7 +89,8 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       undefined,
-      { accessToken: null, clientPrincipal: null }
+      { accessToken: null, clientPrincipal: null },
+      undefined // no hearing
     );
   });
 
@@ -101,7 +105,8 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       undefined,
-      { accessToken: null, clientPrincipal: null }
+      { accessToken: null, clientPrincipal: null },
+      undefined // no hearing
     );
   });
 
@@ -123,7 +128,8 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       undefined,
-      { accessToken: "user-jwt-token", clientPrincipal: "base64principal" }
+      { accessToken: "user-jwt-token", clientPrincipal: "base64principal" },
+      undefined // no hearing
     );
   });
 
@@ -137,8 +143,75 @@ describe("POST /api/upload", () => {
       expect.any(Blob),
       "audio",
       undefined,
-      { accessToken: "user-jwt-token", clientPrincipal: null }
+      { accessToken: "user-jwt-token", clientPrincipal: null },
+      undefined // no hearing
     );
+  });
+
+  describe("hearing correlation (DIAAT-280)", () => {
+    const HEARING_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    const noAuth = { accessToken: null, clientPrincipal: null };
+
+    async function postWithHearing(fields: Record<string, unknown>) {
+      mockUploadAndSubmit.mockResolvedValue({ id: "job-1", status: "PENDING" });
+      const { POST } = await import("@/app/api/upload/route");
+      const response = await POST(
+        requestWithFile(audioBlob(), undefined, undefined, undefined, fields)
+      );
+      expect(response.status).toBe(201);
+      return mockUploadAndSubmit.mock.calls.at(-1)?.[4];
+    }
+
+    it("passes the browser's hearing ID and file count through", async () => {
+      const hearing = await postWithHearing({
+        hearing_id: HEARING_ID,
+        hearing_file_count: "2",
+      });
+      expect(hearing).toEqual({ hearingId: HEARING_ID, fileCount: 2 });
+      expect(mockUploadAndSubmit).toHaveBeenLastCalledWith(
+        expect.any(Blob),
+        "audio",
+        undefined,
+        noAuth,
+        { hearingId: HEARING_ID, fileCount: 2 }
+      );
+    });
+
+    it("accepts the bounds of the file count", async () => {
+      for (const count of ["1", "50"]) {
+        const hearing = await postWithHearing({
+          hearing_id: HEARING_ID,
+          hearing_file_count: count,
+        });
+        expect(hearing).toEqual({
+          hearingId: HEARING_ID,
+          fileCount: Number(count),
+        });
+      }
+    });
+
+    it.each([
+      ["missing", {}],
+      ["no file count", { hearing_id: HEARING_ID }],
+      ["no hearing ID", { hearing_file_count: "2" }],
+      [
+        "a non-UUID ID",
+        { hearing_id: "PA_50123_2024", hearing_file_count: "2" },
+      ],
+      ["a count of 0", { hearing_id: HEARING_ID, hearing_file_count: "0" }],
+      ["a count of 51", { hearing_id: HEARING_ID, hearing_file_count: "51" }],
+      [
+        "a fractional count",
+        { hearing_id: HEARING_ID, hearing_file_count: "2.5" },
+      ],
+      ["a padded count", { hearing_id: HEARING_ID, hearing_file_count: " 2" }],
+      [
+        "a non-numeric count",
+        { hearing_id: HEARING_ID, hearing_file_count: "x" },
+      ],
+    ])("sends no hearing for %s", async (_label, fields) => {
+      expect(await postWithHearing(fields)).toBeUndefined();
+    });
   });
 
   it("returns 400 when no file is provided", async () => {

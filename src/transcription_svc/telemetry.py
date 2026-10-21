@@ -34,14 +34,18 @@ APPEAL_REFERENCE = r"(?i)(?<![A-Za-z0-9])[A-Z]{2}[/_]\d{5}[/_]\d{4}(?![0-9])"
 # on by default in the Azure Monitor distro) carry url.full, of which hmcts-otel strips
 # only the query. Our own blob logs (azure_utils) print the blob name too. Remove
 # whatever follows "/{uuid}/{uuid}-", keeping the IDs so the upload stays traceable.
-# Fixed-width lookbehind; the bounded name stops at a path separator, query, quote or
-# space. A name that is already just the marker is skipped, but a partly redacted one
-# (e.g. "[REDACTED]_Smith_v_Home_Office.wav" after the appeal_reference rule) is
-# still removed whole. Registered before appeal_reference for the same reason.
+# Fixed-width lookbehinds, for the plain path and the percent-encoded one
+# (uploads%2F{user id}%2F{upload id}-..., either case). The name has no length cap
+# (file names are not truncated, so a cap would leak the tail of a long one): it
+# stops only at a path separator, query, quote or space. A name that is already just
+# the marker is skipped, but a partly redacted one (e.g.
+# "[REDACTED]_Smith_v_Home_Office.wav" after the appeal_reference rule) is still
+# removed whole. Registered before appeal_reference for the same reason.
 _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 _NAME_END = r"[\s/?#\"'<>\\]"
 UPLOAD_FILE_NAME = (
-    rf"(?<=/{_UUID}/{_UUID}-)(?!\[REDACTED\](?:{_NAME_END}|$))[^\s/?#\"'<>\\]{{1,512}}"
+    rf"(?:(?<=/{_UUID}/{_UUID}-)|(?<=%2[Ff]{_UUID}%2[Ff]{_UUID}-))"
+    rf"(?!\[REDACTED\](?:{_NAME_END}|$))[^\s/?#\"'<>\\]+"
 )
 
 # Journey types (DIAAT-276). Query one identifier in App Insights:

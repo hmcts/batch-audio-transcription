@@ -117,6 +117,33 @@ def test_storage_failure_is_not_a_validation_failure(tel, mocker):
     assert failed[c.OUTCOME] == "error" and failed[c.ERROR_CODE] == "storage.write_failed"
 
 
+def test_oversized_upload_is_a_too_large_validation_failure(tel, mocker):
+    mocker.patch("transcription_svc.api.routes._MAX_UPLOAD_BYTES", 4)
+    response = _post(_client(mocker), body=b"0123456789")
+    assert response.status_code == 413
+    (invalid,) = tel.events("upload.validation_failed")
+    (failed,) = tel.events("upload.failed")
+    assert invalid[c.ERROR_CODE] == failed[c.ERROR_CODE] == "upload.too_large"
+    assert failed[c.OUTCOME] == "failure"
+
+
+def test_validation_failed_carries_the_stages_validated_error_code(tel, mocker):
+    # An error code the schema rejects becomes the stage's invalid_error_code; the
+    # validation_failed event must report that same code, never the raw value.
+    from hmcts_otel import stage
+
+    from transcription_svc.api.routes import _reject
+
+    mocker.patch("hmcts_otel._guard.strict", return_value=False)
+    with stage("upload") as upload_stage:
+        _reject(upload_stage, "Not A Valid Code!")
+    (invalid,) = tel.events("upload.validation_failed")
+    (failed,) = tel.events("upload.failed")
+    assert upload_stage.error_code == "invalid_error_code"
+    assert invalid[c.ERROR_CODE] == failed[c.ERROR_CODE] == "invalid_error_code"
+    tel.assert_no_prohibited_content("Not A Valid Code!")
+
+
 # Metadata and measurements -----------------------------------------------------------------
 
 
@@ -190,16 +217,50 @@ def test_a_malformed_hearing_id_is_ignored_and_not_exported(tel, mocker, bad):
     assert response.status_code == 201
     for event in tel.events("upload.started") + tel.events("upload.completed"):
         assert c.JOURNEY_PARENT_ID not in event
-        assert event["upload.file_count"] == 1
+        assert "upload.file_count" not in event  # an invalid count is not recorded
     if bad:
         tel.assert_no_prohibited_content(bad)
 
 
-@pytest.mark.parametrize(("raw", "count"), [("1", 1), ("50", 50), ("0", 1), ("51", 1), ("2.0", 1)])
+@pytest.mark.parametrize(
+    ("raw", "count"),
+    [("1", 1), ("2", 2), ("50", 50), ("0", None), ("51", None), ("2.0", None), ("abc", None)],
+)
 def test_file_count_header_is_bounded(tel, mocker, raw, count):
     _post(_client(mocker), **{"X-Hearing-File-Count": raw})
-    (started,) = tel.events("upload.started")
-    assert started["upload.file_count"] == count
+    events = tel.events("upload.started") + tel.events("upload.completed")
+    assert len(events) == 2
+    for event in events:
+        assert event.get("upload.file_count") == count
+        if count is None:  # missing, not a made-up 1
+            assert "upload.file_count" not in event
+
+
+def test_file_count_is_omitted_without_the_header(tel, mocker):
+    _post(_client(mocker))
+    for event in tel.events("upload.started") + tel.events("upload.completed"):
+        assert "upload.file_count" not in event
+
+
+@pytest.mark.parametrize(
+    ("raw", "count"),
+    [
+        ("2", 2),
+        ("1", 1),
+        ("50", 50),
+        ("0", None),
+        ("51", None),
+        ("2 ", None),
+        (" 2", None),
+        ("abc", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_hearing_file_count_parsing(raw, count):
+    from transcription_svc.api.routes import _hearing_file_count
+
+    assert _hearing_file_count(raw) == count
 
 
 # Every started upload ends -----------------------------------------------------------------
@@ -359,6 +420,31 @@ def test_upload_file_name_redaction_rule():
     for text, expected in cases.items():
         assert default_redactor.redact(text).startswith(expected)
         assert "Smith" not in default_redactor.redact(text)
+    # Percent-encoded blob paths (an SDK-quoted blob name), either case.
+    for sep in ("%2F", "%2f"):
+        encoded = f"uploads{sep}{USER_ID}{sep}{upload}-PA_50123_2024_Smith_v_Home_Office.wav"
+        redacted = default_redactor.redact(f"Request URL: 'https://a/audio/{encoded}'")
+        assert redacted == (
+            f"Request URL: 'https://a/audio/uploads{sep}{USER_ID}{sep}{upload}-[REDACTED]'"
+        )
     # Text that is not an upload blob name is left alone.
     unrelated = f"job {upload} for user {USER_ID}-ok"
     assert default_redactor.redact(unrelated) == unrelated
+
+
+def test_a_long_file_name_is_redacted_whole_and_quickly():
+    import time
+
+    configure_telemetry()
+    upload = "6f1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f"
+    tail = "Smith_v_Home_Office_TAIL"
+    name = "PA_50123_2024_" + "x" * 600 + tail + ".wav"  # sanitised names are not truncated
+    text = f"Request URL: 'https://a/audio/uploads/{USER_ID}/{upload}-{name}'"
+    started = time.perf_counter()
+    redacted = default_redactor.redact(text)
+    assert redacted == f"Request URL: 'https://a/audio/uploads/{USER_ID}/{upload}-[REDACTED]'"
+    assert "TAIL" not in redacted and "xxx" not in redacted
+    # No catastrophic backtracking, even on a long run with no blob-name prefix.
+    hostile = ("/" + USER_ID) * 2000 + "-" + "y" * 20_000
+    default_redactor.redact(hostile + f"/{USER_ID}/{upload}-" + "z" * 50_000)
+    assert time.perf_counter() - started < 1.0

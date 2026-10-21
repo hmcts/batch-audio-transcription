@@ -22,6 +22,10 @@ vi.mock("sonner", () => ({
   Toaster: () => null,
 }));
 
+vi.mock("@/lib/audio-duration", () => ({
+  readAudioDurationSeconds: vi.fn().mockResolvedValue(42),
+}));
+
 vi.mock("@/lib/base-path", () => ({
   BASE_PATH: "",
   apiPath: (path: string) => `http://localhost${path}`,
@@ -45,6 +49,44 @@ describe("DashboardPage", () => {
   it("renders upload section", () => {
     render(<DashboardPage />);
     expect(screen.getByText(/drag and drop an audio file/i)).toBeDefined();
+  });
+
+  it("sends each upload with its own hearing ID and a file count of 1 (DIAAT-280)", async () => {
+    const fetchMock = vi.fn((url: string, _init?: RequestInit) =>
+      Promise.resolve({
+        ok: true,
+        status: url.endsWith("/api/upload") ? 201 : 200,
+        json: () => Promise.resolve({ jobs: [], job: { id: "job-1" } }),
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<DashboardPage />);
+
+    const uploads = () =>
+      fetchMock.mock.calls.filter(([url]) => url.endsWith("/api/upload"));
+    for (const name of ["first.wav", "second.wav"]) {
+      await user.upload(
+        screen.getByLabelText("Audio file input"),
+        new File(["bytes"], name, { type: "audio/wav" })
+      );
+      const count = uploads().length;
+      await user.click(
+        screen.getByRole("button", { name: /upload for transcription/i })
+      );
+      await waitFor(() => expect(uploads()).toHaveLength(count + 1));
+    }
+
+    const forms = uploads().map(([, init]) => init?.body as FormData);
+    for (const form of forms) {
+      expect(form.get("hearing_id")).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+      );
+      expect(form.get("hearing_file_count")).toBe("1");
+      expect(form.get("audio_duration_seconds")).toBe("42");
+    }
+    // Separate submissions are separate hearings.
+    expect(forms[1].get("hearing_id")).not.toBe(forms[0].get("hearing_id"));
   });
 
   it("renders exactly the transcripts and uploads sections", () => {

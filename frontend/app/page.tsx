@@ -6,6 +6,7 @@ import { AudioUpload } from "@/components/audio-upload/audio-upload";
 import { FilterableJobsSection } from "@/components/jobs-table/filterable-jobs-section";
 import { readAudioDurationSeconds } from "@/lib/audio-duration";
 import { apiPath } from "@/lib/base-path";
+import { buildHearingUploadForms } from "@/lib/hearing-upload";
 import type { TranscriptionJob } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 5000;
@@ -69,11 +70,9 @@ export default function DashboardPage() {
         // meaningfully delay the upload. Best-effort: undefined simply omits
         // those extras.
         const durationSeconds = await readAudioDurationSeconds(file);
-        const formData = new FormData();
-        formData.append("file", file);
-        if (durationSeconds !== undefined) {
-          formData.append("audio_duration_seconds", String(durationSeconds));
-        }
+        // DIAAT-280: each submission is one upload batch with its own hearing
+        // ID and file count (the picker takes one file, so a batch of one).
+        const [formData] = buildHearingUploadForms([{ file, durationSeconds }]);
         const response = await fetch(apiPath("/api/upload"), {
           method: "POST",
           body: formData,

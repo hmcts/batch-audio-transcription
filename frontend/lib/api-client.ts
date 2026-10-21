@@ -1,5 +1,6 @@
 import "server-only";
 import type { BackendAuthContext } from "./auth-utils";
+import type { HearingUpload } from "./hearing-upload";
 import type {
   CorrectionEntry,
   JobStatus,
@@ -449,20 +450,13 @@ export async function getJobAudio(
   );
 }
 
-// DIAAT-280: one hearing-level correlation ID for every file uploaded for a
-// hearing, so the backend's upload telemetry can relate them (X-Hearing-Id is
-// the parent of each file's upload journey). Create one per hearing and pass
-// the same value to every uploadAudio/uploadAndSubmit call for its files.
-export interface HearingUpload {
-  hearingId: string;
-  fileCount: number;
-}
-
-export function newHearingUpload(fileCount = 1): HearingUpload {
-  return { hearingId: crypto.randomUUID(), fileCount };
-}
-
-function hearingHeaders(hearing: HearingUpload): Record<string, string> {
+// DIAAT-280: the hearing's correlation headers, when the browser sent a
+// (validated) hearing for this upload batch. Without one, none are sent: a
+// per-file hearing would relate nothing.
+function hearingHeaders(
+  hearing: HearingUpload | undefined
+): Record<string, string> | undefined {
+  if (!hearing) return undefined;
   return {
     "X-Hearing-Id": hearing.hearingId,
     "X-Hearing-File-Count": String(hearing.fileCount),
@@ -473,7 +467,7 @@ export async function uploadAudio(
   file: Blob,
   filename: string,
   auth: BackendAuthContext | null,
-  hearing: HearingUpload = newHearingUpload()
+  hearing?: HearingUpload
 ): Promise<BackendUpload> {
   const form = new FormData();
   form.append("file", file, filename);
@@ -631,7 +625,7 @@ export async function uploadAndSubmit(
   filename: string,
   audioDurationSeconds: number | undefined,
   auth: BackendAuthContext | null,
-  hearing: HearingUpload = newHearingUpload()
+  hearing?: HearingUpload
 ): Promise<TranscriptionJob> {
   const { audio_url, blob_name } = await uploadAudio(
     file,

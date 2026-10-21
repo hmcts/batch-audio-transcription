@@ -570,12 +570,11 @@ def _hearing_id(raw: str | None) -> str | None:
         return None
 
 
-def _hearing_file_count(raw: str | None) -> int:
-    """X-Hearing-File-Count when it is an integer in 1..50, else 1."""
-    text = (raw or "").strip()
-    if _FILE_COUNT_RE.fullmatch(text) and 1 <= int(text) <= _MAX_HEARING_FILES:
-        return int(text)
-    return 1
+def _hearing_file_count(raw: str | None) -> int | None:
+    """X-Hearing-File-Count when it is an integer in 1..50, else None (not recorded)."""
+    if raw and _FILE_COUNT_RE.fullmatch(raw) and 1 <= int(raw) <= _MAX_HEARING_FILES:
+        return int(raw)
+    return None
 
 
 def _wav_duration_seconds(content: bytes) -> float | None:
@@ -588,9 +587,11 @@ def _wav_duration_seconds(content: bytes) -> float | None:
     return round(frames / rate, 3) if rate > 0 else None
 
 
-def _upload_metadata(file: UploadFile, extension: str, file_count: int) -> dict[str, object]:
+def _upload_metadata(file: UploadFile, extension: str, file_count: int | None) -> dict[str, object]:
     """Safe technical metadata for the upload stage events. Never the file name."""
-    attributes: dict[str, object] = {"upload.file_count": file_count}
+    attributes: dict[str, object] = {}
+    if file_count is not None:
+        attributes["upload.file_count"] = file_count
     if isinstance(file.size, int):
         attributes["file.size_bytes"] = file.size  # bytes received
     if extension in _ALLOWED_AUDIO_EXTENSIONS:
@@ -604,7 +605,12 @@ def _reject(upload_stage: StageHandle, error_code: str) -> None:
     upload_stage.fail(error_code)
     record_event(
         EVENT_UPLOAD_VALIDATION_FAILED,
-        {c.STAGE: upload_stage.name, c.ERROR_CODE: error_code, **upload_stage.attributes},
+        # The stage's validated code, so this event and upload.failed always agree.
+        {
+            c.STAGE: upload_stage.name,
+            c.ERROR_CODE: upload_stage.error_code,
+            **upload_stage.attributes,
+        },
     )
 
 
@@ -648,13 +654,8 @@ async def _upload_audio(
 
     try:
         content = await _read_upload_capped(file, _MAX_UPLOAD_BYTES)
-    except HTTPException as exc:
-        if exc.status_code == 413:
-            _reject(upload_stage, "upload.too_large")
-        else:
-            # Not a validation failure: the request was already received in full,
-            # so a failed read of it is ours, not the client's.
-            upload_stage.fail("upload.read_failed")
+    except HTTPException:  # _read_upload_capped raises only 413 (over the size limit)
+        _reject(upload_stage, "upload.too_large")
         raise
     if "file.size_bytes" not in upload_stage.attributes:
         upload_stage.set_attribute("file.size_bytes", len(content))
