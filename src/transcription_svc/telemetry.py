@@ -10,10 +10,19 @@ from the environment:
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+from typing import Literal
 
-from hmcts_otel import TelemetrySettings, default_redactor, default_schema, setup_telemetry
+from hmcts_otel import (
+    Journey,
+    TelemetrySettings,
+    default_redactor,
+    default_schema,
+    record_event,
+    setup_telemetry,
+)
 from hmcts_otel import conventions as c
 
 from transcription_svc.config.settings import get_settings
@@ -167,6 +176,28 @@ DEPENDENCY_ERROR_CODES = (
     "dependency.error",
 )
 
+# DIAAT-285: security events. Someone reached, or tried to reach, a job, transcript,
+# audio or upload that is not theirs. Routed to Security by the ownership-violation
+# alert. Never carries user IDs, emails, blob or file names, or content: investigators
+# correlate on hmcts.request.id (and the target's journey ID) in App Insights.
+#   blocked:  the authorisation check refused it (the caller got the usual 404/422);
+#   detected: authorisation let it through but the post-authorisation ownership
+#             assertion caught it (an authorisation defect; the caller still got 404);
+#   test:     a controlled test of the alert route (dev only, see
+#             SECURITY_ALERT_TEST_TRIGGER_ENABLED).
+EVENT_OWNERSHIP_VIOLATION = "security.ownership_violation"
+ATTR_SECURITY_RESOURCE_TYPE = "security.resource_type"
+ATTR_SECURITY_ACTION = "security.action"
+ATTR_SECURITY_OUTCOME = "security.outcome"
+SecurityResourceType = Literal["job", "transcript", "audio", "upload"]
+SecurityAction = Literal["read", "write", "delete", "submit"]
+SecurityOutcome = Literal["blocked", "detected", "test"]
+SECURITY_RESOURCE_TYPES = ("job", "transcript", "audio", "upload")
+SECURITY_ACTIONS = ("read", "write", "delete", "submit")
+SECURITY_OUTCOMES = ("blocked", "detected", "test")
+
+_security_log = logging.getLogger("transcription_svc.security")
+
 JOB_STATES = ("waiting", "running")
 RETRY_OPERATIONS = (
     "speech.submit",
@@ -208,6 +239,65 @@ def _register_schema() -> None:
     )
     _register_job_schema()
     _register_dependency_health_schema()
+    _register_security_schema()
+
+
+def _register_security_schema() -> None:
+    """DIAAT-285: the ownership-violation security event (types only, never who or what)."""
+    default_schema.attribute(
+        ATTR_SECURITY_RESOURCE_TYPE,
+        allowed_values=SECURITY_RESOURCE_TYPES,
+        description="Kind of resource the caller does not own: job, transcript, audio or upload.",
+    )
+    default_schema.attribute(
+        ATTR_SECURITY_ACTION,
+        allowed_values=SECURITY_ACTIONS,
+        description="What the caller tried to do with it: read, write, delete or submit.",
+    )
+    default_schema.attribute(
+        ATTR_SECURITY_OUTCOME,
+        allowed_values=SECURITY_OUTCOMES,
+        description="blocked: refused by the authorisation check; detected: let through by "
+        "authorisation but caught by the post-authorisation ownership assertion (a defect); "
+        "test: a controlled test of the alert route.",
+    )
+    default_schema.event(
+        EVENT_OWNERSHIP_VIOLATION,
+        description="A caller reached, or tried to reach, a resource they do not own. "
+        "Correlate on hmcts.request.id; hmcts.journey.id is the target job or upload.",
+        attributes=(ATTR_SECURITY_RESOURCE_TYPE, ATTR_SECURITY_ACTION, ATTR_SECURITY_OUTCOME),
+    )
+
+
+def record_ownership_violation(
+    resource_type: SecurityResourceType,
+    action: SecurityAction,
+    outcome: SecurityOutcome,
+    *,
+    journey: Journey | None = None,
+) -> None:
+    """DIAAT-285: emit ``security.ownership_violation``. The single place that does.
+
+    Only the three enums, plus the request ID and journey that record_event adds (the
+    journey given here, e.g. the target job, or the current one). Nothing about who
+    the caller or the owner is. ``detected`` is also logged at ERROR (types only), so
+    it reaches Sentry: it means an authorisation check let a non-owner through.
+    """
+    record_event(
+        EVENT_OWNERSHIP_VIOLATION,
+        {
+            ATTR_SECURITY_RESOURCE_TYPE: resource_type,
+            ATTR_SECURITY_ACTION: action,
+            ATTR_SECURITY_OUTCOME: outcome,
+        },
+        journey=journey,
+    )
+    if outcome == "detected":
+        _security_log.error(
+            "Ownership assertion failed after authorisation: %s %s blocked",
+            resource_type,
+            action,
+        )
 
 
 def _register_dependency_health_schema() -> None:

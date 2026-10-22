@@ -102,6 +102,11 @@ class Settings(BaseSettings):
 
     # Observability
     SENTRY_DSN: str | None = None
+    # DIAAT-285: enables POST /api/v1/security/alert-test, which emits a
+    # security.ownership_violation event with outcome "test" to prove the Security
+    # alert route. Has no effect unless ENVIRONMENT is local, dev or test, so it can
+    # never be turned on in stg or prod. Leave false except during a controlled test.
+    SECURITY_ALERT_TEST_TRIGGER_ENABLED: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

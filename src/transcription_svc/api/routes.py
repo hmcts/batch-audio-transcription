@@ -26,7 +26,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
-from hmcts_otel import StageHandle, journey, record_event, stage
+from hmcts_otel import Journey, StageHandle, journey, record_event, stage
 from hmcts_otel import conventions as c
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
@@ -56,7 +56,15 @@ from transcription_svc.database.models import (
     WordCorrection,
 )
 from transcription_svc.dependency_health import get_dependency_checker, health_response
-from transcription_svc.telemetry import EVENT_UPLOAD_VALIDATION_FAILED, JOURNEY_UPLOAD
+from transcription_svc.telemetry import (
+    EVENT_UPLOAD_VALIDATION_FAILED,
+    JOURNEY_JOB,
+    JOURNEY_UPLOAD,
+    SecurityAction,
+    SecurityResourceType,
+    record_ownership_violation,
+    upload_id_from_blob,
+)
 from transcription_svc.utils.approles import get_valid_roles
 from transcription_svc.utils.auth_models import AuthenticatedUser
 from transcription_svc.utils.dependencies import get_current_user
@@ -739,6 +747,34 @@ async def get_local_audio(blob_name: str) -> Response:
     return Response(content=content, media_type=media_type)
 
 
+# DIAAT-285: controlled test of the security alert route (ALERTS.md in the infra repo).
+# Only where both hold: ENVIRONMENT is one of these (an allowlist, so stg, prod and any
+# unknown name are excluded) and SECURITY_ALERT_TEST_TRIGGER_ENABLED is true (default
+# false). Anywhere else it answers 404, as if it did not exist.
+SECURITY_ALERT_TEST_ENVIRONMENTS = frozenset({"local", "dev", "test"})
+
+
+def security_alert_test_allowed() -> bool:
+    settings = get_settings()
+    return (
+        settings.SECURITY_ALERT_TEST_TRIGGER_ENABLED
+        and settings.ENVIRONMENT.strip().lower() in SECURITY_ALERT_TEST_ENVIRONMENTS
+    )
+
+
+@router.post("/security/alert-test", status_code=202)
+@limiter.limit("10/hour")
+async def security_alert_test(
+    request: Request,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> dict:
+    """Emit security.ownership_violation with outcome "test" (nothing is accessed)."""
+    if not security_alert_test_allowed():
+        raise HTTPException(status_code=404)
+    record_ownership_violation("job", "read", "test")
+    return {"event": "security.ownership_violation", "outcome": "test"}
+
+
 @router.post("/jobs", status_code=201, response_model=JobResponse)
 @limiter.limit("100/hour")
 async def submit_job(
@@ -759,6 +795,10 @@ async def submit_job(
     # blob (upload_audio issues names under uploads/{current_user.id}/...) and
     # read their audio back through this job.
     if body.blob_name is not None and not body.blob_name.startswith(f"uploads/{current_user.id}/"):
+        # DIAAT-285: a security event (types only; never the blob name), same 422.
+        record_ownership_violation(
+            "upload", "submit", "blocked", journey=_upload_journey(body.blob_name)
+        )
         raise HTTPException(status_code=422, detail="blob_name does not belong to this user")
 
     try:
@@ -815,6 +855,10 @@ async def list_jobs(
     is_admin = get_valid_roles()["SystemAdministrator"] in current_user.app_roles
     filter_user_id = None if is_admin else current_user.id
     jobs, total = list_jobs_paginated(session, filter_user_id, parsed_status, limit, offset)
+    if not is_admin:
+        # DIAAT-285: defence in depth. The query is already filtered by user, so a
+        # foreign row here is a defect: drop it rather than return its transcript.
+        jobs = [job for job in jobs if _owned_by_caller(job, current_user, "transcript", "read")]
     return ListJobsResponse(
         jobs=[_to_response(j) for j in jobs],
         total=total,
@@ -832,7 +876,8 @@ async def get_job(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user)
+    _check_job_access(job, current_user, "transcript", "read")
+    _assert_job_owner(job, current_user, "transcript", "read")
     return _to_response(job)
 
 
@@ -856,7 +901,7 @@ async def upload_baseline_transcript(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user)
+    _check_job_access(job, current_user, "transcript", "write")
     if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
         raise HTTPException(
             status_code=422, detail="Job has no transcript to compare a baseline against"
@@ -899,9 +944,31 @@ async def upload_baseline_transcript(
     return _to_response(job)
 
 
+def _is_admin(current_user: AuthenticatedUser) -> bool:
+    return get_valid_roles()["SystemAdministrator"] in current_user.app_roles
+
+
+def _job_journey(job: TranscriptionJob) -> Journey | None:
+    try:
+        return Journey(JOURNEY_JOB, str(job.id))
+    except ValueError:  # not a valid identifier: record the event without it
+        return None
+
+
+def _upload_journey(blob_name: str) -> Journey | None:
+    """The upload a rejected blob_name points at, if it has an upload ID (never the name)."""
+    upload_id = upload_id_from_blob(blob_name)
+    try:
+        return Journey(JOURNEY_UPLOAD, upload_id) if upload_id else None
+    except ValueError:
+        return None
+
+
 def _check_job_access(
     job: TranscriptionJob,
     current_user: AuthenticatedUser,
+    resource_type: SecurityResourceType,
+    action: SecurityAction,
 ) -> None:
     """Raise 404 if current_user neither owns the job nor is a SystemAdministrator.
 
@@ -914,13 +981,45 @@ def _check_job_access(
     SystemAdministrator — legacy jobs may contain sensitive hearing content, and
     any authenticated user who can obtain or guess a UUID should not be able to
     access that content.
+
+    DIAAT-285: a refusal of an existing job is a security event
+    (security.ownership_violation, outcome "blocked"). The job was already loaded
+    by ID, so telling "not yours" from "not found" costs no extra query, and the
+    response (404 "Job not found") is unchanged.
     """
-    is_admin = get_valid_roles()["SystemAdministrator"] in current_user.app_roles
-    if job.user_id is None:
-        if not is_admin:
-            raise HTTPException(status_code=404, detail="Job not found")
+    if _is_admin(current_user):
         return
-    if job.user_id != current_user.id and not is_admin:
+    if job.user_id is None or job.user_id != current_user.id:
+        record_ownership_violation(resource_type, action, "blocked", journey=_job_journey(job))
+        raise HTTPException(status_code=404, detail="Job not found")
+
+
+def _owned_by_caller(
+    job: TranscriptionJob,
+    current_user: AuthenticatedUser,
+    resource_type: SecurityResourceType,
+    action: SecurityAction,
+) -> bool:
+    """DIAAT-285: post-authorisation ownership assertion. True if the caller may have it.
+
+    Independent of _check_job_access on purpose: it runs after authorisation has
+    already passed, so it should never fail. If it does, an authorisation check
+    is broken: record outcome "detected" (logged at ERROR) and report False.
+    """
+    if _is_admin(current_user) or (job.user_id is not None and job.user_id == current_user.id):
+        return True
+    record_ownership_violation(resource_type, action, "detected", journey=_job_journey(job))
+    return False
+
+
+def _assert_job_owner(
+    job: TranscriptionJob,
+    current_user: AuthenticatedUser,
+    resource_type: SecurityResourceType,
+    action: SecurityAction,
+) -> None:
+    """Block with the usual 404 if the post-authorisation ownership assertion fails."""
+    if not _owned_by_caller(job, current_user, resource_type, action):
         raise HTTPException(status_code=404, detail="Job not found")
 
 
@@ -930,7 +1029,7 @@ def _load_entry_for_correction(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user)
+    _check_job_access(job, current_user, "transcript", "write")
     if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
         raise HTTPException(status_code=422, detail="Job has no transcript to correct")
     if index < 0 or index >= len(job.dialogue_entries):
@@ -1342,7 +1441,8 @@ async def get_job_audio(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user)
+    _check_job_access(job, current_user, "audio", "read")
+    _assert_job_owner(job, current_user, "audio", "read")
     if not job.audio_blob_path:
         raise HTTPException(status_code=404, detail="Audio not available for this job")
 
@@ -1427,7 +1527,7 @@ async def delete_job(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user)
+    _check_job_access(job, current_user, "job", "delete")
 
     if job.audio_blob_path:
         try:
