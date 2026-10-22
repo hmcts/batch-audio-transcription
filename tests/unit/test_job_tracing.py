@@ -210,6 +210,13 @@ async def test_whole_lifecycle_is_one_query_and_linked_to_the_request(tel, mocke
         "speech_submission.completed",
         "job.queued",
         "result_processing.started",
+        # DIAAT-283: each step after Azure Speech succeeded is its own stage.
+        "results_retrieval.started",
+        "results_retrieval.completed",
+        "transcript_postprocessing.started",
+        "transcript_postprocessing.completed",
+        "transcript_persistence.started",
+        "transcript_persistence.completed",
         "transcript.available",
         "job.finished",
         "result_processing.completed",

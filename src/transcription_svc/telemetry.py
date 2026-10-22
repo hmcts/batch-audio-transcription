@@ -121,6 +121,36 @@ SPEECH_CONFIG_ATTRIBUTES = (
     ATTR_SPEECH_DIARIZATION,
 )
 
+# DIAAT-283: after Azure Speech succeeds. Each step is a stage of the job journey
+# (<stage>.started / .completed / .failed, duration on hmcts.stage.duration), nested
+# in result_processing, which stays the umbrella for the whole attempt:
+#   results_retrieval -> transcript_postprocessing -> transcript_persistence
+#   -> transcript.available -> job.finished (-> webhook.delivered / delivery_failed)
+STAGE_RESULTS_RETRIEVAL = "results_retrieval"
+STAGE_POSTPROCESSING = "transcript_postprocessing"
+STAGE_PERSISTENCE = "transcript_persistence"
+POST_SPEECH_STAGES = (STAGE_RESULTS_RETRIEVAL, STAGE_POSTPROCESSING, STAGE_PERSISTENCE)
+# A speaker-processing step failed and the transcript was saved with the previous
+# step's output (process_speakers never raises).
+EVENT_POSTPROCESS_DEGRADED = "transcript.postprocess_degraded"
+# A database or blob write after Azure Speech finished failed.
+EVENT_STORAGE_FAILED = "job.storage_failed"
+EVENT_WEBHOOK_DELIVERED = "webhook.delivered"
+
+ATTR_SEGMENT_COUNT = "transcript.segment_count"
+ATTR_SPEAKER_COUNT = "transcript.speaker_count"
+ATTR_POSTPROCESS_STEP = "transcript.postprocess_step"
+POSTPROCESS_STEPS = ("speaker_grouping", "speaker_normalisation", "speaker_labelling")
+ATTR_STORAGE_OPERATION = "storage.operation"
+STORAGE_OPERATIONS = (
+    "transcript.save",
+    "job.mark_failed",
+    "job.mark_needs_cleanup",
+    "blob.mark_failed",
+)
+ATTR_WEBHOOK_NOTIFICATION = "webhook.notification"
+WEBHOOK_NOTIFICATIONS = ("succeeded", "failed")
+
 JOB_STATES = ("waiting", "running")
 RETRY_OPERATIONS = (
     "speech.submit",
@@ -190,6 +220,7 @@ def _register_job_schema() -> None:
         description="Number of the attempt that failed (1 on the first retry).",
     )
     _register_speech_schema()
+    _register_post_speech_attributes()
     job_events = (
         (EVENT_JOB_CREATED, (), "Job row created: the upload is complete and the job exists."),
         (
@@ -203,7 +234,12 @@ def _register_job_schema() -> None:
             (ATTR_FAILURE_SOURCE, ATTR_SPEECH_ERROR_CODE),
             "Azure Speech reported the job as failed; speech.error_code is Azure's code.",
         ),
-        (EVENT_TRANSCRIPT_AVAILABLE, (), "The transcript is saved and can be read."),
+        (
+            EVENT_TRANSCRIPT_AVAILABLE,
+            (ATTR_SEGMENT_COUNT, ATTR_SPEAKER_COUNT),
+            "The transcript is saved and can be read. hmcts.dependency.ref: the Azure "
+            "Speech job; duration_ms: Azure finished to available (DIAAT-283).",
+        ),
         (
             EVENT_JOB_FINISHED,
             (
@@ -233,12 +269,71 @@ def _register_job_schema() -> None:
         ),
         (
             EVENT_WEBHOOK_DELIVERY_FAILED,
-            (),
+            (ATTR_WEBHOOK_NOTIFICATION,),
             "The caller's webhook could not be delivered after all attempts.",
+        ),
+        (
+            EVENT_WEBHOOK_DELIVERED,
+            (ATTR_WEBHOOK_NOTIFICATION,),
+            "The caller's webhook was delivered (2xx).",
+        ),
+        (
+            EVENT_POSTPROCESS_DEGRADED,
+            (ATTR_POSTPROCESS_STEP,),
+            "A speaker-processing step failed; the previous step's output is kept.",
+        ),
+        (
+            EVENT_STORAGE_FAILED,
+            (ATTR_STORAGE_OPERATION, ATTR_FAILURE_SOURCE),
+            "A database or blob write after Azure Speech finished failed; "
+            "hmcts.error.code says which kind (storage.db_* or storage.blob_failed).",
         ),
     )
     for name, attributes, description in job_events:
         default_schema.event(name, description=description, attributes=attributes)
+    _register_post_speech_stages()
+
+
+def _register_post_speech_attributes() -> None:
+    """DIAAT-283: what the steps after Azure Speech succeeds record."""
+    default_schema.attribute(
+        ATTR_SEGMENT_COUNT, type=int, description="Number of dialogue entries in the transcript."
+    )
+    default_schema.attribute(
+        ATTR_SPEAKER_COUNT, type=int, description="Number of distinct speakers in the transcript."
+    )
+    default_schema.attribute(
+        ATTR_POSTPROCESS_STEP,
+        allowed_values=POSTPROCESS_STEPS,
+        description="The speaker-processing step that failed.",
+    )
+    default_schema.attribute(
+        ATTR_STORAGE_OPERATION,
+        allowed_values=STORAGE_OPERATIONS,
+        description="The database or blob write that failed.",
+    )
+    default_schema.attribute(
+        ATTR_WEBHOOK_NOTIFICATION,
+        allowed_values=WEBHOOK_NOTIFICATIONS,
+        description="Which result the webhook carried: the job succeeded or failed.",
+    )
+
+
+def _register_post_speech_stages() -> None:
+    """DIAAT-283: the stages after Azure Speech succeeds (events made by stage())."""
+    purposes = (
+        "Downloading the transcript from Azure Speech",
+        "Speaker processing",
+        "Saving the transcript to the database",
+    )
+    for name, purpose in zip(POST_SPEECH_STAGES, purposes, strict=True):
+        for verb, meaning in (
+            ("started", "started"),
+            ("completed", "completed; duration_ms: its duration"),
+            ("failed", "failed; hmcts.error.code says why, duration_ms: its duration"),
+            ("cancelled", "was cancelled"),
+        ):
+            default_schema.event(f"{name}.{verb}", description=f"{purpose} {meaning}.")
 
 
 def _register_speech_schema() -> None:

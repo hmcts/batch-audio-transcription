@@ -361,7 +361,7 @@ async def test_unknown_processing_start_is_not_guessed(tel):
     (finished,) = tel.events("job.finished")
     assert "job.queue_wait_ms" not in finished and "job.processing_ms" not in finished
     assert 1200_000 <= finished[c.DURATION_MS] < 1260_000
-    assert set(_durations(tel)) == {"end_to_end"}
+    assert set(_durations(tel)) == {"end_to_end", "to_available"}  # no processing phase
 
 
 def test_processing_start_is_kept_between_creation_and_now():

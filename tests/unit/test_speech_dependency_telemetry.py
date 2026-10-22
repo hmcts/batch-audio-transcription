@@ -186,6 +186,12 @@ async def _submit(mocker, post=None, save=None):
         ("job.stuck.waiting", "queue"),
         ("job.stuck.running", "dependency"),
         ("webhook.http_502", "application"),  # not Azure Speech
+        # DIAAT-283: after Azure Speech returned the transcript: ours.
+        ("transcript.postprocess_failed", "application"),
+        ("storage.db_unavailable", "application"),
+        ("storage.db_rejected", "application"),
+        ("storage.db_failed", "application"),
+        ("storage.blob_failed", "application"),
     ],
 )
 def test_failure_source_by_code(code, source):
@@ -688,7 +694,15 @@ async def test_job_finishes_once_when_storing_its_failure_fails_once(
         await _poll(service, job, status_data, results=results)  # stored: the job finishes
 
     (poll_failed,) = tel.events("job.poll_failed")
-    assert poll_failed["hmcts.failure.source"] == "application"
+    (storage,) = tel.events("job.storage_failed")  # DIAAT-283: the write that failed
+    assert storage[c.ERROR_CODE] == "storage.db_unavailable"
+    assert storage["hmcts.failure.source"] == "application"
+    if code is None:  # nothing attributed the attempt yet: the write's failure
+        assert poll_failed[c.ERROR_CODE] == "storage.db_unavailable"
+        assert poll_failed["hmcts.failure.source"] == "application"
+    else:  # DIAAT-283: the attempt's code and source, as its stage says
+        assert poll_failed[c.ERROR_CODE] == code
+        assert poll_failed["hmcts.failure.source"] == failure_source(code)
     (finished,) = tel.events("job.finished")
     assert finished[c.OUTCOME] == "error"
     assert _finished_count(tel) == 1

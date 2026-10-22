@@ -50,11 +50,15 @@ from transcription_svc.database.models import BatchJobStatus
 from transcription_svc.telemetry import (
     ATTR_FAILURE_SOURCE,
     ATTR_SPEECH_ERROR_CODE,
+    ATTR_WEBHOOK_NOTIFICATION,
     EVENT_JOB_FAILED_IN_SPEECH,
     EVENT_JOB_POLL_FAILED,
-    EVENT_TRANSCRIPT_AVAILABLE,
+    EVENT_WEBHOOK_DELIVERED,
     EVENT_WEBHOOK_DELIVERY_FAILED,
     JOURNEY_JOB,
+    STAGE_PERSISTENCE,
+    STAGE_POSTPROCESSING,
+    STAGE_RESULTS_RETRIEVAL,
     batch_job_id_from_url,
     upload_id_from_blob,
 )
@@ -251,6 +255,17 @@ def _speech_job_failed(job: _PendingJob, status_data: dict) -> None:
     _job_finished(job, status_data, "error", "speech.job_failed", attributes=azure_error)
 
 
+def _record_delivery(delivered: bool, notification: str) -> None:
+    """webhook.delivered or webhook.delivery_failed (DIAAT-281), with what it carried."""
+    if delivered:
+        record_event(EVENT_WEBHOOK_DELIVERED, {ATTR_WEBHOOK_NOTIFICATION: notification})
+    else:
+        record_event(
+            EVENT_WEBHOOK_DELIVERY_FAILED,
+            {ATTR_WEBHOOK_NOTIFICATION: notification, c.ERROR_CODE: "webhook.not_delivered"},
+        )
+
+
 class BatchPollingService:
     """Background service that polls Azure Batch Transcription job status."""
 
@@ -410,41 +425,67 @@ class BatchPollingService:
     async def _handle_succeeded(
         self, job: _PendingJob, status_data: dict, processing: StageHandle | None = None
     ) -> None:
-        try:
-            dialogue_entries = await get_batch_results(
-                job.batch_job_url, transcription_job_id=job.id
-            )
-        except BatchResultsInvalidError as exc:
-            # Azure's results output could not be parsed: Azure's failure, not ours.
-            await self._fail_results(job, status_data, processing, "speech.results_invalid", exc)
-            return
-        except BatchResultError as exc:
-            await self._fail_results(
-                job, status_data, processing, "speech.results_unavailable", exc
-            )
-            return
-        except Exception as exc:
-            await self._fail_results(job, status_data, processing, "speech.results_error", exc)
+        """Azure Speech succeeded: download, post-process and save the transcript.
+
+        DIAAT-283: each step is its own stage of the job journey, nested in
+        result_processing (the umbrella for the attempt), so a Speech job that succeeded
+        is told apart from a later failure to retrieve, post-process or save its output.
+        A post-processing or save failure raises as before (the job is polled again);
+        its stage, result_processing and job.poll_failed carry the step's code.
+        """
+        polled_at = datetime.now(UTC)
+        speech_ref = {c.DEPENDENCY_REF: batch_job_id_from_url(job.batch_job_url)}
+        failure: tuple[str, BaseException] | None = None
+        with stage(STAGE_RESULTS_RETRIEVAL, attributes=speech_ref) as retrieval:
+            try:
+                dialogue_entries = await get_batch_results(
+                    job.batch_job_url, transcription_job_id=job.id
+                )
+            except BatchResultsInvalidError as exc:
+                # Azure's results output could not be parsed: Azure's failure, not ours.
+                failure = ("speech.results_invalid", exc)
+            except BatchResultError as exc:
+                failure = ("speech.results_unavailable", exc)
+            except Exception as exc:
+                failure = ("speech.results_error", exc)
+            if failure is not None:
+                retrieval.error(failure[0])
+        if failure is not None:
+            await self._fail_results(job, status_data, processing, *failure)
             return
 
-        processed_entries = process_speakers(dialogue_entries)
+        with (
+            stage(STAGE_POSTPROCESSING, attributes=speech_ref) as postprocessing,
+            job_telemetry.failing_step(
+                job_telemetry.CODE_POSTPROCESS_FAILED, stages=(postprocessing, processing)
+            ),
+        ):
+            processed_entries = process_speakers(dialogue_entries)
+            model_identifier = _extract_model_identifier(status_data, job.locale)
+            transcription_duration_seconds = _extract_transcription_duration_seconds(
+                status_data, job.created_datetime
+            )
 
-        model_identifier = _extract_model_identifier(status_data, job.locale)
+        # A call to Azure Speech, not post-processing: never raises (DIAAT-243 AC5) and is
+        # measured by the Speech call metrics (DIAAT-282).
         model_display_name = await _resolve_model_display_name(model_identifier)
-        transcription_duration_seconds = _extract_transcription_duration_seconds(
-            status_data, job.created_datetime
-        )
 
-        await asyncio.to_thread(
-            self._save_results,
-            job.id,
-            processed_entries,
-            BatchJobStatus.SUCCEEDED,
-            transcription_duration_seconds,
-            model_identifier,
-            model_display_name,
+        with (
+            stage(STAGE_PERSISTENCE, attributes=speech_ref) as persistence,
+            job_telemetry.storage_write("transcript.save", stages=(persistence, processing)),
+        ):
+            await asyncio.to_thread(
+                self._save_results,
+                job.id,
+                processed_entries,
+                BatchJobStatus.SUCCEEDED,
+                transcription_duration_seconds,
+                model_identifier,
+                model_display_name,
+            )
+        job_telemetry.record_transcript_available(
+            processed_entries, job_telemetry.azure_last_action(status_data), polled_at, speech_ref
         )
-        record_event(EVENT_TRANSCRIPT_AVAILABLE)
         _job_finished(job, status_data, "success")
 
         await self._dispatch_success(job, processed_entries)
@@ -453,7 +494,8 @@ class BatchPollingService:
             await delete_batch_job(job.batch_job_url)
         except Exception as exc:
             logger.warning("Could not delete batch job for job %s (%s)", job.id, type(exc).__name__)
-            await asyncio.to_thread(self._record_cleanup_failure, job.id, str(exc))
+            with job_telemetry.storage_write("job.mark_needs_cleanup"):
+                await asyncio.to_thread(self._record_cleanup_failure, job.id, str(exc))
 
     async def _fail_results(
         self,
@@ -477,7 +519,16 @@ class BatchPollingService:
         logger.error("Failed to retrieve batch results for job %s (%s)", job.id, type(exc).__name__)
         if processing is not None:
             processing.error(error_code)
-        await asyncio.to_thread(self._record_error, job.id, str(exc))
+        try:
+            with job_telemetry.storage_write("job.mark_failed"):
+                await asyncio.to_thread(self._record_error, job.id, str(exc))
+        except Exception as db_exc:
+            # DIAAT-283: this attempt failed because of the results (the stage says so);
+            # the write failure is job.storage_failed. job.poll_failed keeps the
+            # attempt's code and source.
+            source = job_telemetry.failure_source(error_code, exc)
+            job_telemetry.tag_failure(db_exc, error_code, source)
+            raise
         _job_finished(job, status_data, "error", error_code, exc=exc)
         await self._dispatch_failure(job, str(exc))
 
@@ -489,23 +540,29 @@ class BatchPollingService:
         )
         # The Azure error text is stored on the job (shown in the UI), never logged.
         logger.error("Batch job %s failed in Azure Speech", job.id)
-        await asyncio.to_thread(self._record_error, job.id, error_msg)
+        with job_telemetry.storage_write("job.mark_failed"):
+            await asyncio.to_thread(self._record_error, job.id, error_msg)
         # Only once the terminal state is stored: if storing it fails, the job stays
         # RUNNING, the poll records job.poll_failed and the next poll finishes it once.
         _speech_job_failed(job, status_data)
 
         if job.audio_blob_path:
             try:
-                async with AsyncAzureBlobManager() as blob_manager:
-                    await blob_manager.set_blob_metadata(
-                        blob_name=job.audio_blob_path,
-                        metadata={
-                            "processed": "false",
-                            "status": "permanently_failed",
-                            "last_error": error_msg[:1000],
-                            "failed_at": datetime.now(UTC).isoformat(),
-                        },
-                    )
+                blob_failed = job_telemetry.CODE_BLOB_FAILED
+                with job_telemetry.storage_write("blob.mark_failed", blob_failed):
+                    async with AsyncAzureBlobManager() as blob_manager:
+                        marked = await blob_manager.set_blob_metadata(
+                            blob_name=job.audio_blob_path,
+                            metadata={
+                                "processed": "false",
+                                "status": "permanently_failed",
+                                "last_error": error_msg[:1000],
+                                "failed_at": datetime.now(UTC).isoformat(),
+                            },
+                        )
+                # set_blob_metadata reports its own failures by returning False.
+                if marked is False:
+                    job_telemetry.record_storage_failure("blob.mark_failed", blob_failed)
             except Exception as exc:
                 logger.warning(
                     "Could not mark blob as failed for job %s (%s)", job.id, type(exc).__name__
@@ -517,7 +574,8 @@ class BatchPollingService:
             await delete_batch_job(job.batch_job_url)
         except Exception as exc:
             logger.warning("Could not delete batch job for job %s (%s)", job.id, type(exc).__name__)
-            await asyncio.to_thread(self._record_cleanup_failure, job.id, str(exc))
+            with job_telemetry.storage_write("job.mark_needs_cleanup"):
+                await asyncio.to_thread(self._record_cleanup_failure, job.id, str(exc))
 
     def _save_results(
         self,
@@ -575,8 +633,8 @@ class BatchPollingService:
             "metadata": job.metadata_,
         }
         delivered = await dispatch(job.callback_url, job.webhook_secret, payload)
+        _record_delivery(delivered, "succeeded")
         if not delivered:
-            record_event(EVENT_WEBHOOK_DELIVERY_FAILED, {c.ERROR_CODE: "webhook.not_delivered"})
             logger.error(
                 "Webhook delivery permanently failed for job %s after all retries; "
                 "caller will not receive the success result",
@@ -605,8 +663,8 @@ class BatchPollingService:
             "metadata": job.metadata_,
         }
         delivered = await dispatch(job.callback_url, job.webhook_secret, payload)
+        _record_delivery(delivered, "failed")
         if not delivered:
-            record_event(EVENT_WEBHOOK_DELIVERY_FAILED, {c.ERROR_CODE: "webhook.not_delivered"})
             logger.error(
                 "Webhook delivery permanently failed for job %s after all retries; "
                 "caller will not receive the failure notification",

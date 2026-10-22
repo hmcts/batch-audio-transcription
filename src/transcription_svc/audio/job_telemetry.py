@@ -25,15 +25,17 @@ import math
 import re
 import threading
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
+from hmcts_otel import StageHandle, get_meter, journey, record_event
 from hmcts_otel import conventions as c
-from hmcts_otel import get_meter, journey, record_event
 from opentelemetry.metrics import CallbackOptions, Meter, Observation
+from sqlalchemy import exc as sa_exc
 from sqlmodel import Session
 
 from transcription_svc.config.settings import get_settings
@@ -52,11 +54,16 @@ from transcription_svc.telemetry import (
     ATTR_RETRY_AFTER_S,
     ATTR_RETRY_ATTEMPT,
     ATTR_RETRY_OPERATION,
+    ATTR_SEGMENT_COUNT,
+    ATTR_SPEAKER_COUNT,
     ATTR_SPEECH_ERROR_CODE,
+    ATTR_STORAGE_OPERATION,
     EVENT_JOB_FINISHED,
     EVENT_JOB_RETRIED,
     EVENT_JOB_RUNNING,
     EVENT_JOB_STUCK,
+    EVENT_STORAGE_FAILED,
+    EVENT_TRANSCRIPT_AVAILABLE,
     JOURNEY_JOB,
     batch_job_id_from_url,
     upload_id_from_blob,
@@ -79,6 +86,10 @@ METRIC_SPEECH_UTILISATION = "transcription.speech.concurrency.utilisation"
 PHASE_QUEUE_WAIT = "queue_wait"
 PHASE_PROCESSING = "processing"
 PHASE_END_TO_END = "end_to_end"
+# DIAAT-283: Azure Speech finished -> transcript saved and available. The duration of
+# each post-Speech step is on hmcts.stage.duration (stage = results_retrieval,
+# transcript_postprocessing, transcript_persistence), which every stage() records.
+PHASE_TO_AVAILABLE = "to_available"
 
 
 # Timestamps -----------------------------------------------------------------------------
@@ -152,7 +163,7 @@ def _record_duration(phase: str, seconds: float | None, outcome: str | None = No
             "histogram",
             METRIC_JOB_DURATION,
             unit="s",
-            description="Transcription job queue wait, processing and end-to-end time",
+            description="Transcription job time by phase (queue wait, processing, end to end...)",
         ).record(seconds, attributes)
     except Exception as exc:  # telemetry must never break the job
         logger.warning("Could not record job duration (%s)", type(exc).__name__)
@@ -251,8 +262,12 @@ def failure_code(exc: BaseException, component: str) -> str:
     A 429 is ``<component>.throttled`` (DIAAT-282), other HTTP errors
     ``<component>.http_<status>``. Any other transport failure (read, write, protocol,
     proxy) is ``<component>.transport_error``. Azure results we could not parse
-    (``BatchResultsInvalidError``) are ``speech.results_invalid``.
+    (``BatchResultsInvalidError``) are ``speech.results_invalid``. DIAAT-283: an
+    exception tagged by a post-Speech step (tag_failure) is that step's code.
     """
+    tagged = _tag(exc)  # the original exception first, then a RetryError's cause
+    if tagged is not None:
+        return tagged[0]
     exc = unwrap_retry(exc)
     if isinstance(exc, httpx.HTTPStatusError):
         if exc.response.status_code == HTTP_TOO_MANY_REQUESTS:
@@ -275,6 +290,7 @@ def failure_code(exc: BaseException, component: str) -> str:
 SOURCE_APPLICATION = "application"
 SOURCE_QUEUE = "queue"
 SOURCE_DEPENDENCY = "dependency"
+_SOURCES = (SOURCE_APPLICATION, SOURCE_QUEUE, SOURCE_DEPENDENCY)
 
 # Codes that always mean Azure Speech failed us: it reported the job as Failed,
 # returned no transcript or one we could not parse, throttled us, or a call to it
@@ -289,6 +305,11 @@ _DEPENDENCY_CODE = re.compile(
 # An HTTP error from Azure Speech: attributed by its status (_dependency_status).
 _SPEECH_HTTP_CODE = re.compile(r"speech\.http_([0-9]{3})")
 _STUCK_SOURCES = {"job.stuck.waiting": SOURCE_QUEUE, "job.stuck.running": SOURCE_DEPENDENCY}
+# DIAAT-283: failures after Azure Speech returned the transcript. Our code, our
+# database and our blob storage: the application's.
+_OWN_CODE = re.compile(
+    r"transcript\.postprocess_failed|storage\.(db_unavailable|db_rejected|db_failed|blob_failed)"
+)
 HTTP_REQUEST_TIMEOUT = 408
 
 
@@ -309,6 +330,8 @@ def _code_source(error_code: str) -> str | None:
     """The source a code names by itself; None for a code attributed by its cause."""
     if error_code in _STUCK_SOURCES:
         return _STUCK_SOURCES[error_code]
+    if _OWN_CODE.fullmatch(error_code):
+        return SOURCE_APPLICATION
     if _DEPENDENCY_CODE.fullmatch(error_code):
         return SOURCE_DEPENDENCY
     http = _SPEECH_HTTP_CODE.fullmatch(error_code)
@@ -333,7 +356,14 @@ def failure_source(error_code: str, exc: BaseException | None = None) -> str:
     Generic codes (``job.submission_error``, ``speech.results_error``, a failed poll's
     ``unhandled.*``) are attributed by their cause, by the same rule; anything that is
     not an Azure Speech failure (our code, our database) is the application's.
+
+    DIAAT-283: failures after Azure Speech returned the transcript
+    (``transcript.postprocess_failed``, ``storage.db_*``, ``storage.blob_failed``) are
+    the application's: our code, our database and our blob storage.
     """
+    tagged = _tag(exc)
+    if tagged is not None and tagged[0] == error_code:
+        return tagged[1]  # the step that failed said where (DIAAT-283)
     if error_code == "speech.submission_rejected":
         status = _response_status(exc)
         if status is None or _dependency_status(status):
@@ -345,6 +375,143 @@ def failure_source(error_code: str, exc: BaseException | None = None) -> str:
     if exc is not None:
         return _code_source(failure_code(exc, "speech")) or SOURCE_APPLICATION
     return SOURCE_APPLICATION
+
+
+# After Azure Speech (DIAAT-283) ----------------------------------------------------------
+
+CODE_POSTPROCESS_FAILED = "transcript.postprocess_failed"
+CODE_DB_UNAVAILABLE = "storage.db_unavailable"
+CODE_DB_REJECTED = "storage.db_rejected"
+CODE_DB_FAILED = "storage.db_failed"
+CODE_BLOB_FAILED = "storage.blob_failed"
+# Set on an exception by the step that failed, so job.poll_failed carries that step's
+# code and source (failure_code / failure_source read them) instead of
+# unhandled.<Type>. The exception is otherwise unchanged and re-raised.
+_FAILURE_CODE_TAG = "hmcts_failure_code"
+_FAILURE_SOURCE_TAG = "hmcts_failure_source"
+_TAG_CODE = re.compile(r"[a-z][a-z0-9_.]{0,63}")
+
+
+def tag_failure(exc: BaseException, error_code: str, source: str | None = None) -> None:
+    """Remember the controlled code (and source) ``exc`` stands for. Never raises."""
+    try:
+        setattr(exc, _FAILURE_CODE_TAG, error_code)
+        setattr(exc, _FAILURE_SOURCE_TAG, source or failure_source(error_code))
+    except Exception as error:
+        logger.warning("Could not tag the failure (%s)", type(error).__name__)
+
+
+def _tag(exc: BaseException | None) -> tuple[str, str] | None:
+    """The (code, source) a step tagged on ``exc`` or, for a RetryError, its cause."""
+    for candidate in (exc, unwrap_retry(exc)) if exc is not None else ():
+        code = getattr(candidate, _FAILURE_CODE_TAG, None)
+        source = getattr(candidate, _FAILURE_SOURCE_TAG, None)
+        if isinstance(code, str) and _TAG_CODE.fullmatch(code) and source in _SOURCES:
+            return code, source
+    return None
+
+
+def db_failure_code(exc: BaseException) -> str:
+    """A controlled code for a failed database write, from the exception's type.
+
+    ``storage.db_unavailable``: the database could not be reached or used (connection,
+    pool timeout, lock or deadlock: SQLAlchemy OperationalError / InterfaceError /
+    TimeoutError). ``storage.db_rejected``: the database refused the data (integrity or
+    data errors); retrying will not help. ``storage.db_failed``: anything else.
+    """
+    if isinstance(exc, (sa_exc.OperationalError, sa_exc.InterfaceError, sa_exc.TimeoutError)):
+        return CODE_DB_UNAVAILABLE
+    if isinstance(exc, (sa_exc.IntegrityError, sa_exc.DataError)):
+        return CODE_DB_REJECTED
+    return CODE_DB_FAILED
+
+
+def record_storage_failure(
+    operation: str, error_code: str, attributes: Mapping[str, object] | None = None
+) -> None:
+    """job.storage_failed: a database or blob write after Azure Speech finished failed."""
+    record_event(
+        EVENT_STORAGE_FAILED,
+        {
+            **(attributes or {}),
+            ATTR_STORAGE_OPERATION: operation,
+            ATTR_FAILURE_SOURCE: failure_source(error_code),
+            c.ERROR_CODE: error_code,
+        },
+    )
+
+
+@contextmanager
+def failing_step(
+    error_code: str | Callable[[BaseException], str],
+    *,
+    stages: Iterable[StageHandle | None] = (),
+    operation: str | None = None,
+    attributes: Mapping[str, object] | None = None,
+) -> Iterator[None]:
+    """Attribute an exception leaving the block to one controlled code. Telemetry only.
+
+    The exception is tagged (tag_failure), each stage in ``stages`` is marked as an
+    error with the code and, for a storage write (``operation``), job.storage_failed is
+    recorded. The exception is then re-raised unchanged, so behaviour is unchanged.
+    """
+    try:
+        yield
+    except Exception as exc:
+        code = error_code(exc) if callable(error_code) else error_code
+        tag_failure(exc, code)
+        for handle in stages:
+            if handle is not None:
+                handle.error(code)
+        if operation is not None:
+            record_storage_failure(operation, code, attributes)
+        raise
+
+
+def storage_write(
+    operation: str,
+    error_code: str | Callable[[BaseException], str] = db_failure_code,
+    *,
+    stages: Iterable[StageHandle | None] = (),
+) -> AbstractContextManager[None]:
+    """failing_step for a database (default) or blob write after Azure Speech."""
+    return failing_step(error_code, stages=stages, operation=operation)
+
+
+def _speaker(entry: object) -> object:
+    return entry.get("speaker") if isinstance(entry, Mapping) else getattr(entry, "speaker", None)
+
+
+def transcript_counts(entries: Iterable[object]) -> dict[str, object]:
+    """Number of dialogue entries and of distinct speakers. Never the text or names."""
+    try:
+        entries = list(entries)
+        speakers = {_speaker(entry) for entry in entries} - {None}
+        return {ATTR_SEGMENT_COUNT: len(entries), ATTR_SPEAKER_COUNT: len(speakers)}
+    except Exception as exc:
+        logger.warning("Could not count the transcript (%s)", type(exc).__name__)
+        return {}
+
+
+def record_transcript_available(
+    entries: Iterable[object],
+    speech_finished: datetime | None,
+    polled_at: datetime,
+    attributes: Mapping[str, object] | None = None,
+) -> None:
+    """transcript.available, with the time from Azure finishing to the transcript saved.
+
+    ``speech_finished`` is Azure's lastActionDateTime for the Succeeded job; without it,
+    the time of the poll that saw Succeeded. Includes our poll lag, the download,
+    post-processing, the save and any polls whose post-processing or save failed.
+    """
+    ready = seconds_between(speech_finished or polled_at, datetime.now(UTC))
+    record_event(
+        EVENT_TRANSCRIPT_AVAILABLE,
+        {**(attributes or {}), **transcript_counts(entries)},
+        duration_ms=ready * 1000.0 if ready is not None else None,
+    )
+    _record_duration(PHASE_TO_AVAILABLE, ready)
 
 
 _AZURE_ERROR_CODE = re.compile(r"[A-Za-z][A-Za-z0-9_.]{0,63}")
