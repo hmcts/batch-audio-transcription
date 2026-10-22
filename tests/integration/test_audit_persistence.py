@@ -57,7 +57,7 @@ def test_audit_rows_are_inserted_and_queryable_by_job(engine):
     job_id, other = uuid.uuid4(), uuid.uuid4()
     with request_id_context(REQUEST_ID):
         write_audit(
-            AuditRecord("transcript.view", "success", ACTOR, job_id, detail={"via": "list"}),
+            AuditRecord("transcript.view", "success", ACTOR, job_id, detail={"partial": True}),
             denied("transcript.view", ACTOR, other, "ownership_assertion_failed"),
         )
 
@@ -66,7 +66,7 @@ def test_audit_rows_are_inserted_and_queryable_by_job(engine):
 
     (row,) = rows
     assert (row.actor_id, row.action, row.outcome) == (ACTOR, "transcript.view", "success")
-    assert (row.request_id, row.detail) == (REQUEST_ID, {"via": "list"})
+    assert (row.request_id, row.detail) == (REQUEST_ID, {"partial": True})
     assert row.timestamp.tzinfo is not None
     with engine.connect() as conn:
         # No detail is SQL NULL, not a JSON null.

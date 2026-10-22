@@ -903,15 +903,9 @@ async def list_jobs(
         limit=limit,
         offset=offset,
     )
-    # DIAAT-286: the list returns whole transcripts, so each one returned is a view
-    # (one row per job, all in one insert), alongside any refusal above.
-    audit_records.extend(
-        AuditRecord(
-            "transcript.view", "success", current_user.id, item.job_id, detail={"via": "list"}
-        )
-        for item in response.jobs
-        if item.dialogue_entries is not None
-    )
+    # DIAAT-286: only the refusals above are audited here (rare, and important). A list
+    # is not recorded as a view of each transcript: the dashboard polls it every 5 s
+    # while a job is in flight, which would bury the real events (see audit.py).
     write_audit(*audit_records)
     return response
 

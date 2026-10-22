@@ -9,14 +9,23 @@ any ``security.ownership_violation`` event). ``detail`` holds only controlled va
 
 Audited actions (the vocabulary is ``telemetry.AUDIT_ACTIONS``):
 
-* ``transcript.view``: a transcript was returned (job detail, or the job list);
+* ``transcript.view``: a transcript was returned by the job detail (GET /jobs/{id});
 * ``audio.export``: the job's audio was streamed back (the only audio egress);
 * ``job.delete``: a job and its audio were deleted;
 * ``job.submit``: a transcription job was submitted;
 * ``transcript.edit``: recorded only when refused (corrections and baselines).
 
 A refusal (outcome ``denied``) is recorded wherever DIAAT-285 records an ownership
-violation (``blocked`` and ``detected``). A failure after authorisation is ``failed``.
+violation (``blocked`` and ``detected``), including the job list's ``detected``
+assertion. A failure after authorisation is ``failed``.
+
+The job list (GET /jobs) is NOT recorded as a view. The dashboard polls it every 5 s
+while any job is in flight, so one row per returned transcript per poll would bury
+the real sensitive events and grow the table without bound. OPEN SECURITY QUESTION:
+should a list view count as a view? It matters because GET /jobs returns the full
+transcripts (dialogue entries) of every job on the page, which the dashboard does not
+need: removing them from the list response (a data-exposure fix) would make the
+question moot.
 
 Decision OD7: audit records are stored with the record, in the application database
 (table ``audit_log``), not in monitoring telemetry.

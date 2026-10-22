@@ -347,7 +347,7 @@ class AuditLog(SQLModel, table=True):
     ID (or, for a refused submission, the upload ID in the blob name); request_id is
     hmcts.request.id, which joins a row to security.ownership_violation and the
     request's other telemetry. detail holds only controlled values (a reason code,
-    an HTTP status, "via": "list"), never content.
+    an HTTP status, "partial": true), never content.
     """
 
     __tablename__ = "audit_log"

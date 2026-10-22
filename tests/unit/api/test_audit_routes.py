@@ -1,10 +1,11 @@
 """DIAAT-286: which requests are audited, and how (audit_log rows, captured).
 
 AC1: an investigator can tell whether a sensitive action happened and whether it
-succeeded: viewed (transcript returned), exported (audio streamed), deleted,
-submitted, and refused (the DIAAT-285 blocked and detected sites). One insert per
-request; actor is the internal user ID; the request ID joins the row to the
-security.ownership_violation event. A failed audit write never breaks the request.
+succeeded: viewed (GET /jobs/{id} returned a transcript; the list is not a view),
+exported (audio streamed), deleted, submitted, and refused (the DIAAT-285 blocked and
+detected sites). One insert per request; actor is the internal user ID; the request
+ID joins the row to the security.ownership_violation event. A failed audit write never
+breaks the request.
 """
 
 from __future__ import annotations
@@ -171,14 +172,17 @@ def test_administrator_view_of_another_users_job_names_the_administrator(mocker,
     assert row["actor_id"] == CALLER_ID
 
 
-def test_list_records_one_view_per_returned_transcript_in_one_insert(mocker, audit_capture):
+def test_list_view_writes_no_view_rows(mocker, audit_capture):
+    # The dashboard polls the list every 5 s: views are audited by GET /jobs/{id} only,
+    # even though the list returns the transcripts.
     done, running = _job(), _job(status=JobStatus.RUNNING)
     mocker.patch(f"{ROUTES}.list_jobs_paginated", return_value=([done, running], 2))
 
-    assert _client().get("/api/v1/jobs").status_code == 200
+    response = _client().get("/api/v1/jobs")
 
-    row = _only_row(audit_capture)
-    assert _summary(row) == ("transcript.view", "success", "job", done.id, {"via": "list"})
+    assert response.status_code == 200
+    assert TRANSCRIPT_TEXT in response.text  # a transcript was returned...
+    assert audit_capture.inserts == []  # ...and still nothing was written
 
 
 def test_list_without_transcripts_writes_nothing(mocker, audit_capture):
@@ -190,28 +194,22 @@ def test_list_without_transcripts_writes_nothing(mocker, audit_capture):
     assert audit_capture.inserts == []
 
 
-def test_list_refusal_and_views_share_one_insert(tel, mocker, audit_capture):
+def test_list_records_only_the_refusal(tel, mocker, audit_capture):
     own, foreign = _job(), _job(OWNER_ID)
     mocker.patch(f"{ROUTES}.list_jobs_paginated", return_value=([own, foreign], 2))
 
     assert _client().get("/api/v1/jobs").status_code == 200
 
-    (rows,) = audit_capture.inserts
-    assert sorted(map(_summary, rows), key=str) == sorted(
-        [
-            (
-                "transcript.view",
-                "denied",
-                "job",
-                foreign.id,
-                {"reason": "ownership_assertion_failed"},
-            ),
-            ("transcript.view", "success", "job", own.id, {"via": "list"}),
-        ],
-        key=str,
+    row = _only_row(audit_capture)  # the refusal; the caller's own transcript is no row
+    assert _summary(row) == (
+        "transcript.view",
+        "denied",
+        "job",
+        foreign.id,
+        {"reason": "ownership_assertion_failed"},
     )
     (event,) = tel.events(EVENT_OWNERSHIP_VIOLATION)
-    assert {row["request_id"] for row in rows} == {event[c.REQUEST_ID]}
+    assert row["request_id"] == event[c.REQUEST_ID]
 
 
 # exported ----------------------------------------------------------------------------------
