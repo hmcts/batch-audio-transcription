@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, DateTime, Index, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -325,3 +325,47 @@ class TranscriptionJob(BaseTable, table=True):
     # Webhook delivery guard — set atomically by the replica that wins the dispatch race.
     # NULL means no webhook has been dispatched yet for this job.
     webhook_dispatched_at: datetime | None = Field(default=None)
+
+    # DIAAT-286: the technical configuration that produced the transcript (a
+    # transcription_svc.provenance.TranscriptProvenance), written in the same
+    # transaction as the results. Configuration only, never content. NULL for jobs
+    # that have not succeeded, and for jobs completed before migration 017.
+    # none_as_null: SQL NULL, not a JSON null, when there is none.
+    provenance: dict | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )
+
+
+class AuditLog(SQLModel, table=True):
+    """DIAAT-286: one sensitive action on a job (OD7: stored here, not in telemetry).
+
+    Append-only: transcription_svc.audit.write_audit is the only writer, and nothing
+    in the application updates or deletes rows. No foreign keys on purpose: an audit
+    record must outlive the job (job.delete) and the user it names.
+
+    actor_id is the internal User.id (never an email or name); object_id is the job
+    ID (or, for a refused submission, the upload ID in the blob name); request_id is
+    hmcts.request.id, which joins a row to security.ownership_violation and the
+    request's other telemetry. detail holds only controlled values (a reason code,
+    an HTTP status, "via": "list"), never content.
+    """
+
+    __tablename__ = "audit_log"
+    __table_args__ = (
+        Index("ix_audit_log_actor_id_timestamp", "actor_id", "timestamp"),
+        CheckConstraint("outcome IN ('success', 'denied', 'failed')", name="ck_audit_log_outcome"),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    timestamp: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False, index=True)
+    )
+    actor_id: UUID = Field(nullable=False)
+    action: str = Field(max_length=32, nullable=False)
+    outcome: str = Field(max_length=16, nullable=False)
+    object_type: str = Field(max_length=16, nullable=False)
+    object_id: UUID | None = Field(default=None, index=True)
+    request_id: str | None = Field(default=None, max_length=64)
+    detail: dict | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )

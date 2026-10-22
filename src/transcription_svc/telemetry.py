@@ -198,6 +198,20 @@ SECURITY_OUTCOMES = ("blocked", "detected", "test")
 
 _security_log = logging.getLogger("transcription_svc.security")
 
+# DIAAT-286: audit records (transcription_svc.audit) are stored in the application
+# database, never in telemetry (OD7). These are their controlled vocabularies, and the
+# one telemetry event about them: an audit record could not be written (the request
+# carried on). audit.write_failed carries only the action, never who or which job.
+AUDIT_ACTIONS = ("job.submit", "transcript.view", "transcript.edit", "audio.export", "job.delete")
+AuditAction = Literal[
+    "job.submit", "transcript.view", "transcript.edit", "audio.export", "job.delete"
+]
+AUDIT_OUTCOMES = ("success", "denied", "failed")
+AuditOutcome = Literal["success", "denied", "failed"]
+AuditObjectType = Literal["job", "upload"]
+EVENT_AUDIT_WRITE_FAILED = "audit.write_failed"
+ATTR_AUDIT_ACTION = "audit.action"
+
 JOB_STATES = ("waiting", "running")
 RETRY_OPERATIONS = (
     "speech.submit",
@@ -240,6 +254,23 @@ def _register_schema() -> None:
     _register_job_schema()
     _register_dependency_health_schema()
     _register_security_schema()
+    _register_audit_schema()
+
+
+def _register_audit_schema() -> None:
+    """DIAAT-286: the one audit telemetry event (the records themselves are in the DB)."""
+    default_schema.attribute(
+        ATTR_AUDIT_ACTION,
+        allowed_values=AUDIT_ACTIONS,
+        description="The sensitive action whose audit record could not be written.",
+    )
+    default_schema.event(
+        EVENT_AUDIT_WRITE_FAILED,
+        description="An audit record could not be written to the database; the request "
+        "carried on (fail-open). hmcts.error.code: audit.write_failed. Correlate on "
+        "hmcts.request.id. Never carries the actor, the job or any content.",
+        attributes=(ATTR_AUDIT_ACTION, c.ERROR_CODE),
+    )
 
 
 def _register_security_schema() -> None:

@@ -29,6 +29,12 @@ _TICKS_PER_SECOND: int = 10_000_000
 # respondent, interpreter, witnesses, clerk).
 _MAX_DIARIZATION_SPEAKERS: int = 35
 _HTTP_TIMEOUT: float = 30.0
+# What every job is submitted with, besides locale and diarization. DIAAT-286: also
+# recorded in the job's provenance, as configuration that shapes the transcript.
+PROFANITY_FILTER_MODE = "None"
+PUNCTUATION_MODE = "DictatedAndAutomatic"
+WORD_LEVEL_TIMESTAMPS = True
+MAX_DIARIZATION_SPEAKERS = _MAX_DIARIZATION_SPEAKERS
 _HTTP_SERVER_ERROR_MIN: int = 500
 
 _RETRY_POLICY = retry(
@@ -105,9 +111,9 @@ async def submit_batch_job(
         "locale": locale,
         "displayName": display_name,
         "properties": {
-            "wordLevelTimestampsEnabled": True,
-            "profanityFilterMode": "None",
-            "punctuationMode": "DictatedAndAutomatic",
+            "wordLevelTimestampsEnabled": WORD_LEVEL_TIMESTAMPS,
+            "profanityFilterMode": PROFANITY_FILTER_MODE,
+            "punctuationMode": PUNCTUATION_MODE,
         },
     }
 
