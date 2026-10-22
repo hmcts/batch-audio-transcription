@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -106,11 +106,28 @@ class Settings(BaseSettings):
             raise ValueError("BATCH_TRANSCRIPTION_THRESHOLD_HOURS must be greater than 0")
         return v
 
+    @field_validator("JOB_STUCK_WAITING_SECONDS", "JOB_STUCK_RUNNING_SECONDS", mode="before")
+    @classmethod
+    def blank_stuck_threshold_is_default(cls, v: object, info: ValidationInfo) -> object:
+        # An env var set but empty (e.g. by a deployment template) means "use the default",
+        # not an int parsing error that stops the service starting.
+        if isinstance(v, str) and not v.strip():
+            return cls.model_fields[info.field_name].default
+        return v
+
     @field_validator("JOB_STUCK_WAITING_SECONDS", "JOB_STUCK_RUNNING_SECONDS")
     @classmethod
     def validate_stuck_threshold(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("Stuck-job thresholds must be greater than 0 seconds")
+        return v
+
+    @field_validator("SPEECH_CONCURRENT_JOBS_LIMIT", mode="before")
+    @classmethod
+    def blank_concurrent_jobs_limit_is_unset(cls, v: object) -> object:
+        # An env var set but empty means unset, not an int parsing error at start-up.
+        if isinstance(v, str) and not v.strip():
+            return None
         return v
 
     @field_validator("SPEECH_CONCURRENT_JOBS_LIMIT")

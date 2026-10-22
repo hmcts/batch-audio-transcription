@@ -407,18 +407,18 @@ async def test_job_is_queued_when_azure_accepts_it(tel, mocker):
 
 async def test_failed_job_is_terminal_with_a_controlled_code_and_counted(tel):
     service = _service()
-    service._handle_failed = AsyncMock()
     created = datetime.now(UTC) - timedelta(minutes=30)
     job = _pending(created, BatchJobStatus.RUNNING, started=created + timedelta(minutes=5))
-    await _poll(
-        service,
-        job,
-        {
-            "status": "Failed",
-            "lastActionDateTime": _iso(created + timedelta(minutes=25)),
-            "properties": {"error": {"message": "could not decode " + FILE_STEM}},
-        },
-    )
+    with patch(f"{BASE}.AsyncAzureBlobManager"):
+        await _poll(
+            service,
+            job,
+            {
+                "status": "Failed",
+                "lastActionDateTime": _iso(created + timedelta(minutes=25)),
+                "properties": {"error": {"message": "could not decode " + FILE_STEM}},
+            },
+        )
     (finished,) = tel.events("job.finished")
     assert finished[c.OUTCOME] == "error" and finished[c.ERROR_CODE] == "speech.job_failed"
     assert finished["job.processing_ms"] == pytest.approx(1_200_000)

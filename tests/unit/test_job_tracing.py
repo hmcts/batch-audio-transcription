@@ -226,11 +226,14 @@ async def test_whole_lifecycle_is_one_query_and_linked_to_the_request(tel, mocke
 async def test_azure_failure_identifies_the_component_without_its_message(tel):
     pending = _pending(uuid4(), None)
     service = _service()
-    service._handle_failed = AsyncMock()
     status = {"status": "Failed", "properties": {"error": {"message": "decode failed: " + SECRET}}}
-    with patch(
-        "transcription_svc.audio.polling_service.get_batch_job_status",
-        new=AsyncMock(return_value=status),
+    with (
+        patch(
+            "transcription_svc.audio.polling_service.get_batch_job_status",
+            new=AsyncMock(return_value=status),
+        ),
+        patch("transcription_svc.audio.polling_service.AsyncAzureBlobManager"),
+        patch("transcription_svc.audio.polling_service.delete_batch_job", new=AsyncMock()),
     ):
         await service._process_job(pending)
 

@@ -28,9 +28,11 @@ from tenacity import Future, RetryError
 from transcription_svc.audio import job_telemetry, speech_telemetry, submission
 from transcription_svc.audio.batch_client import (
     BatchResultError,
+    BatchResultsInvalidError,
     BatchSubmissionError,
     delete_batch_job,
     get_batch_job_status,
+    get_batch_results,
 )
 from transcription_svc.audio.job_telemetry import (
     METRIC_JOBS_FINISHED,
@@ -91,6 +93,10 @@ def _exhausted(exc: BaseException) -> RetryError:
     attempt = Future(attempt_number=2)
     attempt.set_exception(exc)
     return RetryError(attempt)
+
+
+def _rejected(status: int) -> BatchSubmissionError:
+    return BatchSubmissionError("x", response=_response(status, "POST"))
 
 
 def _points(tel: TelemetryCapture, metric: str) -> list[dict]:
@@ -154,15 +160,24 @@ async def _submit(mocker, post=None, save=None):
 @pytest.mark.parametrize(
     ("code", "source"),
     [
-        ("speech.submission_rejected", "dependency"),
+        ("speech.submission_rejected", "dependency"),  # no response status: Azure's
         ("speech.job_failed", "dependency"),
         ("speech.results_unavailable", "dependency"),
+        ("speech.results_invalid", "dependency"),
         ("speech.http_500", "dependency"),
         ("speech.http_503", "dependency"),
-        ("speech.http_401", "dependency"),
+        ("speech.http_408", "dependency"),
         ("speech.throttled", "dependency"),
         ("speech.timeout", "dependency"),
         ("speech.connect_error", "dependency"),
+        ("speech.transport_error", "dependency"),
+        # Any other 4xx: our payload, key, URL or configuration.
+        ("speech.http_400", "application"),
+        ("speech.http_401", "application"),
+        ("speech.http_403", "application"),
+        ("speech.http_404", "application"),
+        ("speech.http_413", "application"),
+        ("speech.http_415", "application"),
         ("speech.results_error", "application"),
         ("job.submission_error", "application"),
         ("unhandled.OperationalError", "application"),
@@ -185,15 +200,24 @@ def test_failure_source_by_code(code, source):
         ("job.submission_error", httpx.ConnectError("x"), "dependency"),
         ("job.submission_error", OperationalError("insert", {}, Exception()), "application"),
         ("speech.results_error", _exhausted(_status_error(500)), "dependency"),
+        ("speech.results_error", _exhausted(_status_error(404)), "application"),
         ("speech.results_error", ValueError("bad json"), "application"),
+        ("job.submission_error", _exhausted(_status_error(429)), "dependency"),
+        ("job.submission_error", _exhausted(_status_error(401)), "application"),
         ("unhandled.RuntimeError", RuntimeError("bug"), "application"),
+        # A rejection is attributed by the status Azure answered with.
+        ("speech.submission_rejected", BatchSubmissionError("x"), "dependency"),
+        ("speech.submission_rejected", _rejected(400), "application"),
+        ("speech.submission_rejected", _rejected(403), "application"),
+        ("speech.submission_rejected", _rejected(408), "dependency"),
+        ("speech.submission_rejected", _rejected(429), "dependency"),
     ],
 )
 def test_generic_failure_codes_are_attributed_by_their_cause(code, exc, source):
     assert failure_source(code, exc) == source
 
 
-async def test_azure_rejecting_the_job_is_a_dependency_failure_with_azure_details(tel, mocker):
+async def test_azure_rejecting_our_request_is_the_applications_with_azure_details(tel, mocker):
     async def post(self, url, **_kwargs):
         body = {"code": "InvalidPayload", "message": AZURE_MESSAGE}
         return _response(400, "POST", url, json=body)
@@ -203,12 +227,13 @@ async def test_azure_rejecting_the_job_is_a_dependency_failure_with_azure_detail
 
     (finished,) = tel.events("job.finished")
     assert finished[c.ERROR_CODE] == "speech.submission_rejected"
-    assert finished["hmcts.failure.source"] == "dependency"
+    # A 400 is our payload, key, URL or configuration, not an Azure failure.
+    assert finished["hmcts.failure.source"] == "application"
     assert finished["http.response.status_code"] == 400
     assert finished["speech.error_code"] == "InvalidPayload"
     assert c.DEPENDENCY_REF not in finished  # Azure never accepted it
     (counted,) = _points(tel, METRIC_JOBS_FINISHED)
-    assert counted["attributes"]["hmcts.failure.source"] == "dependency"
+    assert counted["attributes"]["hmcts.failure.source"] == "application"
     # Never Azure's message, the SAS token or the file name.
     tel.assert_no_prohibited_content(AZURE_MESSAGE, SAS_SIGNATURE, FILE_STEM, "Cannot access")
 
@@ -620,3 +645,181 @@ def test_speech_attributes_are_registered_and_constrained(tel):
         assert {"hmcts.failure.source", "speech.retry_after_s"} <= set(attributes), name
     assert "speech.region" in default_schema.get_event("job.queued").attributes
     assert "hmcts.failure.source" in default_schema.get_event("job.stuck").attributes
+
+
+# Review fixes (DIAAT-282) ------------------------------------------------------------------
+
+
+def _finished_count(tel: TelemetryCapture) -> int:
+    return sum(point["value"] for point in _points(tel, METRIC_JOBS_FINISHED))
+
+
+@pytest.mark.parametrize(
+    ("status_data", "results", "code"),
+    [
+        ({"status": "Failed", "properties": {"error": {"code": "InvalidData"}}}, None, None),
+        (
+            {"status": "Succeeded"},
+            AsyncMock(side_effect=BatchResultError("no transcription file")),
+            "speech.results_unavailable",
+        ),
+        (
+            {"status": "Succeeded"},
+            AsyncMock(side_effect=BatchResultsInvalidError("malformed")),
+            "speech.results_invalid",
+        ),
+        (
+            {"status": "Succeeded"},
+            AsyncMock(side_effect=RuntimeError("bug")),
+            "speech.results_error",
+        ),
+    ],
+    ids=["azure_failed", "results_unavailable", "results_invalid", "results_error"],
+)
+async def test_job_finishes_once_when_storing_its_failure_fails_once(
+    tel, status_data, results, code
+):
+    service = _service()
+    db_down = OperationalError("update", {}, Exception("db down"))
+    service._record_error = MagicMock(side_effect=[db_down, None])
+    job = _pending()
+    with patch(f"{BASE}.AsyncAzureBlobManager"):
+        await _poll(service, job, status_data, results=results)  # storing the failure fails
+        await _poll(service, job, status_data, results=results)  # stored: the job finishes
+
+    (poll_failed,) = tel.events("job.poll_failed")
+    assert poll_failed["hmcts.failure.source"] == "application"
+    (finished,) = tel.events("job.finished")
+    assert finished[c.OUTCOME] == "error"
+    assert _finished_count(tel) == 1
+    if code is None:  # Azure reported the job as Failed
+        assert len(tel.events("speech.job_failed")) == 1
+    else:  # each attempt's stage still records why it failed
+        stages = tel.events("result_processing.failed")
+        assert [e[c.ERROR_CODE] for e in stages] == [code, code]
+        assert finished[c.ERROR_CODE] == code
+
+
+async def test_job_succeeds_once_when_saving_its_results_fails_once(tel):
+    service = _service()
+    db_down = OperationalError("insert", {}, Exception("db down"))
+    service._save_results = MagicMock(side_effect=[db_down, None])
+    job = _pending()
+    await _poll(service, job, {"status": "Succeeded"})
+    await _poll(service, job, {"status": "Succeeded"})
+
+    assert len(tel.events("job.poll_failed")) == 1
+    (finished,) = tel.events("job.finished")
+    assert finished[c.OUTCOME] == "success"
+    assert _finished_count(tel) == 1
+
+
+@pytest.mark.parametrize(
+    "rejection",
+    [
+        {"json": {"code": "InvalidPayload", "message": AZURE_MESSAGE}},
+        {"text": f"Bad request: {AUDIO_SAS_URL}"},
+    ],
+    ids=["json", "text"],
+)
+async def test_rejected_submission_never_carries_azures_response_text(
+    tel, mocker, caplog, rejection
+):
+    async def post(self, url, **_kwargs):
+        return _response(400, "POST", url, **rejection)
+
+    sentry = mocker.patch("sentry_sdk.capture_exception")
+    with caplog.at_level("DEBUG"), pytest.raises(BatchSubmissionError) as raised:
+        await _submit(mocker, post)
+
+    message = str(raised.value)
+    expected = "InvalidPayload" if "json" in rejection else None
+    assert message == "Batch job submission failed: HTTP 400" + (
+        f" ({expected})" if expected else ""
+    )
+    (sent,) = sentry.call_args.args
+    for seen in (message, caplog.text, str(sent), repr(sent.args)):
+        for prohibited in (SAS_SIGNATURE, FILE_STEM, "Cannot access", "Bad request"):
+            assert prohibited not in seen
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.RemoteProtocolError("peer closed connection"),
+        httpx.ReadError("x"),
+        httpx.WriteError("x"),
+        httpx.ProxyError("x"),
+    ],
+)
+async def test_transport_errors_are_the_dependencys(tel, error):
+    assert job_telemetry.failure_code(error, "speech") == "speech.transport_error"
+    assert failure_source("speech.transport_error") == "dependency"
+    assert failure_source("job.submission_error", _exhausted(error)) == "dependency"
+    assert failure_source("speech.results_error", error) == "dependency"
+    assert failure_source(f"unhandled.{type(error).__name__}", error) == "dependency"
+
+    with patch(f"{BASE}.get_batch_job_status", new=AsyncMock(side_effect=_exhausted(error))):
+        await _service()._process_job(_pending())
+    (poll_failed,) = tel.events("job.poll_failed")
+    assert poll_failed[c.ERROR_CODE] == "speech.transport_error"
+    assert poll_failed["hmcts.failure.source"] == "dependency"
+
+
+_NULL_TICKS = {"display": "x", "words": [{"word": "x", "offsetInTicks": None}]}
+_GOOD_FILES = {"values": [{"kind": "Transcription", "links": {"contentUrl": AUDIO_SAS_URL}}]}
+
+
+@pytest.mark.parametrize(
+    ("files", "result"),
+    [
+        ({"content": b"<html>not json"}, None),  # files listing: invalid JSON
+        ({"json": {"values": [{"kind": "Transcription", "links": None}]}}, None),
+        ({"json": {"values": None}}, None),
+        ({"json": _GOOD_FILES}, {"content": b"{truncated"}),  # transcript: invalid JSON
+        ({"json": _GOOD_FILES}, {"json": {"recognizedPhrases": ["not an object"]}}),
+        ({"json": _GOOD_FILES}, {"json": {"recognizedPhrases": [{"nBest": [_NULL_TICKS]}]}}),
+        ({"json": _GOOD_FILES}, {"json": [1, 2]}),
+    ],
+)
+async def test_malformed_azure_results_are_the_dependencys(tel, monkeypatch, files, result):
+    async def get(self, url, **_kwargs):
+        body = files if url.endswith("/files") else result
+        return _response(200, url=url, **body)
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", get)
+    with pytest.raises(BatchResultsInvalidError) as raised:
+        await get_batch_results(SPEECH_URL)
+    assert isinstance(raised.value, BatchResultError)  # existing handlers still catch it
+    assert SAS_SIGNATURE not in str(raised.value)
+
+    await _poll(_service(), _pending(), {"status": "Succeeded"}, results=get_batch_results)
+    (finished,) = tel.events("job.finished")
+    assert finished[c.ERROR_CODE] == "speech.results_invalid"
+    assert finished["hmcts.failure.source"] == "dependency"
+    assert failure_source("speech.results_error", raised.value) == "dependency"
+
+
+async def test_failing_to_save_parsed_results_is_the_applications(tel):
+    service = _service()
+    service._save_results = MagicMock(side_effect=OperationalError("insert", {}, Exception()))
+    await _poll(service, _pending(), {"status": "Succeeded"})
+    (poll_failed,) = tel.events("job.poll_failed")
+    assert poll_failed["hmcts.failure.source"] == "application"
+    assert not tel.events("job.finished")
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_optional_settings_do_not_stop_the_service_starting(monkeypatch, blank):
+    from transcription_svc.config.settings import Settings
+
+    for name in (
+        "SPEECH_CONCURRENT_JOBS_LIMIT",
+        "JOB_STUCK_WAITING_SECONDS",
+        "JOB_STUCK_RUNNING_SECONDS",
+    ):
+        monkeypatch.setenv(name, blank)
+    settings = Settings(_env_file=None)
+    assert settings.SPEECH_CONCURRENT_JOBS_LIMIT is None
+    assert settings.JOB_STUCK_WAITING_SECONDS == 30 * 60
+    assert settings.JOB_STUCK_RUNNING_SECONDS == 3 * 60 * 60

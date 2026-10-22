@@ -8,7 +8,7 @@ import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 from uwotm8 import convert_american_to_british_spelling
 
-from transcription_svc.audio.job_telemetry import record_speech_retry
+from transcription_svc.audio.job_telemetry import record_speech_retry, response_error_code
 from transcription_svc.audio.speech_telemetry import SPEECH_API_VERSION, speech_call
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.models import (
@@ -51,6 +51,27 @@ class BatchSubmissionError(Exception):
 
 class BatchResultError(Exception):
     """Batch transcription results could not be retrieved."""
+
+
+class BatchResultsInvalidError(BatchResultError):
+    """Azure returned batch results we could not parse (missing keys, invalid JSON).
+
+    A dependency failure (``speech.results_invalid``), not a bug in our code.
+    """
+
+    # Read by job_telemetry.failure_code: no import of this module needed there.
+    speech_failure_code = "speech.results_invalid"
+
+
+# What a malformed Azure results payload raises while it is parsed.
+_MALFORMED_RESULTS = (ValueError, TypeError, KeyError, IndexError, AttributeError)
+
+
+def _invalid_results(job_url: str, exc: BaseException) -> BatchResultsInvalidError:
+    # The exception type only: the message of a parsing error can quote the transcript.
+    return BatchResultsInvalidError(
+        f"Malformed batch results from Azure Speech for job: {job_url} ({type(exc).__name__})"
+    )
 
 
 def _auth_headers() -> dict[str, str]:
@@ -108,8 +129,13 @@ async def submit_batch_job(
         response.raise_for_status()
 
     if response.status_code != 201:
+        # Never Azure's response text: it can echo the request, including the audio's
+        # SAS URL and its signature. The status and Azure's error code (an identifier,
+        # pattern-checked) only.
+        azure_code = response_error_code(response)
         raise BatchSubmissionError(
-            f"Batch job submission failed: HTTP {response.status_code} — {response.text}",
+            f"Batch job submission failed: HTTP {response.status_code}"
+            + (f" ({azure_code})" if azure_code else ""),
             response=response,
         )
 
@@ -167,15 +193,21 @@ async def get_batch_results(
                 await client.get(f"{job_url}/files", headers=_auth_headers())
             )
             files_response.raise_for_status()
-        files_data = files_response.json()
-
-        transcription_files = [
-            item for item in files_data.get("values", []) if item.get("kind") == "Transcription"
-        ]
+        try:
+            files_data = files_response.json()
+            transcription_files = [
+                item for item in files_data.get("values", []) if item.get("kind") == "Transcription"
+            ]
+            content_url = (
+                transcription_files[0].get("links", {}).get("contentUrl")
+                if transcription_files
+                else None
+            )
+        except _MALFORMED_RESULTS as exc:
+            raise _invalid_results(job_url, exc) from None
         if not transcription_files:
             raise BatchResultError(f"No transcription file in batch results for job: {job_url}")
 
-        content_url = transcription_files[0].get("links", {}).get("contentUrl")
         if not content_url:
             raise BatchResultError(
                 f"Transcription file missing contentUrl in batch results for job: {job_url}"
@@ -185,8 +217,19 @@ async def get_batch_results(
         with speech_call("speech.results") as call:
             result_response = call.observe(await client.get(content_url))
             result_response.raise_for_status()
-        result_data = result_response.json()
+        try:
+            result_data = result_response.json()
+        except _MALFORMED_RESULTS as exc:
+            raise _invalid_results(job_url, exc) from None
 
+    try:
+        return _parse_results(result_data)
+    except _MALFORMED_RESULTS as exc:
+        raise _invalid_results(job_url, exc) from None
+
+
+def _parse_results(result_data: dict) -> list[DialogueEntry]:
+    """Dialogue entries from Azure's transcription result JSON."""
     dialogue_entries: list[DialogueEntry] = []
 
     for phrase in result_data.get("recognizedPhrases", []):

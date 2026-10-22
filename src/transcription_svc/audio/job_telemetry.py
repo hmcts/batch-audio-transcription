@@ -232,6 +232,7 @@ def record_job_finished(
 
 
 HTTP_TOO_MANY_REQUESTS = 429
+_HTTP_SERVER_ERROR_MIN = 500
 
 
 def unwrap_retry(exc: BaseException) -> BaseException:
@@ -248,7 +249,9 @@ def failure_code(exc: BaseException, component: str) -> str:
     """A controlled code for a failed call: never the exception's message.
 
     A 429 is ``<component>.throttled`` (DIAAT-282), other HTTP errors
-    ``<component>.http_<status>``.
+    ``<component>.http_<status>``. Any other transport failure (read, write, protocol,
+    proxy) is ``<component>.transport_error``. Azure results we could not parse
+    (``BatchResultsInvalidError``) are ``speech.results_invalid``.
     """
     exc = unwrap_retry(exc)
     if isinstance(exc, httpx.HTTPStatusError):
@@ -259,6 +262,11 @@ def failure_code(exc: BaseException, component: str) -> str:
         return f"{component}.timeout"
     if isinstance(exc, httpx.ConnectError):
         return f"{component}.connect_error"
+    if isinstance(exc, httpx.TransportError):
+        return f"{component}.transport_error"
+    own_code = getattr(exc, "speech_failure_code", None)
+    if component == "speech" and isinstance(own_code, str) and _DEPENDENCY_CODE.fullmatch(own_code):
+        return own_code
     return f"unhandled.{type(exc).__name__}"[:64]
 
 
@@ -268,31 +276,74 @@ SOURCE_APPLICATION = "application"
 SOURCE_QUEUE = "queue"
 SOURCE_DEPENDENCY = "dependency"
 
-# Codes that always mean Azure Speech failed us: it rejected the job, reported it as
-# Failed, returned no transcript, or an HTTP call to it failed (status, timeout,
-# connection). Stuck jobs: one never started is a queue failure; one Azure started
-# but has not finished is Azure's.
+# Codes that always mean Azure Speech failed us: it reported the job as Failed,
+# returned no transcript or one we could not parse, throttled us, or a call to it
+# timed out or failed in transport (connection, read, write, protocol, proxy). Some
+# Failed jobs (e.g. InvalidData) may be input problems; they stay Azure's here.
+# Stuck jobs: one never started is a queue failure; one Azure started but has not
+# finished is Azure's.
 _DEPENDENCY_CODE = re.compile(
-    r"speech\.(submission_rejected|job_failed|results_unavailable"
-    r"|http_[0-9]{3}|throttled|timeout|connect_error)"
+    r"speech\.(job_failed|results_unavailable|results_invalid"
+    r"|throttled|timeout|connect_error|transport_error)"
 )
+# An HTTP error from Azure Speech: attributed by its status (_dependency_status).
+_SPEECH_HTTP_CODE = re.compile(r"speech\.http_([0-9]{3})")
 _STUCK_SOURCES = {"job.stuck.waiting": SOURCE_QUEUE, "job.stuck.running": SOURCE_DEPENDENCY}
+HTTP_REQUEST_TIMEOUT = 408
+
+
+def _dependency_status(status: int) -> bool:
+    """5xx, 408 and 429 are Azure's; any other 4xx is our request or configuration."""
+    return status >= _HTTP_SERVER_ERROR_MIN or status in (
+        HTTP_REQUEST_TIMEOUT,
+        HTTP_TOO_MANY_REQUESTS,
+    )
+
+
+def _response_status(exc: BaseException | None) -> int | None:
+    response = getattr(unwrap_retry(exc), "response", None) if exc is not None else None
+    return int(response.status_code) if isinstance(response, httpx.Response) else None
+
+
+def _code_source(error_code: str) -> str | None:
+    """The source a code names by itself; None for a code attributed by its cause."""
+    if error_code in _STUCK_SOURCES:
+        return _STUCK_SOURCES[error_code]
+    if _DEPENDENCY_CODE.fullmatch(error_code):
+        return SOURCE_DEPENDENCY
+    http = _SPEECH_HTTP_CODE.fullmatch(error_code)
+    if http is not None:
+        return SOURCE_DEPENDENCY if _dependency_status(int(http.group(1))) else SOURCE_APPLICATION
+    return None
 
 
 def failure_source(error_code: str, exc: BaseException | None = None) -> str:
     """Where a failure came from: ``application``, ``queue`` or ``dependency``.
 
+    Dependency (Azure Speech): a 5xx, 408 or 429 (``speech.throttled``) from it, a
+    timeout, connection or other transport failure, a job it reports as Failed
+    (``speech.job_failed``), and results it did not return or returned malformed.
+    Application: any other 4xx from Azure Speech (``speech.http_400``/``401``/``403``/
+    ``404``/``413``/``415``...): our payload, key, URL or configuration.
+
+    ``speech.submission_rejected`` is attributed by the HTTP status of the response
+    ``exc`` carries, by the same rule. When there is no status (e.g. Azure accepted
+    the job but sent no Location header) it stays the dependency's.
+
     Generic codes (``job.submission_error``, ``speech.results_error``, a failed poll's
-    ``unhandled.*``) are attributed by their cause: an Azure Speech HTTP error, timeout
-    or connection failure is the dependency's; anything else (our code, our database)
-    is the application's.
+    ``unhandled.*``) are attributed by their cause, by the same rule; anything that is
+    not an Azure Speech failure (our code, our database) is the application's.
     """
-    if error_code in _STUCK_SOURCES:
-        return _STUCK_SOURCES[error_code]
-    if _DEPENDENCY_CODE.fullmatch(error_code):
-        return SOURCE_DEPENDENCY
-    if exc is not None and _DEPENDENCY_CODE.fullmatch(failure_code(exc, "speech")):
-        return SOURCE_DEPENDENCY
+    if error_code == "speech.submission_rejected":
+        status = _response_status(exc)
+        if status is None or _dependency_status(status):
+            return SOURCE_DEPENDENCY
+        return SOURCE_APPLICATION
+    source = _code_source(error_code)
+    if source is not None:
+        return source
+    if exc is not None:
+        return _code_source(failure_code(exc, "speech")) or SOURCE_APPLICATION
     return SOURCE_APPLICATION
 
 

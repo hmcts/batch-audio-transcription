@@ -28,6 +28,7 @@ from transcription_svc.audio import job_telemetry
 from transcription_svc.audio.azure_utils import AsyncAzureBlobManager
 from transcription_svc.audio.batch_client import (
     BatchResultError,
+    BatchResultsInvalidError,
     delete_batch_job,
     get_batch_job_status,
     get_batch_results,
@@ -229,21 +230,25 @@ def _job_finished(
     )
 
 
-def _job_failed(
-    processing: StageHandle | None,
-    error_code: str,
-    job: _PendingJob,
-    status_data: dict,
-    exc: BaseException | None = None,
-) -> None:
-    """Mark the processing stage and the job as failed with a controlled code.
+def _speech_job_failed(job: _PendingJob, status_data: dict) -> None:
+    """speech.job_failed and job.finished for a job Azure reports as Failed.
 
-    Counted as errors (rule: client-caused rejections use fail(), server and dependency
-    failures use error()). hmcts.failure.source tells Azure Speech failures from ours.
+    Azure's error text is stored on the job, never exported in telemetry.
+    DIAAT-282: its error code (e.g. InvalidData) is, when it is one.
     """
-    if processing is not None:
-        processing.error(error_code)
-    _job_finished(job, status_data, "error", error_code, exc=exc)
+    azure_error = {ATTR_FAILURE_SOURCE: job_telemetry.failure_source("speech.job_failed")}
+    code = job_telemetry.failed_job_error_code(status_data)
+    if code is not None:
+        azure_error[ATTR_SPEECH_ERROR_CODE] = code
+    record_event(
+        EVENT_JOB_FAILED_IN_SPEECH,
+        {
+            c.DEPENDENCY_REF: batch_job_id_from_url(job.batch_job_url),
+            **azure_error,
+            c.ERROR_CODE: "speech.job_failed",
+        },
+    )
+    _job_finished(job, status_data, "error", "speech.job_failed", attributes=azure_error)
 
 
 class BatchPollingService:
@@ -382,21 +387,6 @@ class BatchPollingService:
                     ) as processing:
                         await self._handle_succeeded(job, status_data, processing)
                 elif azure_status == BatchJobStatus.FAILED:
-                    # Azure's error text is stored on the job, never exported in telemetry.
-                    # DIAAT-282: its error code (e.g. InvalidData) is, when it is one.
-                    azure_error = {
-                        ATTR_FAILURE_SOURCE: job_telemetry.failure_source("speech.job_failed")
-                    }
-                    code = job_telemetry.failed_job_error_code(status_data)
-                    if code is not None:
-                        azure_error[ATTR_SPEECH_ERROR_CODE] = code
-                    record_event(
-                        EVENT_JOB_FAILED_IN_SPEECH,
-                        {**speech_ref, **azure_error, c.ERROR_CODE: "speech.job_failed"},
-                    )
-                    _job_finished(
-                        job, status_data, "error", "speech.job_failed", attributes=azure_error
-                    )
                     await self._handle_failed(job, status_data)
 
             except Exception as exc:
@@ -424,21 +414,17 @@ class BatchPollingService:
             dialogue_entries = await get_batch_results(
                 job.batch_job_url, transcription_job_id=job.id
             )
+        except BatchResultsInvalidError as exc:
+            # Azure's results output could not be parsed: Azure's failure, not ours.
+            await self._fail_results(job, status_data, processing, "speech.results_invalid", exc)
+            return
         except BatchResultError as exc:
-            logger.error(
-                "Failed to retrieve batch results for job %s (%s)", job.id, type(exc).__name__
+            await self._fail_results(
+                job, status_data, processing, "speech.results_unavailable", exc
             )
-            _job_failed(processing, "speech.results_unavailable", job, status_data, exc)
-            await asyncio.to_thread(self._record_error, job.id, str(exc))
-            await self._dispatch_failure(job, str(exc))
             return
         except Exception as exc:
-            logger.error(
-                "Failed to retrieve batch results for job %s (%s)", job.id, type(exc).__name__
-            )
-            _job_failed(processing, "speech.results_error", job, status_data, exc)
-            await asyncio.to_thread(self._record_error, job.id, str(exc))
-            await self._dispatch_failure(job, str(exc))
+            await self._fail_results(job, status_data, processing, "speech.results_error", exc)
             return
 
         processed_entries = process_speakers(dialogue_entries)
@@ -469,6 +455,32 @@ class BatchPollingService:
             logger.warning("Could not delete batch job for job %s (%s)", job.id, type(exc).__name__)
             await asyncio.to_thread(self._record_cleanup_failure, job.id, str(exc))
 
+    async def _fail_results(
+        self,
+        job: _PendingJob,
+        status_data: dict,
+        processing: StageHandle | None,
+        error_code: str,
+        exc: BaseException,
+    ) -> None:
+        """End the job as failed because its results could not be retrieved.
+
+        The stage is marked failed first (this attempt failed whatever happens next).
+        job.finished and its counter come only once the terminal state is stored: if
+        storing it fails, the exception propagates, the poll records job.poll_failed and
+        the next poll finishes the job, so it is never counted twice.
+
+        Counted as errors (rule: client-caused rejections use fail(), server and
+        dependency failures use error()). hmcts.failure.source tells Azure Speech
+        failures from ours.
+        """
+        logger.error("Failed to retrieve batch results for job %s (%s)", job.id, type(exc).__name__)
+        if processing is not None:
+            processing.error(error_code)
+        await asyncio.to_thread(self._record_error, job.id, str(exc))
+        _job_finished(job, status_data, "error", error_code, exc=exc)
+        await self._dispatch_failure(job, str(exc))
+
     async def _handle_failed(self, job: _PendingJob, status_data: dict) -> None:
         error_msg = (
             status_data.get("properties", {})
@@ -478,6 +490,9 @@ class BatchPollingService:
         # The Azure error text is stored on the job (shown in the UI), never logged.
         logger.error("Batch job %s failed in Azure Speech", job.id)
         await asyncio.to_thread(self._record_error, job.id, error_msg)
+        # Only once the terminal state is stored: if storing it fails, the job stays
+        # RUNNING, the poll records job.poll_failed and the next poll finishes it once.
+        _speech_job_failed(job, status_data)
 
         if job.audio_blob_path:
             try:
