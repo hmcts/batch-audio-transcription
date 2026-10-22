@@ -18,6 +18,7 @@ from transcription_svc.config.settings import get_settings
 from transcription_svc.telemetry import configure_telemetry
 
 _polling_task = None
+_dependency_health_task = None
 
 
 def _json_safe(obj: Any) -> Any:
@@ -57,6 +58,10 @@ async def lifespan(app: FastAPI):
 
     from transcription_svc.audio.job_telemetry import register_job_gauges
     from transcription_svc.audio.polling_service import BatchPollingService
+    from transcription_svc.dependency_health import (
+        get_dependency_checker,
+        register_dependency_gauge,
+    )
 
     # Fail fast if AUTH_APPROLES is set but contains invalid configuration
     # (bad JSON, missing required role keys, non-string values).
@@ -69,15 +74,21 @@ async def lifespan(app: FastAPI):
         service = BatchPollingService()
         global _polling_task
         _polling_task = asyncio.create_task(service.run_polling_loop())
+        # DIAAT-277: database, storage and Azure Speech health, checked in the
+        # background and read from cache by /api/v1/health/dependencies.
+        register_dependency_gauge()
+        global _dependency_health_task
+        _dependency_health_task = asyncio.create_task(get_dependency_checker().run())
 
     yield
 
-    if _polling_task:
-        _polling_task.cancel()
-        try:
-            await _polling_task
-        except asyncio.CancelledError:
-            pass
+    for task in (_polling_task, _dependency_health_task):
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     # Telemetry is flushed by hmcts-otel's exit hook when the process ends; shutting it
     # down here would leave the rest of the process unconfigured and unredacted.

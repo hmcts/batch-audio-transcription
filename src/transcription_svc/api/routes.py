@@ -55,6 +55,7 @@ from transcription_svc.database.models import (
     TranscriptionJob,
     WordCorrection,
 )
+from transcription_svc.dependency_health import get_dependency_checker, health_response
 from transcription_svc.telemetry import EVENT_UPLOAD_VALIDATION_FAILED, JOURNEY_UPLOAD
 from transcription_svc.utils.approles import get_valid_roles
 from transcription_svc.utils.auth_models import AuthenticatedUser
@@ -526,6 +527,21 @@ def _to_response(job: TranscriptionJob) -> JobResponse:
 @router.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@router.get("/health/dependencies")
+async def dependency_health(response: Response) -> dict:
+    """DIAAT-277: the last result of the background dependency checks.
+
+    Never checks anything itself, so it is as cheap as /health. 200 when every
+    dependency is up; 503 when any is down or not yet checked. NOT the App Service
+    eviction probe (that stays the static /health): a dependency outage must not
+    restart healthy instances. Unauthenticated like /health: it says only up, down
+    or unknown for three fixed names. Excluded from request telemetry (as /health).
+    """
+    status_code, body = health_response(get_dependency_checker().statuses())
+    response.status_code = status_code
+    return body
 
 
 @router.get("/version")

@@ -151,6 +151,22 @@ STORAGE_OPERATIONS = (
 ATTR_WEBHOOK_NOTIFICATION = "webhook.notification"
 WEBHOOK_NOTIFICATIONS = ("succeeded", "failed")
 
+# DIAAT-277: service health. A background checker probes each critical dependency;
+# the shared contract (identical in courtstranscribe) is the event and attributes
+# below, plus the service.dependency.up gauge and service.dependency.check.duration
+# histogram (see dependency_health.py).
+EVENT_DEPENDENCY_HEALTH_CHANGED = "dependency.health_changed"
+ATTR_DEPENDENCY_NAME = "dependency.name"
+ATTR_DEPENDENCY_STATE = "dependency.state"
+DEPENDENCY_NAMES = ("database", "storage", "speech")
+DEPENDENCY_STATES = ("up", "down")
+DEPENDENCY_ERROR_CODES = (
+    "dependency.timeout",
+    "dependency.auth_failed",
+    "dependency.unreachable",
+    "dependency.error",
+)
+
 JOB_STATES = ("waiting", "running")
 RETRY_OPERATIONS = (
     "speech.submit",
@@ -191,6 +207,29 @@ def _register_schema() -> None:
         attributes=(c.STAGE, c.ERROR_CODE, *UPLOAD_METADATA),
     )
     _register_job_schema()
+    _register_dependency_health_schema()
+
+
+def _register_dependency_health_schema() -> None:
+    """DIAAT-277: dependency health transitions (never hostnames, URLs or messages)."""
+    default_schema.attribute(
+        ATTR_DEPENDENCY_NAME,
+        allowed_values=DEPENDENCY_NAMES,
+        description="A critical dependency: database (PostgreSQL), storage (Azure Blob "
+        "Storage) or speech (Azure Speech batch transcription).",
+    )
+    default_schema.attribute(
+        ATTR_DEPENDENCY_STATE,
+        allowed_values=DEPENDENCY_STATES,
+        description="up: the last health check succeeded; down: it failed or timed out.",
+    )
+    default_schema.event(
+        EVENT_DEPENDENCY_HEALTH_CHANGED,
+        description="A dependency went from up to down or back (or was down on its first "
+        "check). hmcts.error.code (when down): dependency.timeout, dependency.auth_failed, "
+        "dependency.unreachable or dependency.error.",
+        attributes=(ATTR_DEPENDENCY_NAME, ATTR_DEPENDENCY_STATE, c.ERROR_CODE),
+    )
 
 
 def _register_job_schema() -> None:

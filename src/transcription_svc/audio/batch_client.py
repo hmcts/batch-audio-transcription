@@ -148,6 +148,26 @@ async def submit_batch_job(
     return job_url
 
 
+class SpeechNotConfiguredError(Exception):
+    """AZURE_SPEECH_ENDPOINT or AZURE_SPEECH_KEY is not set."""
+
+
+async def check_speech_available(timeout_s: float) -> None:
+    """Health check (DIAAT-277): list at most one transcription; raises on failure.
+
+    ``GET .../speechtotext/v3.2/transcriptions?top=1`` is the cheapest read-only call
+    the service's existing key allows on the batch transcription API it depends on (the
+    same resource and path as submissions). The response body is never read. Not
+    retried and not counted in the Speech call metrics, which describe job traffic.
+    """
+    settings = get_settings()
+    if not settings.AZURE_SPEECH_ENDPOINT or not settings.AZURE_SPEECH_KEY:
+        raise SpeechNotConfiguredError
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        response = await client.get(_submit_url(), headers=_auth_headers(), params={"top": 1})
+    response.raise_for_status()
+
+
 @_RETRY_POLICY
 async def get_batch_job_status(job_url: str) -> dict:
     """Return the full Azure batch job status JSON."""
