@@ -423,7 +423,11 @@ async def test_failed_job_is_terminal_with_a_controlled_code_and_counted(tel):
     assert finished[c.OUTCOME] == "error" and finished[c.ERROR_CODE] == "speech.job_failed"
     assert finished["job.processing_ms"] == pytest.approx(1_200_000)
     (counted,) = tel.metric_points(METRIC_JOBS_FINISHED)
-    assert counted["attributes"] == {c.OUTCOME: "error", c.ERROR_CODE: "speech.job_failed"}
+    assert counted["attributes"] == {
+        c.OUTCOME: "error",
+        c.ERROR_CODE: "speech.job_failed",
+        "hmcts.failure.source": "dependency",
+    }
     assert counted["value"] == 1
     tel.assert_no_prohibited_content(FILE_STEM)
 

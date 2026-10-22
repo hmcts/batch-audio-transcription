@@ -9,6 +9,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from uwotm8 import convert_american_to_british_spelling
 
 from transcription_svc.audio.job_telemetry import record_speech_retry
+from transcription_svc.audio.speech_telemetry import SPEECH_API_VERSION, speech_call
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.models import (
     DialogueEntry,
@@ -42,6 +43,11 @@ _RETRY_POLICY = retry(
 class BatchSubmissionError(Exception):
     """Azure rejected the batch transcription submission."""
 
+    def __init__(self, message: str, response: httpx.Response | None = None) -> None:
+        super().__init__(message)
+        # DIAAT-282: Azure's status, error code and Retry-After, for telemetry only.
+        self.response = response
+
 
 class BatchResultError(Exception):
     """Batch transcription results could not be retrieved."""
@@ -58,7 +64,7 @@ def _submit_url() -> str:
     # Location URL Azure itself returns from this call, so they don't need
     # a matching fix.
     endpoint = get_settings().AZURE_SPEECH_ENDPOINT.rstrip("/")
-    return f"{endpoint}/speechtotext/v3.2/transcriptions"
+    return f"{endpoint}/speechtotext/{SPEECH_API_VERSION}/transcriptions"
 
 
 @_RETRY_POLICY
@@ -91,15 +97,20 @@ async def submit_batch_job(
             "speakers": {"minCount": 1, "maxCount": _MAX_DIARIZATION_SPEAKERS},
         }
 
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        response = await client.post(_submit_url(), headers=_auth_headers(), json=payload)
+    # DIAAT-282: every Azure Speech call is timed and counted (speech_telemetry).
+    with speech_call("speech.submit") as call:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            response = call.observe(
+                await client.post(_submit_url(), headers=_auth_headers(), json=payload)
+            )
 
     if response.status_code >= _HTTP_SERVER_ERROR_MIN:
         response.raise_for_status()
 
     if response.status_code != 201:
         raise BatchSubmissionError(
-            f"Batch job submission failed: HTTP {response.status_code} — {response.text}"
+            f"Batch job submission failed: HTTP {response.status_code} — {response.text}",
+            response=response,
         )
 
     job_url = response.headers.get("Location")
@@ -114,9 +125,10 @@ async def submit_batch_job(
 @_RETRY_POLICY
 async def get_batch_job_status(job_url: str) -> dict:
     """Return the full Azure batch job status JSON."""
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        response = await client.get(job_url, headers=_auth_headers())
-        response.raise_for_status()
+    with speech_call("speech.status") as call:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            response = call.observe(await client.get(job_url, headers=_auth_headers()))
+            response.raise_for_status()
     return response.json()
 
 
@@ -136,9 +148,10 @@ async def get_model_details(model_url: str) -> dict:
     job-completion path (the caller catches failures), so a single fast
     attempt is preferred over the batch retry policy's multi-second backoff.
     """
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        response = await client.get(model_url, headers=_auth_headers())
-        response.raise_for_status()
+    with speech_call("speech.model") as call:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            response = call.observe(await client.get(model_url, headers=_auth_headers()))
+            response.raise_for_status()
     return response.json()
 
 
@@ -149,8 +162,11 @@ async def get_batch_results(
 ) -> list[DialogueEntry]:
     """Download and parse batch transcription results."""
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        files_response = await client.get(f"{job_url}/files", headers=_auth_headers())
-        files_response.raise_for_status()
+        with speech_call("speech.results") as call:
+            files_response = call.observe(
+                await client.get(f"{job_url}/files", headers=_auth_headers())
+            )
+            files_response.raise_for_status()
         files_data = files_response.json()
 
         transcription_files = [
@@ -165,8 +181,10 @@ async def get_batch_results(
                 f"Transcription file missing contentUrl in batch results for job: {job_url}"
             )
 
-        result_response = await client.get(content_url)
-        result_response.raise_for_status()
+        # The transcript file, from Azure Speech's own storage (a SAS URL).
+        with speech_call("speech.results") as call:
+            result_response = call.observe(await client.get(content_url))
+            result_response.raise_for_status()
         result_data = result_response.json()
 
     dialogue_entries: list[DialogueEntry] = []
@@ -235,8 +253,9 @@ async def get_batch_results(
 @_RETRY_POLICY
 async def delete_batch_job(job_url: str) -> None:
     """Delete a completed batch job from Azure. Non-fatal on HTTP 404."""
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        response = await client.delete(job_url, headers=_auth_headers())
+    with speech_call("speech.delete", ok_statuses=(404,)) as call:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            response = call.observe(await client.delete(job_url, headers=_auth_headers()))
 
     if response.status_code == 404:
         return

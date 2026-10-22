@@ -91,6 +91,36 @@ ATTR_PROCESSING_MS = "job.processing_ms"
 ATTR_RETRY_OPERATION = "job.retry.operation"
 ATTR_RETRY_ATTEMPT = "job.retry.attempt"
 
+# DIAAT-282: Azure Speech as an external dependency.
+# Where a failure came from: our code or database, the job queue, or Azure Speech.
+ATTR_FAILURE_SOURCE = "hmcts.failure.source"
+FAILURE_SOURCES = ("application", "queue", "dependency")
+# Azure's own error code (properties.error.code of a failed job, or the "code" of an
+# HTTP error body), e.g. InvalidData. Never Azure's free-text message.
+ATTR_SPEECH_ERROR_CODE = "speech.error_code"
+ATTR_HTTP_STATUS = "http.response.status_code"
+ATTR_RETRY_AFTER_S = "speech.retry_after_s"
+# Configuration reference: what the job was sent to and with.
+ATTR_SPEECH_REGION = "speech.region"
+ATTR_SPEECH_LOCALE = "speech.locale"
+ATTR_SPEECH_API_VERSION = "speech.api_version"
+ATTR_SPEECH_MODEL_REF = "speech.model_ref"
+ATTR_SPEECH_DIARIZATION = "speech.diarization"
+
+SPEECH_FAILURE_ATTRIBUTES = (
+    ATTR_FAILURE_SOURCE,
+    ATTR_SPEECH_ERROR_CODE,
+    ATTR_HTTP_STATUS,
+    ATTR_RETRY_AFTER_S,
+)
+SPEECH_CONFIG_ATTRIBUTES = (
+    ATTR_SPEECH_REGION,
+    ATTR_SPEECH_LOCALE,
+    ATTR_SPEECH_API_VERSION,
+    ATTR_SPEECH_MODEL_REF,
+    ATTR_SPEECH_DIARIZATION,
+)
+
 JOB_STATES = ("waiting", "running")
 RETRY_OPERATIONS = (
     "speech.submit",
@@ -159,31 +189,45 @@ def _register_job_schema() -> None:
         type=int,
         description="Number of the attempt that failed (1 on the first retry).",
     )
+    _register_speech_schema()
     job_events = (
         (EVENT_JOB_CREATED, (), "Job row created: the upload is complete and the job exists."),
-        (EVENT_JOB_QUEUED, (), "Azure Speech accepted the job; duration_ms: created to accepted."),
+        (
+            EVENT_JOB_QUEUED,
+            SPEECH_CONFIG_ATTRIBUTES,
+            "Azure Speech accepted the job; duration_ms: created to accepted.",
+        ),
         (EVENT_JOB_RUNNING, (), "Azure Speech started processing; duration_ms: the queue wait."),
-        (EVENT_JOB_FAILED_IN_SPEECH, (), "Azure Speech reported the job as failed."),
+        (
+            EVENT_JOB_FAILED_IN_SPEECH,
+            (ATTR_FAILURE_SOURCE, ATTR_SPEECH_ERROR_CODE),
+            "Azure Speech reported the job as failed; speech.error_code is Azure's code.",
+        ),
         (EVENT_TRANSCRIPT_AVAILABLE, (), "The transcript is saved and can be read."),
         (
             EVENT_JOB_FINISHED,
-            (ATTR_QUEUE_WAIT_MS, ATTR_PROCESSING_MS),
-            "Terminal state. hmcts.outcome success, or failure/error with hmcts.error.code; "
-            "duration_ms: end to end, job created to finished.",
+            (
+                ATTR_QUEUE_WAIT_MS,
+                ATTR_PROCESSING_MS,
+                *SPEECH_FAILURE_ATTRIBUTES,
+                *SPEECH_CONFIG_ATTRIBUTES,
+            ),
+            "Terminal state. hmcts.outcome success, or failure/error with hmcts.error.code "
+            "and hmcts.failure.source; duration_ms: end to end, job created to finished.",
         ),
         (
             EVENT_JOB_RETRIED,
-            (ATTR_RETRY_OPERATION, ATTR_RETRY_ATTEMPT),
+            (ATTR_RETRY_OPERATION, ATTR_RETRY_ATTEMPT, *SPEECH_FAILURE_ATTRIBUTES),
             "A call for the job failed and is retried; hmcts.error.code says why.",
         ),
         (
             EVENT_JOB_POLL_FAILED,
-            (),
+            SPEECH_FAILURE_ATTRIBUTES,
             "Polling the job failed; it stays unfinished and is polled again.",
         ),
         (
             EVENT_JOB_STUCK,
-            (ATTR_JOB_STATE,),
+            (ATTR_JOB_STATE, ATTR_FAILURE_SOURCE),
             "The job has waited or run longer than its threshold. Emitted once per job; "
             "duration_ms: time in that state so far.",
         ),
@@ -195,6 +239,51 @@ def _register_job_schema() -> None:
     )
     for name, attributes, description in job_events:
         default_schema.event(name, description=description, attributes=attributes)
+
+
+def _register_speech_schema() -> None:
+    default_schema.attribute(
+        ATTR_FAILURE_SOURCE,
+        allowed_values=FAILURE_SOURCES,
+        description="Where a failure came from: application (our code or database), queue "
+        "(the job was never processed) or dependency (Azure Speech).",
+    )
+    default_schema.attribute(
+        ATTR_SPEECH_ERROR_CODE,
+        pattern=r"[A-Za-z][A-Za-z0-9_.]{0,63}",
+        description="Azure Speech's own error code, e.g. InvalidData. Never its message.",
+    )
+    default_schema.attribute(
+        ATTR_HTTP_STATUS, type=int, description="HTTP status of the failed Azure Speech call."
+    )
+    default_schema.attribute(
+        ATTR_RETRY_AFTER_S,
+        type=float,
+        description="Retry-After sent by Azure Speech with a throttled (429) response, in s.",
+    )
+    default_schema.attribute(
+        ATTR_SPEECH_REGION,
+        pattern=r"[a-z0-9]{2,32}",
+        description="Azure region of the Speech resource, e.g. uksouth.",
+    )
+    default_schema.attribute(
+        ATTR_SPEECH_LOCALE,
+        pattern=r"[a-z]{2,3}-[A-Z]{2}",
+        description="Locale the job was transcribed in, e.g. en-GB.",
+    )
+    default_schema.attribute(
+        ATTR_SPEECH_API_VERSION,
+        pattern=r"v[0-9]{1,2}\.[0-9]{1,2}(-preview(\.[0-9]{1,2})?)?",
+        description="Speech to text REST API version, e.g. v3.2.",
+    )
+    default_schema.attribute(
+        ATTR_SPEECH_MODEL_REF,
+        pattern=r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+        description="ID (GUID) of the Speech model Azure used for the job.",
+    )
+    default_schema.attribute(
+        ATTR_SPEECH_DIARIZATION, type=bool, description="Whether speaker diarization was on."
+    )
 
 
 def configure_telemetry() -> TelemetrySettings:

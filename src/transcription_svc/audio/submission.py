@@ -12,6 +12,7 @@ from sqlmodel import Session
 
 from transcription_svc.audio.batch_client import BatchSubmissionError, submit_batch_job
 from transcription_svc.audio.job_telemetry import record_job_finished, seconds_between
+from transcription_svc.audio.speech_telemetry import speech_config_attributes
 from transcription_svc.database.interface import save_job
 from transcription_svc.database.models import BatchJobStatus, JobStatus, TranscriptionJob
 from transcription_svc.telemetry import (
@@ -64,9 +65,13 @@ async def submit_and_queue_batch_job(
         job = await _submit(session, job, audio_url, locale, enable_diarization)
         # DIAAT-281: Azure accepted the job; it now waits for Azure to start it.
         accepted = seconds_between(job.created_datetime, datetime.now(UTC))
+        # DIAAT-282: with the configuration reference the job was sent with.
         record_event(
             EVENT_JOB_QUEUED,
-            {c.DEPENDENCY_REF: job.batch_job_id},
+            {
+                **speech_config_attributes(locale, enable_diarization),
+                c.DEPENDENCY_REF: job.batch_job_id,
+            },
             duration_ms=accepted * 1000.0 if accepted is not None else None,
         )
         return job
@@ -75,22 +80,36 @@ async def submit_and_queue_batch_job(
 async def _submit(
     session: Session, job: TranscriptionJob, audio_url: str, locale: str, enable_diarization: bool
 ) -> TranscriptionJob:
+    config = speech_config_attributes(locale, enable_diarization)
     with stage("speech_submission") as submission:
         try:
             return await _submit_to_speech(
                 session, job, audio_url, locale, enable_diarization, submission
             )
-        except BatchSubmissionError:
+        except BatchSubmissionError as exc:
             # Azure Speech refused the job: a dependency failure, counted as an error.
             submission.error("speech.submission_rejected")
             record_job_finished(
-                "error", "speech.submission_rejected", created_at=job.created_datetime
+                "error",
+                "speech.submission_rejected",
+                created_at=job.created_datetime,
+                exc=exc,
+                attributes=config,
             )
             raise
         except Exception as exc:
             # Same rule as the stage: a client error is a failure, anything else an error.
+            # DIAAT-282: the cause says whether Azure Speech or our code/database failed.
             outcome = "failure" if client_failure_code(exc) else "error"
-            record_job_finished(outcome, "job.submission_error", created_at=job.created_datetime)
+            if job.batch_job_id:  # Azure accepted the job before we failed
+                config[c.DEPENDENCY_REF] = job.batch_job_id
+            record_job_finished(
+                outcome,
+                "job.submission_error",
+                created_at=job.created_datetime,
+                exc=exc,
+                attributes=config,
+            )
             raise
 
 

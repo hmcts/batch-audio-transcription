@@ -34,6 +34,7 @@ from transcription_svc.audio.batch_client import (
     get_model_details,
 )
 from transcription_svc.audio.speakers import process_speakers
+from transcription_svc.audio.speech_telemetry import speech_config_attributes
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.engine import get_engine
 from transcription_svc.database.interface import (
@@ -46,6 +47,8 @@ from transcription_svc.database.interface import (
 )
 from transcription_svc.database.models import BatchJobStatus
 from transcription_svc.telemetry import (
+    ATTR_FAILURE_SOURCE,
+    ATTR_SPEECH_ERROR_CODE,
     EVENT_JOB_FAILED_IN_SPEECH,
     EVENT_JOB_POLL_FAILED,
     EVENT_TRANSCRIPT_AVAILABLE,
@@ -75,6 +78,7 @@ class _PendingJob:
     locale: str = "en-GB"
     created_datetime: datetime | None = None
     processing_started_datetime: datetime | None = None
+    enable_diarization: bool | None = None
 
 
 def _extract_model_identifier(status_data: dict, locale: str) -> str:
@@ -197,29 +201,49 @@ def _extract_transcription_duration_seconds(
 
 
 def _job_finished(
-    job: _PendingJob, status_data: dict, outcome: str, error_code: str | None = None
+    job: _PendingJob,
+    status_data: dict,
+    outcome: str,
+    error_code: str | None = None,
+    *,
+    exc: BaseException | None = None,
+    attributes: dict[str, object] | None = None,
 ) -> None:
-    """job.finished with the job's queue wait, processing and end-to-end time (DIAAT-281)."""
+    """job.finished with the job's queue wait, processing and end-to-end time (DIAAT-281).
+
+    DIAAT-282: also the Azure Speech job ID, the configuration reference and, for a
+    failure, where it came from (see job_telemetry.failure_source).
+    """
     job_telemetry.record_job_finished(
         outcome,
         error_code,
         created_at=job.created_datetime,
         processing_started=job.processing_started_datetime,
         processing_ended=job_telemetry.azure_last_action(status_data),
+        exc=exc,
+        attributes={
+            **speech_config_attributes(job.locale, job.enable_diarization, status_data),
+            c.DEPENDENCY_REF: batch_job_id_from_url(job.batch_job_url),
+            **(attributes or {}),
+        },
     )
 
 
 def _job_failed(
-    processing: StageHandle | None, error_code: str, job: _PendingJob, status_data: dict
+    processing: StageHandle | None,
+    error_code: str,
+    job: _PendingJob,
+    status_data: dict,
+    exc: BaseException | None = None,
 ) -> None:
     """Mark the processing stage and the job as failed with a controlled code.
 
-    These are Azure Speech (dependency) failures, so they count as errors (rule:
-    client-caused rejections use fail(), server and dependency failures use error()).
+    Counted as errors (rule: client-caused rejections use fail(), server and dependency
+    failures use error()). hmcts.failure.source tells Azure Speech failures from ours.
     """
     if processing is not None:
         processing.error(error_code)
-    _job_finished(job, status_data, "error", error_code)
+    _job_finished(job, status_data, "error", error_code, exc=exc)
 
 
 class BatchPollingService:
@@ -325,6 +349,7 @@ class BatchPollingService:
                         locale=row.locale,
                         created_datetime=row.created_datetime,
                         processing_started_datetime=row.processing_started_datetime,
+                        enable_diarization=row.enable_diarization,
                         trace_parent=row.trace_parent,
                     )
                 )
@@ -333,10 +358,11 @@ class BatchPollingService:
     async def _process_job(self, job: _PendingJob) -> None:
         # DIAAT-276: everything emitted while handling this job carries its journey.
         with journey(JOURNEY_JOB, str(job.id), parent_id=upload_id_from_blob(job.audio_blob_path)):
+            # The Azure Speech job ID, on every event about this job (DIAAT-282 AC3).
+            speech_ref = {c.DEPENDENCY_REF: batch_job_id_from_url(job.batch_job_url)}
             try:
                 status_data = await get_batch_job_status(job.batch_job_url)
                 azure_status = status_data.get("status", "")
-                speech_ref = {c.DEPENDENCY_REF: batch_job_id_from_url(job.batch_job_url)}
 
                 if azure_status == BatchJobStatus.RUNNING:
                     if job.batch_job_status == BatchJobStatus.NOT_STARTED:
@@ -357,11 +383,20 @@ class BatchPollingService:
                         await self._handle_succeeded(job, status_data, processing)
                 elif azure_status == BatchJobStatus.FAILED:
                     # Azure's error text is stored on the job, never exported in telemetry.
+                    # DIAAT-282: its error code (e.g. InvalidData) is, when it is one.
+                    azure_error = {
+                        ATTR_FAILURE_SOURCE: job_telemetry.failure_source("speech.job_failed")
+                    }
+                    code = job_telemetry.failed_job_error_code(status_data)
+                    if code is not None:
+                        azure_error[ATTR_SPEECH_ERROR_CODE] = code
                     record_event(
                         EVENT_JOB_FAILED_IN_SPEECH,
-                        {**speech_ref, c.ERROR_CODE: "speech.job_failed"},
+                        {**speech_ref, **azure_error, c.ERROR_CODE: "speech.job_failed"},
                     )
-                    _job_finished(job, status_data, "error", "speech.job_failed")
+                    _job_finished(
+                        job, status_data, "error", "speech.job_failed", attributes=azure_error
+                    )
                     await self._handle_failed(job, status_data)
 
             except Exception as exc:
@@ -370,10 +405,11 @@ class BatchPollingService:
                 )
                 sentry_sdk.capture_exception(exc)
                 # DIAAT-281: the job stays unfinished and is polled again next interval.
-                record_event(
-                    EVENT_JOB_POLL_FAILED,
-                    {c.ERROR_CODE: job_telemetry.failure_code(exc, "speech")},
-                )
+                # DIAAT-282: where it failed (Azure Speech, or our code/database) and
+                # what Azure said.
+                code = job_telemetry.failure_code(exc, "speech")
+                failure = job_telemetry.failure_attributes(code, exc)
+                record_event(EVENT_JOB_POLL_FAILED, {**failure, **speech_ref, c.ERROR_CODE: code})
 
     def _update_status(
         self, job_id: UUID, status: BatchJobStatus, processing_started: datetime | None = None
@@ -392,7 +428,7 @@ class BatchPollingService:
             logger.error(
                 "Failed to retrieve batch results for job %s (%s)", job.id, type(exc).__name__
             )
-            _job_failed(processing, "speech.results_unavailable", job, status_data)
+            _job_failed(processing, "speech.results_unavailable", job, status_data, exc)
             await asyncio.to_thread(self._record_error, job.id, str(exc))
             await self._dispatch_failure(job, str(exc))
             return
@@ -400,7 +436,7 @@ class BatchPollingService:
             logger.error(
                 "Failed to retrieve batch results for job %s (%s)", job.id, type(exc).__name__
             )
-            _job_failed(processing, "speech.results_error", job, status_data)
+            _job_failed(processing, "speech.results_error", job, status_data, exc)
             await asyncio.to_thread(self._record_error, job.id, str(exc))
             await self._dispatch_failure(job, str(exc))
             return

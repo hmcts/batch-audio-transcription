@@ -23,6 +23,16 @@ class Settings(BaseSettings):
     AZURE_SPEECH_KEY: str = ""
     AZURE_SPEECH_ENDPOINT: str = ""
     AZURE_SPEECH_RESOURCE_ID: str | None = None
+    # DIAAT-282, telemetry only. The Speech resource's Azure region (e.g. uksouth),
+    # recorded on job events. Needed because a custom-subdomain endpoint
+    # (<name>.cognitiveservices.azure.com) does not name its region; a regional
+    # endpoint (<region>.api.cognitive.microsoft.com) does, and is used when unset.
+    AZURE_SPEECH_REGION: str | None = None
+    # DIAAT-282, telemetry only. The number of jobs Azure Speech may run at once for
+    # this resource, if PlatOps has confirmed one. When set, the
+    # transcription.speech.concurrency.utilisation gauge reports running jobs / limit.
+    # Unset (the default): no utilisation gauge. Nothing is throttled or queued by it.
+    SPEECH_CONCURRENT_JOBS_LIMIT: int | None = None
 
     # Azure Storage
     AZURE_STORAGE_ACCOUNT_NAME: str = ""
@@ -101,6 +111,13 @@ class Settings(BaseSettings):
     def validate_stuck_threshold(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("Stuck-job thresholds must be greater than 0 seconds")
+        return v
+
+    @field_validator("SPEECH_CONCURRENT_JOBS_LIMIT")
+    @classmethod
+    def validate_concurrent_jobs_limit(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError("SPEECH_CONCURRENT_JOBS_LIMIT must be greater than 0")
         return v
 
     @field_validator("LOW_CONFIDENCE_THRESHOLD")

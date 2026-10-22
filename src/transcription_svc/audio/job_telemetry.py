@@ -21,10 +21,13 @@ the queue gauges are computed from that table (see ``JobStateGauges``).
 from __future__ import annotations
 
 import logging
+import math
+import re
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -41,16 +44,21 @@ from transcription_svc.database.interface import (
 )
 from transcription_svc.database.models import JobStatus
 from transcription_svc.telemetry import (
+    ATTR_FAILURE_SOURCE,
+    ATTR_HTTP_STATUS,
     ATTR_JOB_STATE,
     ATTR_PROCESSING_MS,
     ATTR_QUEUE_WAIT_MS,
+    ATTR_RETRY_AFTER_S,
     ATTR_RETRY_ATTEMPT,
     ATTR_RETRY_OPERATION,
+    ATTR_SPEECH_ERROR_CODE,
     EVENT_JOB_FINISHED,
     EVENT_JOB_RETRIED,
     EVENT_JOB_RUNNING,
     EVENT_JOB_STUCK,
     JOURNEY_JOB,
+    batch_job_id_from_url,
     upload_id_from_blob,
 )
 
@@ -64,6 +72,8 @@ METRIC_JOBS_RUNNING = "transcription.jobs.running"
 METRIC_QUEUE_DEPTH = "transcription.jobs.queue_depth"
 METRIC_OLDEST_WAITING_AGE = "transcription.jobs.oldest_waiting_age"
 METRIC_JOBS_STUCK = "transcription.jobs.stuck"
+# DIAAT-282: running jobs / SPEECH_CONCURRENT_JOBS_LIMIT, only when the limit is set.
+METRIC_SPEECH_UTILISATION = "transcription.speech.concurrency.utilisation"
 
 # Values of the "phase" attribute on transcription.job.duration.
 PHASE_QUEUE_WAIT = "queue_wait"
@@ -171,26 +181,37 @@ def record_job_finished(
     created_at: datetime | None,
     processing_started: datetime | None = None,
     processing_ended: datetime | None = None,
+    exc: BaseException | None = None,
+    attributes: Mapping[str, object] | None = None,
 ) -> None:
     """The job's terminal state: job.finished, its durations and the finished-jobs count.
 
     duration_ms is the end-to-end time. Queue wait and processing are attached when the
     processing start is known (not for jobs that never reached Azure, or that Azure
     finished between two polls).
+
+    DIAAT-282: a failed job also carries hmcts.failure.source (from the code and, when
+    given, the exception that caused it) and what Azure said about the failure.
+    ``attributes`` adds the Azure Speech job ID and configuration reference.
     """
     now = datetime.now(UTC)
-    attributes: dict[str, object] = {c.OUTCOME: outcome}
+    source = "none"
+    event: dict[str, object] = {**(attributes or {}), c.OUTCOME: outcome}
+    if outcome != "success":
+        failure = failure_attributes(error_code or "unknown", exc)
+        source = str(failure[ATTR_FAILURE_SOURCE])
+        event = {**failure, **event}
     if error_code:
-        attributes[c.ERROR_CODE] = error_code
+        event[c.ERROR_CODE] = error_code
     queue_wait = seconds_between(created_at, processing_started)
     processing = seconds_between(processing_started, processing_ended or now)
     if processing_started is not None and queue_wait is not None and processing is not None:
-        attributes[ATTR_QUEUE_WAIT_MS] = queue_wait * 1000.0
-        attributes[ATTR_PROCESSING_MS] = processing * 1000.0
+        event[ATTR_QUEUE_WAIT_MS] = queue_wait * 1000.0
+        event[ATTR_PROCESSING_MS] = processing * 1000.0
     end_to_end = seconds_between(created_at, now)
     record_event(
         EVENT_JOB_FINISHED,
-        attributes,
+        event,
         duration_ms=end_to_end * 1000.0 if end_to_end is not None else None,
     )
     if processing_started is not None:
@@ -199,22 +220,40 @@ def record_job_finished(
     try:
         _instrument(
             "counter", METRIC_JOBS_FINISHED, unit="{job}", description="Jobs that finished"
-        ).add(1, {c.OUTCOME: outcome, c.ERROR_CODE: error_code or "none"})
-    except Exception as exc:
-        logger.warning("Could not count finished job (%s)", type(exc).__name__)
+        ).add(
+            1,
+            {c.OUTCOME: outcome, c.ERROR_CODE: error_code or "none", ATTR_FAILURE_SOURCE: source},
+        )
+    except Exception as error:
+        logger.warning("Could not count finished job (%s)", type(error).__name__)
 
 
 # Retries --------------------------------------------------------------------------------
 
 
-def failure_code(exc: BaseException, component: str) -> str:
-    """A controlled code for a failed call: never the exception's message."""
-    last = getattr(exc, "last_attempt", None)  # tenacity.RetryError: use the cause
+HTTP_TOO_MANY_REQUESTS = 429
+
+
+def unwrap_retry(exc: BaseException) -> BaseException:
+    """The last attempt's exception for a tenacity.RetryError; the exception otherwise."""
+    last = getattr(exc, "last_attempt", None)
     if last is not None and getattr(last, "failed", False):
         cause = last.exception()
         if cause is not None:
-            exc = cause
+            return cause
+    return exc
+
+
+def failure_code(exc: BaseException, component: str) -> str:
+    """A controlled code for a failed call: never the exception's message.
+
+    A 429 is ``<component>.throttled`` (DIAAT-282), other HTTP errors
+    ``<component>.http_<status>``.
+    """
+    exc = unwrap_retry(exc)
     if isinstance(exc, httpx.HTTPStatusError):
+        if exc.response.status_code == HTTP_TOO_MANY_REQUESTS:
+            return f"{component}.throttled"
         return f"{component}.http_{exc.response.status_code}"
     if isinstance(exc, httpx.TimeoutException):
         return f"{component}.timeout"
@@ -223,11 +262,138 @@ def failure_code(exc: BaseException, component: str) -> str:
     return f"unhandled.{type(exc).__name__}"[:64]
 
 
-def record_retry(operation: str, attempt: int, error_code: str) -> None:
+# Failure attribution (DIAAT-282) --------------------------------------------------------
+
+SOURCE_APPLICATION = "application"
+SOURCE_QUEUE = "queue"
+SOURCE_DEPENDENCY = "dependency"
+
+# Codes that always mean Azure Speech failed us: it rejected the job, reported it as
+# Failed, returned no transcript, or an HTTP call to it failed (status, timeout,
+# connection). Stuck jobs: one never started is a queue failure; one Azure started
+# but has not finished is Azure's.
+_DEPENDENCY_CODE = re.compile(
+    r"speech\.(submission_rejected|job_failed|results_unavailable"
+    r"|http_[0-9]{3}|throttled|timeout|connect_error)"
+)
+_STUCK_SOURCES = {"job.stuck.waiting": SOURCE_QUEUE, "job.stuck.running": SOURCE_DEPENDENCY}
+
+
+def failure_source(error_code: str, exc: BaseException | None = None) -> str:
+    """Where a failure came from: ``application``, ``queue`` or ``dependency``.
+
+    Generic codes (``job.submission_error``, ``speech.results_error``, a failed poll's
+    ``unhandled.*``) are attributed by their cause: an Azure Speech HTTP error, timeout
+    or connection failure is the dependency's; anything else (our code, our database)
+    is the application's.
+    """
+    if error_code in _STUCK_SOURCES:
+        return _STUCK_SOURCES[error_code]
+    if _DEPENDENCY_CODE.fullmatch(error_code):
+        return SOURCE_DEPENDENCY
+    if exc is not None and _DEPENDENCY_CODE.fullmatch(failure_code(exc, "speech")):
+        return SOURCE_DEPENDENCY
+    return SOURCE_APPLICATION
+
+
+_AZURE_ERROR_CODE = re.compile(r"[A-Za-z][A-Za-z0-9_.]{0,63}")
+
+
+def azure_error_code(value: object) -> str | None:
+    """Azure's error code if it is a plain identifier (e.g. InvalidData); else None."""
+    return value if isinstance(value, str) and _AZURE_ERROR_CODE.fullmatch(value) else None
+
+
+def failed_job_error_code(status_data: Mapping[str, Any]) -> str | None:
+    """``properties.error.code`` of a job Azure reports as Failed. Never the message."""
+    properties = status_data.get("properties")
+    error = properties.get("error") if isinstance(properties, Mapping) else None
+    return azure_error_code(error.get("code")) if isinstance(error, Mapping) else None
+
+
+def response_error_code(response: httpx.Response) -> str | None:
+    """The ``code`` (or ``error.code``) of an Azure Speech error body. Never the message."""
+    try:
+        body = response.json()
+    except Exception:
+        return None
+    if not isinstance(body, Mapping):
+        return None
+    code = body.get("code")
+    if code is None and isinstance(body.get("error"), Mapping):
+        code = body["error"].get("code")
+    return azure_error_code(code)
+
+
+def retry_after_seconds(response: httpx.Response) -> float | None:
+    """Retry-After (seconds or an HTTP date), or retry-after-ms, in seconds; else None."""
+    headers = response.headers
+    value = headers.get("Retry-After")
+    if isinstance(value, str) and value.strip():
+        try:
+            seconds = float(value.strip())
+        except ValueError:
+            try:
+                seconds = (parsedate_to_datetime(value) - datetime.now(UTC)).total_seconds()
+            except (TypeError, ValueError):
+                return None
+            seconds = max(0.0, seconds)
+        return seconds if math.isfinite(seconds) and seconds >= 0 else None
+    value = headers.get("retry-after-ms")
+    if isinstance(value, str):
+        try:
+            millis = float(value.strip())
+        except ValueError:
+            return None
+        return millis / 1000.0 if math.isfinite(millis) and millis >= 0 else None
+    return None
+
+
+def response_failure_details(response: httpx.Response) -> dict[str, object]:
+    """HTTP status, Azure's error code and (when throttled) Retry-After of a response."""
+    details: dict[str, object] = {ATTR_HTTP_STATUS: int(response.status_code)}
+    code = response_error_code(response)
+    if code is not None:
+        details[ATTR_SPEECH_ERROR_CODE] = code
+    if response.status_code == HTTP_TOO_MANY_REQUESTS:
+        retry_after = retry_after_seconds(response)
+        if retry_after is not None:
+            details[ATTR_RETRY_AFTER_S] = retry_after
+    return details
+
+
+def failure_attributes(error_code: str, exc: BaseException | None = None) -> dict[str, object]:
+    """hmcts.failure.source, plus what Azure said when ``exc`` carries its response.
+
+    Never raises: a detail that cannot be read is left out.
+    """
+    attributes: dict[str, object] = {ATTR_FAILURE_SOURCE: failure_source(error_code, exc)}
+    if exc is None:
+        return attributes
+    try:
+        response = getattr(unwrap_retry(exc), "response", None)
+        if isinstance(response, httpx.Response):
+            attributes.update(response_failure_details(response))
+    except Exception as error:
+        logger.warning("Could not read the failed response (%s)", type(error).__name__)
+    return attributes
+
+
+def record_retry(
+    operation: str,
+    attempt: int,
+    error_code: str,
+    attributes: Mapping[str, object] | None = None,
+) -> None:
     """A call for the current job failed and is about to be retried."""
     record_event(
         EVENT_JOB_RETRIED,
-        {ATTR_RETRY_OPERATION: operation, ATTR_RETRY_ATTEMPT: attempt, c.ERROR_CODE: error_code},
+        {
+            **(attributes or {}),
+            ATTR_RETRY_OPERATION: operation,
+            ATTR_RETRY_ATTEMPT: attempt,
+            c.ERROR_CODE: error_code,
+        },
     )
     try:
         _instrument("counter", METRIC_JOB_RETRIES, unit="{retry}", description="Retried calls").add(
@@ -252,7 +418,13 @@ def record_speech_retry(retry_state: Any) -> None:
         exc = retry_state.outcome.exception() if retry_state.outcome is not None else None
         if operation is None or exc is None:
             return
-        record_retry(operation, retry_state.attempt_number, failure_code(exc, "speech"))
+        code = failure_code(exc, "speech")
+        attributes = failure_attributes(code, exc)
+        # DIAAT-282: status, results and delete calls are for a known Azure job.
+        job_url = retry_state.kwargs.get("job_url") or next(iter(retry_state.args), None)
+        if operation != "speech.submit" and isinstance(job_url, str):
+            attributes[c.DEPENDENCY_REF] = batch_job_id_from_url(job_url)
+        record_retry(operation, retry_state.attempt_number, code, attributes)
     except Exception as exc:  # never change the retry behaviour
         logger.warning("Could not record retry (%s)", type(exc).__name__)
 
@@ -282,7 +454,10 @@ def report_stuck_jobs(session: Session, now: datetime | None = None) -> int:
         state = "running" if running else "waiting"
         since = job.processing_started_datetime if running else None
         age = seconds_between(since or job.created_datetime, now)
-        attributes: dict[str, object] = {ATTR_JOB_STATE: state}
+        attributes: dict[str, object] = {
+            ATTR_JOB_STATE: state,
+            ATTR_FAILURE_SOURCE: failure_source(f"job.stuck.{state}"),
+        }
         if job.batch_job_id:
             attributes[c.DEPENDENCY_REF] = job.batch_job_id
         with journey(JOURNEY_JOB, str(job.id), parent_id=upload_id_from_blob(job.audio_blob_path)):
@@ -388,6 +563,16 @@ class JobStateGauges:
             unit="{job}",
             description="Jobs waiting or running longer than their stuck threshold",
         )
+        limit = get_settings().SPEECH_CONCURRENT_JOBS_LIMIT
+        if limit:
+            # DIAAT-282: how close Azure Speech is to its concurrent-jobs limit (1 = at it).
+            meter.create_observable_gauge(
+                METRIC_SPEECH_UTILISATION,
+                callbacks=[self._observations(lambda n: [Observation(n.running / limit)])],
+                unit="1",
+                description="Jobs running in Azure Speech as a fraction of "
+                "SPEECH_CONCURRENT_JOBS_LIMIT",
+            )
 
     @staticmethod
     def _oldest_waiting_age(counts: JobStateCounts) -> list[Observation]:
