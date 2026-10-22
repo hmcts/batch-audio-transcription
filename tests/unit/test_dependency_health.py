@@ -450,10 +450,11 @@ def test_endpoint_is_503_when_a_dependency_is_down(client_with_checker):
     probe.assert_not_called()
 
 
-def test_endpoint_is_503_until_every_dependency_has_been_checked(client_with_checker):
+def test_a_dependency_not_yet_checked_is_not_an_outage(client_with_checker):
     client, _ = client_with_checker({"database": True})
     response = client.get("/api/v1/health/dependencies")
-    assert response.status_code == 503
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
     assert response.json()["dependencies"] == {
         "database": "up",
         "storage": "unknown",

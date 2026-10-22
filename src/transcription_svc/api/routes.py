@@ -534,7 +534,7 @@ async def dependency_health(response: Response) -> dict:
     """DIAAT-277: the last result of the background dependency checks.
 
     Never checks anything itself, so it is as cheap as /health. 200 when every
-    dependency is up; 503 when any is down or not yet checked. NOT the App Service
+    dependency is up or not yet checked; 503 when any is down. NOT the App Service
     eviction probe (that stays the static /health): a dependency outage must not
     restart healthy instances. Unauthenticated like /health: it says only up, down
     or unknown for three fixed names. Excluded from request telemetry (as /health).

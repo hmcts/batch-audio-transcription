@@ -406,8 +406,12 @@ def register_dependency_gauge(checker: DependencyHealthChecker | None = None) ->
 
 
 def health_response(statuses: Mapping[str, str]) -> tuple[int, dict]:
-    """200 and ``ok`` when every dependency is up; otherwise 503 and ``degraded``."""
-    healthy = all(status == STATUS_UP for status in statuses.values())
+    """503 and ``degraded`` when any dependency is down; otherwise 200 and ``ok``.
+
+    A dependency not yet checked (``unknown``, briefly after startup) is not down, so a
+    restart does not report an outage. Same rule as the dictation service.
+    """
+    healthy = all(status != STATUS_DOWN for status in statuses.values())
     return (200 if healthy else 503), {
         "status": "ok" if healthy else "degraded",
         "dependencies": dict(statuses),
