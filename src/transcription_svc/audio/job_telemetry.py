@@ -496,7 +496,7 @@ def db_failure_code(exc: BaseException) -> str:
 def record_storage_failure(
     operation: str, error_code: str, attributes: Mapping[str, object] | None = None
 ) -> None:
-    """job.storage_failed: a database or blob write after Azure Speech finished failed."""
+    """job.storage_failed: a database or blob write recording a job's state failed."""
     record_event(
         EVENT_STORAGE_FAILED,
         {

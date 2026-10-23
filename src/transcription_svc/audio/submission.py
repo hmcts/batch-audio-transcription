@@ -6,10 +6,19 @@ import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
-from hmcts_otel import capture_trace_context, client_failure_code, journey, record_event, stage
+from hmcts_otel import (
+    Outcome,
+    StageHandle,
+    capture_trace_context,
+    client_failure_code,
+    journey,
+    record_event,
+    stage,
+)
 from hmcts_otel import conventions as c
 from sqlmodel import Session
 
+from transcription_svc.audio import job_telemetry
 from transcription_svc.audio.batch_client import BatchSubmissionError, submit_batch_job
 from transcription_svc.audio.job_telemetry import record_job_finished, seconds_between
 from transcription_svc.audio.speech_telemetry import speech_config_attributes
@@ -89,6 +98,7 @@ async def _submit(
         except BatchSubmissionError as exc:
             # Azure Speech refused the job: a dependency failure, counted as an error.
             submission.error("speech.submission_rejected")
+            _store_failed(session, job, submission, exc)
             record_job_finished(
                 "error",
                 "speech.submission_rejected",
@@ -103,6 +113,7 @@ async def _submit(
             outcome = "failure" if client_failure_code(exc) else "error"
             if job.batch_job_id:  # Azure accepted the job before we failed
                 config[c.DEPENDENCY_REF] = job.batch_job_id
+            _store_failed(session, job, submission, exc)
             record_job_finished(
                 outcome,
                 "job.submission_error",
@@ -113,6 +124,29 @@ async def _submit(
             raise
 
 
+def _store_failed(
+    session: Session, job: TranscriptionJob, submission: StageHandle, exc: BaseException
+) -> None:
+    """Store the FAILED state _submit_to_speech set on ``job``.
+
+    DIAAT-281: job.finished and its counter come only once this is stored. If storing
+    it fails, the row can stay PENDING: that write failure is job.storage_failed, the
+    job is not counted as finished, and the storage exception propagates (as before).
+    The speech_submission stage keeps the submission's own outcome, not the write's.
+    """
+    try:
+        with job_telemetry.storage_write("job.mark_failed"):
+            save_job(session, job)
+    except Exception:
+        if submission.outcome is Outcome.SUCCESS:  # not already marked by the caller
+            client_code = client_failure_code(exc)
+            if client_code is not None:
+                submission.fail(client_code)
+            else:
+                submission.error(f"unhandled.{type(exc).__name__}"[:64])
+        raise
+
+
 async def _submit_to_speech(
     session: Session,
     job: TranscriptionJob,
@@ -121,6 +155,11 @@ async def _submit_to_speech(
     enable_diarization: bool,
     submission,
 ) -> TranscriptionJob:
+    """Submit to Azure Speech and store SUBMITTED.
+
+    On failure, ``job`` is set to FAILED (not stored: _submit stores it) and the
+    exception is re-raised.
+    """
     try:
         job_url = await submit_batch_job(
             audio_sas_url=audio_url,
@@ -153,7 +192,6 @@ async def _submit_to_speech(
         # Store only the high-level message — full Azure error detail (which
         # may contain endpoint URLs or subscription IDs) goes to Sentry only.
         job.error_message = "Azure batch transcription submission failed"
-        job = save_job(session, job)
         raise
     except Exception as exc:
         logger.error(
@@ -164,7 +202,6 @@ async def _submit_to_speech(
         sentry_sdk.capture_exception(exc)
         job.status = JobStatus.FAILED
         job.error_message = "Job submission failed due to an internal error"
-        job = save_job(session, job)
         raise
 
     return job
