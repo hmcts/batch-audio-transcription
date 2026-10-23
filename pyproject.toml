@@ -38,7 +38,8 @@ dependencies = [
     "hmcts-fastapi-azure-auth",
     # Telemetry (DIAAT-205). Brings azure-monitor-opentelemetry and the FastAPI
     # instrumentation; configured in src/transcription_svc/telemetry.py.
-    "hmcts-otel[fastapi,sentry]",
+    # 0.2.0 adds AI usage metering (record_speech_usage, OBS-5).
+    "hmcts-otel[fastapi,sentry]>=0.2.0",
 ]
 
 [project.optional-dependencies]
@@ -53,7 +54,9 @@ dev = [
 [tool.uv.sources]
 hmcts-fastapi-azure-auth = { path = "./vendor/hmcts_fastapi_azure_auth-0.2.0-py3-none-any.whl" }
 # TEMPORARY: vendored until hmcts/hmcts-otel is published to the hmcts-lib feed (OBS-1).
-hmcts-otel = { path = "./vendor/hmcts_otel-0.1.0-py3-none-any.whl" }
+# 0.2.0 built from hmcts-otel commit 11a4c46, sha256 6e4ba515bf3e92a46d3a08417f66f88fa99a52839584f8fd6f8cf9bf1c5fccfd.
+# The Dockerfile installs vendor/hmcts_otel-*.whl by glob, so only this line changes on upgrade.
+hmcts-otel = { path = "./vendor/hmcts_otel-0.2.0-py3-none-any.whl" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/transcription_svc"]

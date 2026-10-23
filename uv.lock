@@ -932,8 +932,8 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "hmcts-otel"
-version = "0.1.0"
-source = { path = "vendor/hmcts_otel-0.1.0-py3-none-any.whl" }
+version = "0.2.0"
+source = { path = "vendor/hmcts_otel-0.2.0-py3-none-any.whl" }
 dependencies = [
     { name = "azure-monitor-opentelemetry" },
     { name = "opentelemetry-api" },
@@ -941,7 +941,7 @@ dependencies = [
     { name = "pydantic-settings" },
 ]
 wheels = [
-    { filename = "hmcts_otel-0.1.0-py3-none-any.whl", hash = "sha256:bf8a9aaa0d6a1d345d8df341e06bdf4e34308e8d37db4db44627cb3cde8a4f77" },
+    { filename = "hmcts_otel-0.2.0-py3-none-any.whl", hash = "sha256:6e4ba515bf3e92a46d3a08417f66f88fa99a52839584f8fd6f8cf9bf1c5fccfd" },
 ]
 
 [package.optional-dependencies]
@@ -960,6 +960,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'fastapi'", specifier = ">=0.115.0" },
     { name = "hatch", marker = "extra == 'dev'", specifier = ">=1.14.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0" },
+    { name = "litellm", marker = "extra == 'dev'", specifier = ">=1.70.0" },
     { name = "opentelemetry-api", specifier = ">=1.40,<2" },
     { name = "opentelemetry-instrumentation-sqlalchemy", marker = "extra == 'sqlalchemy'", specifier = ">=0.61b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.40,<2" },
@@ -2395,7 +2396,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=42.0" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "hmcts-fastapi-azure-auth", path = "vendor/hmcts_fastapi_azure_auth-0.2.0-py3-none-any.whl" },
-    { name = "hmcts-otel", extras = ["fastapi", "sentry"], path = "vendor/hmcts_otel-0.1.0-py3-none-any.whl" },
+    { name = "hmcts-otel", extras = ["fastapi", "sentry"], path = "vendor/hmcts_otel-0.2.0-py3-none-any.whl" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7" },
     { name = "psycopg2-binary", specifier = ">=2.9" },
