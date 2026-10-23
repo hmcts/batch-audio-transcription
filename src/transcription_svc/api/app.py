@@ -9,13 +9,16 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from hmcts_otel.fastapi import instrument_fastapi
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from transcription_svc.api.routes import limiter, router
 from transcription_svc.config.settings import get_settings
+from transcription_svc.telemetry import configure_telemetry
 
 _polling_task = None
+_dependency_health_task = None
 
 
 def _json_safe(obj: Any) -> Any:
@@ -53,7 +56,12 @@ async def lifespan(app: FastAPI):
 
     from hmcts_azure_auth.roles import validate_approles_config
 
+    from transcription_svc.audio.job_telemetry import register_job_gauges
     from transcription_svc.audio.polling_service import BatchPollingService
+    from transcription_svc.dependency_health import (
+        get_dependency_checker,
+        register_dependency_gauge,
+    )
 
     # Fail fast if AUTH_APPROLES is set but contains invalid configuration
     # (bad JSON, missing required role keys, non-string values).
@@ -61,21 +69,36 @@ async def lifespan(app: FastAPI):
 
     settings = get_settings()
     if settings.ENVIRONMENT != "test":
+        # DIAAT-281: waiting/running/stuck job gauges, read from the database on export.
+        register_job_gauges()
         service = BatchPollingService()
         global _polling_task
         _polling_task = asyncio.create_task(service.run_polling_loop())
+        # DIAAT-277: database, storage and Azure Speech health, checked in the
+        # background and read from cache by /api/v1/health/dependencies.
+        register_dependency_gauge()
+        global _dependency_health_task
+        _dependency_health_task = asyncio.create_task(get_dependency_checker().run())
 
     yield
 
-    if _polling_task:
-        _polling_task.cancel()
-        try:
-            await _polling_task
-        except asyncio.CancelledError:
-            pass
+    for task in (_polling_task, _dependency_health_task):
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    # Telemetry is flushed by hmcts-otel's exit hook when the process ends; shutting it
+    # down here would leave the rest of the process unconfigured and unredacted.
 
 
 def create_app() -> FastAPI:
+    # Before the app exists: logging, tracing, metrics and Sentry (DIAAT-205).
+    # This is also what initialises Sentry, which was configured but never
+    # started (DIAAT-264).
+    configure_telemetry()
     settings = get_settings()
 
     app = FastAPI(
@@ -103,4 +126,6 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(router)
+    # Request spans and metrics (health probes excluded) and X-Request-Id correlation.
+    instrument_fastapi(app)
     return app

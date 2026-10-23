@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy import update as sa_update
 from sqlmodel import Session, col, select
 
@@ -16,6 +18,9 @@ from transcription_svc.database.models import (
     JobStatus,
     TranscriptionJob,
 )
+
+if TYPE_CHECKING:
+    from transcription_svc.provenance import TranscriptProvenance
 
 _POLL_BATCH_SIZE = 10
 
@@ -102,12 +107,19 @@ def fetch_pending_batch_jobs(session: Session) -> list[TranscriptionJob]:
     return list(session.exec(stmt).all())
 
 
-def update_job_batch_status(session: Session, job_id: UUID, batch_status: BatchJobStatus) -> None:
+def update_job_batch_status(
+    session: Session,
+    job_id: UUID,
+    batch_status: BatchJobStatus,
+    processing_started: datetime | None = None,
+) -> None:
     job = session.get(TranscriptionJob, job_id)
     if job:
         job.batch_job_status = batch_status
         if batch_status == BatchJobStatus.RUNNING:
             job.status = JobStatus.RUNNING
+            if job.processing_started_datetime is None:
+                job.processing_started_datetime = processing_started or datetime.now(UTC)
         job.updated_datetime = datetime.now(UTC)
         session.add(job)
         session.commit()
@@ -121,9 +133,15 @@ def save_job_results(
     transcription_duration_seconds: float | None = None,
     model_identifier: str | None = None,
     model_display_name: str | None = None,
+    provenance: TranscriptProvenance | None = None,
 ) -> None:
+    """Save the transcript and, in the same transaction, its provenance (DIAAT-286).
+
+    The provenance's generated_at is the time the results are saved.
+    """
     job = session.get(TranscriptionJob, job_id)
     if job:
+        now = datetime.now(UTC)
         job.dialogue_entries = [e.model_dump() if hasattr(e, "model_dump") else e for e in entries]
         job.batch_job_status = batch_status
         job.status = (
@@ -132,7 +150,11 @@ def save_job_results(
         job.transcription_duration_seconds = transcription_duration_seconds
         job.model_identifier = model_identifier
         job.model_display_name = model_display_name
-        job.updated_datetime = datetime.now(UTC)
+        if provenance is not None:
+            job.provenance = provenance.model_copy(update={"generated_at": now}).model_dump(
+                mode="json"
+            )
+        job.updated_datetime = now
         session.add(job)
         session.commit()
 
@@ -161,6 +183,115 @@ def mark_needs_cleanup(session: Session, job_id: UUID, reason: str) -> None:
         job.updated_datetime = datetime.now(UTC)
         session.add(job)
         session.commit()
+
+
+# DIAAT-281: a job is waiting until Azure Speech starts processing it (our row exists,
+# Azure may or may not have accepted it), running while Azure processes it.
+WAITING_STATUSES = (JobStatus.PENDING, JobStatus.SUBMITTED)
+
+
+@dataclass(frozen=True)
+class JobStateCounts:
+    waiting: int
+    running: int
+    # Creation time of the oldest waiting job not yet reported stuck (see count_job_states).
+    oldest_waiting_created: datetime | None
+    stuck_waiting: int
+    stuck_running: int
+
+
+def _waiting():
+    return col(TranscriptionJob.status).in_(WAITING_STATUSES)
+
+
+def _running():
+    return TranscriptionJob.status == JobStatus.RUNNING
+
+
+def _stuck_waiting(cutoff: datetime):
+    return and_(_waiting(), col(TranscriptionJob.created_datetime) < cutoff)
+
+
+def _stuck_running(cutoff: datetime):
+    # Running jobs without a processing start (rows from before migration 015) are
+    # measured from their creation.
+    running_since = func.coalesce(
+        TranscriptionJob.processing_started_datetime, TranscriptionJob.created_datetime
+    )
+    return and_(_running(), running_since < cutoff)
+
+
+def _waiting_unreported():
+    # A job already reported stuck may never finish (e.g. a PENDING orphan that is never
+    # polled); it stays in the stuck counts until someone clears it, but must not hold
+    # the oldest-waiting age up for good.
+    return and_(_waiting(), col(TranscriptionJob.stuck_reported_at).is_(None))
+
+
+def _count(condition):
+    return func.coalesce(func.sum(case((condition, 1), else_=0)), 0)
+
+
+def count_job_states(
+    session: Session, *, waiting_cutoff: datetime, running_cutoff: datetime
+) -> JobStateCounts:
+    """Database-wide waiting/running/stuck counts and the oldest waiting job, in one query.
+
+    The waiting, running and stuck counts include every job in those states, including
+    jobs already reported stuck (they really are stuck until someone clears them). The
+    oldest waiting job excludes jobs already reported stuck (stuck_reported_at set): they
+    are covered by the stuck counts and ``job.stuck``, and one that can never finish
+    would otherwise keep the oldest-waiting age, and its early-warning alert, high for
+    good, hiding a real backlog behind it.
+    """
+    stmt = select(
+        _count(_waiting()),
+        _count(_running()),
+        func.min(case((_waiting_unreported(), TranscriptionJob.created_datetime), else_=None)),
+        _count(_stuck_waiting(waiting_cutoff)),
+        _count(_stuck_running(running_cutoff)),
+    ).where(col(TranscriptionJob.status).in_([*WAITING_STATUSES, JobStatus.RUNNING]))
+    row = session.execute(stmt).one()
+    return JobStateCounts(int(row[0]), int(row[1]), row[2], int(row[3]), int(row[4]))
+
+
+@dataclass(frozen=True)
+class StuckJob:
+    id: UUID
+    status: JobStatus
+    audio_blob_path: str | None
+    batch_job_id: str | None
+    created_datetime: datetime
+    processing_started_datetime: datetime | None
+
+
+def claim_stuck_jobs(
+    session: Session, *, waiting_cutoff: datetime, running_cutoff: datetime
+) -> list[StuckJob]:
+    """Mark newly stuck jobs as reported and return them. Each job is returned once.
+
+    A conditional UPDATE (stuck_reported_at IS NULL), like claim_webhook_dispatch, so
+    only one replica reports a given job even when several scan at the same time.
+    """
+    stmt = (
+        sa_update(TranscriptionJob)
+        .where(
+            col(TranscriptionJob.stuck_reported_at).is_(None),
+            or_(_stuck_waiting(waiting_cutoff), _stuck_running(running_cutoff)),
+        )
+        .values(stuck_reported_at=datetime.now(UTC))
+        .returning(
+            TranscriptionJob.id,
+            TranscriptionJob.status,
+            TranscriptionJob.audio_blob_path,
+            TranscriptionJob.batch_job_id,
+            TranscriptionJob.created_datetime,
+            TranscriptionJob.processing_started_datetime,
+        )
+    )
+    rows = session.execute(stmt).all()
+    session.commit()
+    return [StuckJob(*row) for row in rows]
 
 
 def claim_webhook_dispatch(session: Session, job_id: UUID) -> bool:

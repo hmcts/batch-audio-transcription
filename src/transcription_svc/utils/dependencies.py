@@ -78,7 +78,7 @@ def _resolve_user(azure_user_id: str, email: str, roles: list[str]) -> Authentic
                 session.commit()
                 session.refresh(user)
             else:
-                logger.info("Found existing user: %s", email)
+                logger.info("Found existing user")
 
     return AuthenticatedUser(db_user=user, app_roles=roles)
 

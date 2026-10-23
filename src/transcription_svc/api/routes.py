@@ -1,3 +1,4 @@
+import io
 import ipaddress
 import json
 import logging
@@ -5,6 +6,7 @@ import math
 import mimetypes
 import re
 import socket
+import wave
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Annotated
@@ -16,6 +18,7 @@ from fastapi import (
     Body,
     Depends,
     File,
+    Header,
     HTTPException,
     Query,
     Request,
@@ -23,6 +26,8 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
+from hmcts_otel import Journey, StageHandle, journey, record_event, stage
+from hmcts_otel import conventions as c
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -35,6 +40,15 @@ from transcription_svc.audio.azure_utils import AsyncAzureBlobManager
 from transcription_svc.audio.batch_client import delete_batch_job
 from transcription_svc.audio.preprocessing import AudioDecodeError, normalize_to_wav
 from transcription_svc.audio.submission import submit_and_queue_batch_job
+from transcription_svc.audit import (
+    AuditRecord,
+    AuditScope,
+    DenialReason,
+    action_for_violation,
+    audited,
+    denied,
+    write_audit_async,
+)
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.engine import get_session
 from transcription_svc.database.interface import (
@@ -49,6 +63,17 @@ from transcription_svc.database.models import (
     JobStatus,
     TranscriptionJob,
     WordCorrection,
+)
+from transcription_svc.dependency_health import get_dependency_checker, health_response
+from transcription_svc.telemetry import (
+    EVENT_UPLOAD_VALIDATION_FAILED,
+    JOURNEY_JOB,
+    JOURNEY_UPLOAD,
+    SecurityAction,
+    SecurityOutcome,
+    SecurityResourceType,
+    record_ownership_violation,
+    upload_id_from_blob,
 )
 from transcription_svc.utils.approles import get_valid_roles
 from transcription_svc.utils.auth_models import AuthenticatedUser
@@ -65,6 +90,11 @@ _METADATA_MAX_BYTES = 4096
 _MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 _ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".mp4", ".m4a", ".ogg", ".flac"}
+_VIDEO_EXTENSIONS = {".mp4"}
+# DIAAT-280: the frontend sends one X-Hearing-Id for every file of a hearing, and the
+# number of files, so multi-file uploads can be related in telemetry.
+_MAX_HEARING_FILES = 50
+_FILE_COUNT_RE = re.compile(r"^[0-9]{1,2}$")
 _UNSAFE_FILENAME_CHARS_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 # A plain-text reference transcript for even a multi-hour hearing is at most
 # a few hundred KB; 5MB is generous headroom without allowing an abusive upload.
@@ -517,6 +547,21 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+@router.get("/health/dependencies")
+async def dependency_health(response: Response) -> dict:
+    """DIAAT-277: the last result of the background dependency checks.
+
+    Never checks anything itself, so it is as cheap as /health. 200 when every
+    dependency is up or not yet checked; 503 when any is down. NOT the App Service
+    eviction probe (that stays the static /health): a dependency outage must not
+    restart healthy instances. Unauthenticated like /health: it says only up, down
+    or unknown for three fixed names. Excluded from request telemetry (as /health).
+    """
+    status_code, body = health_response(get_dependency_checker().statuses())
+    response.status_code = status_code
+    return body
+
+
 @router.get("/version")
 async def version() -> dict:
     """Return the git commit SHA baked into the image at build time.
@@ -549,22 +594,105 @@ async def _read_upload_capped(
     return b"".join(chunks)
 
 
+def _hearing_id(raw: str | None) -> str | None:
+    """A UUID from X-Hearing-Id, normalised; anything else is ignored (never exported)."""
+    if not raw or len(raw) > 64:
+        return None
+    try:
+        return str(UUID(raw.strip()))
+    except ValueError:
+        return None
+
+
+def _hearing_file_count(raw: str | None) -> int | None:
+    """X-Hearing-File-Count when it is an integer in 1..50, else None (not recorded)."""
+    if raw and _FILE_COUNT_RE.fullmatch(raw) and 1 <= int(raw) <= _MAX_HEARING_FILES:
+        return int(raw)
+    return None
+
+
+def _wav_duration_seconds(content: bytes) -> float | None:
+    """Duration of a PCM WAV, or None if it cannot be read (telemetry only)."""
+    try:
+        with wave.open(io.BytesIO(content), "rb") as wav:
+            frames, rate = wav.getnframes(), wav.getframerate()
+    except Exception:  # a malformed header must never fail the upload
+        return None
+    return round(frames / rate, 3) if rate > 0 else None
+
+
+def _upload_metadata(file: UploadFile, extension: str, file_count: int | None) -> dict[str, object]:
+    """Safe technical metadata for the upload stage events. Never the file name."""
+    attributes: dict[str, object] = {}
+    if file_count is not None:
+        attributes["upload.file_count"] = file_count
+    if isinstance(file.size, int):
+        attributes["file.size_bytes"] = file.size  # bytes received
+    if extension in _ALLOWED_AUDIO_EXTENSIONS:
+        attributes["audio.format"] = extension.lstrip(".")
+        attributes["audio.format_category"] = "video" if extension in _VIDEO_EXTENSIONS else "audio"
+    return attributes
+
+
+def _reject(upload_stage: StageHandle, error_code: str) -> None:
+    """Record a validation failure: its own event, then the stage's upload.failed."""
+    upload_stage.fail(error_code)
+    record_event(
+        EVENT_UPLOAD_VALIDATION_FAILED,
+        # The stage's validated code, so this event and upload.failed always agree.
+        {
+            c.STAGE: upload_stage.name,
+            c.ERROR_CODE: upload_stage.error_code,
+            **upload_stage.attributes,
+        },
+    )
+
+
 @router.post("/uploads", status_code=201, response_model=UploadResponse)
 @limiter.limit("50/hour")
 async def upload_audio(
     request: Request,
     file: UploadFile = File(...),
     current_user: AuthenticatedUser = Depends(get_current_user),
+    x_hearing_id: Annotated[str | None, Header()] = None,
+    x_hearing_file_count: Annotated[str | None, Header()] = None,
 ) -> UploadResponse:
+    # DIAAT-276: the upload is its own journey, identified by the UUID that also goes
+    # into the blob name; the job created from it carries that ID as its parent.
+    # DIAAT-280: the hearing (X-Hearing-Id) is the upload's parent, relating the files
+    # of a multi-file hearing.
+    upload_id = uuid4()
     extension = PurePosixPath(file.filename or "").suffix.lower()
+    metadata = _upload_metadata(file, extension, _hearing_file_count(x_hearing_file_count))
+    with (
+        journey(JOURNEY_UPLOAD, str(upload_id), parent_id=_hearing_id(x_hearing_id)),
+        stage("upload", attributes=metadata) as upload_stage,
+    ):
+        return await _upload_audio(file, extension, current_user, upload_id, upload_stage)
+
+
+async def _upload_audio(
+    file: UploadFile,
+    extension: str,
+    current_user: AuthenticatedUser,
+    upload_id: UUID,
+    upload_stage: StageHandle,
+) -> UploadResponse:
     if extension not in _ALLOWED_AUDIO_EXTENSIONS:
+        _reject(upload_stage, "upload.unsupported_format")
         raise HTTPException(
             status_code=422,
             detail=f"Unsupported file type '{extension}'. "
             f"Allowed: {', '.join(sorted(_ALLOWED_AUDIO_EXTENSIONS))}",
         )
 
-    content = await _read_upload_capped(file, _MAX_UPLOAD_BYTES)
+    try:
+        content = await _read_upload_capped(file, _MAX_UPLOAD_BYTES)
+    except HTTPException:  # _read_upload_capped raises only 413 (over the size limit)
+        _reject(upload_stage, "upload.too_large")
+        raise
+    if "file.size_bytes" not in upload_stage.attributes:
+        upload_stage.set_attribute("file.size_bytes", len(content))
 
     # Transcode every accepted upload to 16 kHz mono PCM WAV — the format Azure
     # Speech handles most reliably — before storing. A file that cannot be
@@ -573,6 +701,7 @@ async def upload_audio(
     try:
         content = await normalize_to_wav(content, extension)
     except AudioDecodeError as exc:
+        _reject(upload_stage, "upload.undecodable")
         raise HTTPException(
             status_code=422,
             detail=(
@@ -580,10 +709,13 @@ async def upload_audio(
                 "It may be corrupt or in an unsupported format."
             ),
         ) from exc
+    duration = _wav_duration_seconds(content)
+    if duration is not None:
+        upload_stage.set_attribute("audio.duration_seconds", duration)
 
     safe_filename = _sanitize_filename(file.filename or "audio")
     wav_filename = f"{PurePosixPath(safe_filename).stem}.wav"
-    blob_name = f"uploads/{current_user.id}/{uuid4()}-{wav_filename}"
+    blob_name = f"uploads/{current_user.id}/{upload_id}-{wav_filename}"
 
     if get_settings().AUDIO_STORAGE_BACKEND == "local":
         local_storage.save(content, blob_name)
@@ -596,6 +728,7 @@ async def upload_audio(
     async with AsyncAzureBlobManager() as blob_manager:
         uploaded = await blob_manager.create_blob_from_bytes(content, blob_name)
         if not uploaded:
+            upload_stage.error("storage.write_failed")  # server-side: counts as an error
             raise HTTPException(status_code=502, detail="Failed to store audio file")
         audio_url = blob_manager.build_blob_url(blob_name)
 
@@ -624,6 +757,34 @@ async def get_local_audio(blob_name: str) -> Response:
     return Response(content=content, media_type=media_type)
 
 
+# DIAAT-285: controlled test of the security alert route (ALERTS.md in the infra repo).
+# Only where both hold: ENVIRONMENT is one of these (an allowlist, so stg, prod and any
+# unknown name are excluded) and SECURITY_ALERT_TEST_TRIGGER_ENABLED is true (default
+# false). Anywhere else it answers 404, as if it did not exist.
+SECURITY_ALERT_TEST_ENVIRONMENTS = frozenset({"local", "dev", "test"})
+
+
+def security_alert_test_allowed() -> bool:
+    settings = get_settings()
+    return (
+        settings.SECURITY_ALERT_TEST_TRIGGER_ENABLED
+        and settings.ENVIRONMENT.strip().lower() in SECURITY_ALERT_TEST_ENVIRONMENTS
+    )
+
+
+@router.post("/security/alert-test", status_code=202)
+@limiter.limit("10/hour")
+async def security_alert_test(
+    request: Request,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> dict:
+    """Emit security.ownership_violation with outcome "test" (nothing is accessed)."""
+    if not security_alert_test_allowed():
+        raise HTTPException(status_code=404)
+    record_ownership_violation("job", "read", "test")
+    return {"event": "security.ownership_violation", "outcome": "test"}
+
+
 @router.post("/jobs", status_code=201, response_model=JobResponse)
 @limiter.limit("100/hour")
 async def submit_job(
@@ -632,18 +793,43 @@ async def submit_job(
     session: Session = Depends(get_session),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> JobResponse:
+    # DIAAT-286: "did X submit Y". An idempotent replay is recorded too (detail.replayed).
+    async with audited("job.submit", current_user.id) as audit:
+        job = await _submit_job(body, session, current_user, audit)
+        audit.object_id = job.id
+    return _to_response(job)
+
+
+async def _submit_job(
+    body: SubmitJobRequest,
+    session: Session,
+    current_user: AuthenticatedUser,
+    audit: AuditScope,
+) -> TranscriptionJob:
     if body.idempotency_key:
         existing = get_job_by_idempotency_key_for_user(
             session, body.idempotency_key, current_user.id
         )
         if existing:
-            return _to_response(existing)
+            audit.detail["replayed"] = True
+            return existing
 
     # blob_name is later trusted by GET /jobs/{id}/audio to read straight from
     # storage — without this check a caller could point it at another user's
     # blob (upload_audio issues names under uploads/{current_user.id}/...) and
     # read their audio back through this job.
     if body.blob_name is not None and not body.blob_name.startswith(f"uploads/{current_user.id}/"):
+        # DIAAT-285: a security event (types only; never the blob name), same 422.
+        record_ownership_violation(
+            "upload", "submit", "blocked", journey=_upload_journey(body.blob_name)
+        )
+        # DIAAT-286: the refusal is the audit record (naming the targeted upload by its
+        # ID, never the blob name), in place of a "failed" submission.
+        upload_id = _upload_uuid(body.blob_name)
+        await write_audit_async(
+            denied("job.submit", current_user.id, upload_id, "not_owner", "upload")
+        )
+        audit.skip()
         raise HTTPException(status_code=422, detail="blob_name does not belong to this user")
 
     try:
@@ -668,12 +854,13 @@ async def submit_job(
                 session, body.idempotency_key, current_user.id
             )
             if existing:
-                return _to_response(existing)
+                audit.detail["replayed"] = True
+                return existing
         raise HTTPException(
             status_code=409, detail="Concurrent submission conflict; retry"
         ) from None
 
-    return _to_response(job)
+    return job
 
 
 @router.get("/jobs", response_model=ListJobsResponse)
@@ -700,12 +887,29 @@ async def list_jobs(
     is_admin = get_valid_roles()["SystemAdministrator"] in current_user.app_roles
     filter_user_id = None if is_admin else current_user.id
     jobs, total = list_jobs_paginated(session, filter_user_id, parsed_status, limit, offset)
-    return ListJobsResponse(
+    audit_records: list[AuditRecord] = []
+    if not is_admin:
+        # DIAAT-285: defence in depth. The query is already filtered by user, so a
+        # foreign row here is a defect: drop it rather than return its transcript.
+        owned = []
+        for job in jobs:
+            refusal = _ownership_refusal(job, current_user, "transcript", "read")
+            if refusal is None:
+                owned.append(job)
+            else:
+                audit_records.append(refusal)
+        jobs = owned
+    response = ListJobsResponse(
         jobs=[_to_response(j) for j in jobs],
         total=total,
         limit=limit,
         offset=offset,
     )
+    # DIAAT-286: only the refusals above are audited here (rare, and important). A list
+    # is not recorded as a view of each transcript: the dashboard polls it every 5 s
+    # while a job is in flight, which would bury the real events (see audit.py).
+    await write_audit_async(*audit_records)
+    return response
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
@@ -717,8 +921,14 @@ async def get_job(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user)
-    return _to_response(job)
+    await _check_job_access(job, current_user, "transcript", "read")
+    await _assert_job_owner(job, current_user, "transcript", "read")
+    # DIAAT-286: a view only when the transcript is returned (not while processing).
+    async with audited("transcript.view", current_user.id, job.id) as audit:
+        response = _to_response(job)
+        if response.dialogue_entries is None:
+            audit.skip()
+    return response
 
 
 @router.post("/jobs/{job_id}/baseline", response_model=JobResponse)
@@ -741,7 +951,7 @@ async def upload_baseline_transcript(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user)
+    await _check_job_access(job, current_user, "transcript", "write")
     if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
         raise HTTPException(
             status_code=422, detail="Job has no transcript to compare a baseline against"
@@ -784,9 +994,40 @@ async def upload_baseline_transcript(
     return _to_response(job)
 
 
-def _check_job_access(
+def _is_admin(current_user: AuthenticatedUser) -> bool:
+    return get_valid_roles()["SystemAdministrator"] in current_user.app_roles
+
+
+def _job_journey(job: TranscriptionJob) -> Journey | None:
+    try:
+        return Journey(JOURNEY_JOB, str(job.id))
+    except ValueError:  # not a valid identifier: record the event without it
+        return None
+
+
+def _upload_uuid(blob_name: str) -> UUID | None:
+    """The upload ID in a blob name, if it has one (DIAAT-286 audit; never the name)."""
+    upload_id = upload_id_from_blob(blob_name)
+    try:
+        return UUID(upload_id) if upload_id else None
+    except ValueError:
+        return None
+
+
+def _upload_journey(blob_name: str) -> Journey | None:
+    """The upload a rejected blob_name points at, if it has an upload ID (never the name)."""
+    upload_id = upload_id_from_blob(blob_name)
+    try:
+        return Journey(JOURNEY_UPLOAD, upload_id) if upload_id else None
+    except ValueError:
+        return None
+
+
+async def _check_job_access(
     job: TranscriptionJob,
     current_user: AuthenticatedUser,
+    resource_type: SecurityResourceType,
+    action: SecurityAction,
 ) -> None:
     """Raise 404 if current_user neither owns the job nor is a SystemAdministrator.
 
@@ -799,23 +1040,79 @@ def _check_job_access(
     SystemAdministrator — legacy jobs may contain sensitive hearing content, and
     any authenticated user who can obtain or guess a UUID should not be able to
     access that content.
+
+    DIAAT-285: a refusal of an existing job is a security event
+    (security.ownership_violation, outcome "blocked"). The job was already loaded
+    by ID, so telling "not yours" from "not found" costs no extra query, and the
+    response (404 "Job not found") is unchanged.
     """
-    is_admin = get_valid_roles()["SystemAdministrator"] in current_user.app_roles
-    if job.user_id is None:
-        if not is_admin:
-            raise HTTPException(status_code=404, detail="Job not found")
+    if _is_admin(current_user):
         return
-    if job.user_id != current_user.id and not is_admin:
+    if job.user_id is None or job.user_id != current_user.id:
+        reason: DenialReason = "legacy_job" if job.user_id is None else "not_owner"
+        await write_audit_async(
+            _violation(job, current_user, resource_type, action, "blocked", reason)
+        )
         raise HTTPException(status_code=404, detail="Job not found")
 
 
-def _load_entry_for_correction(
+def _violation(
+    job: TranscriptionJob,
+    current_user: AuthenticatedUser,
+    resource_type: SecurityResourceType,
+    action: SecurityAction,
+    outcome: SecurityOutcome,
+    reason: DenialReason,
+) -> AuditRecord:
+    """DIAAT-285's security event, and the DIAAT-286 audit record for the caller to write.
+
+    The event carries no identifiers; the audit record (in the database) names the
+    caller and the job, and shares the event's hmcts.request.id.
+    """
+    record_ownership_violation(resource_type, action, outcome, journey=_job_journey(job))
+    return denied(action_for_violation(resource_type, action), current_user.id, job.id, reason)
+
+
+def _ownership_refusal(
+    job: TranscriptionJob,
+    current_user: AuthenticatedUser,
+    resource_type: SecurityResourceType,
+    action: SecurityAction,
+) -> AuditRecord | None:
+    """DIAAT-285: post-authorisation ownership assertion. None if the caller may have it.
+
+    Independent of _check_job_access on purpose: it runs after authorisation has
+    already passed, so it should never fail. If it does, an authorisation check
+    is broken: record outcome "detected" (logged at ERROR) and return the audit
+    record of the refusal (DIAAT-286) for the caller to write.
+    """
+    if _is_admin(current_user) or (job.user_id is not None and job.user_id == current_user.id):
+        return None
+    return _violation(
+        job, current_user, resource_type, action, "detected", "ownership_assertion_failed"
+    )
+
+
+async def _assert_job_owner(
+    job: TranscriptionJob,
+    current_user: AuthenticatedUser,
+    resource_type: SecurityResourceType,
+    action: SecurityAction,
+) -> None:
+    """Block with the usual 404 if the post-authorisation ownership assertion fails."""
+    refusal = _ownership_refusal(job, current_user, resource_type, action)
+    if refusal is not None:
+        await write_audit_async(refusal)
+        raise HTTPException(status_code=404, detail="Job not found")
+
+
+async def _load_entry_for_correction(
     session: Session, job_id: UUID, index: int, current_user: AuthenticatedUser
 ) -> tuple[TranscriptionJob, DialogueEntry]:
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user)
+    await _check_job_access(job, current_user, "transcript", "write")
     if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
         raise HTTPException(status_code=422, detail="Job has no transcript to correct")
     if index < 0 or index >= len(job.dialogue_entries):
@@ -869,7 +1166,7 @@ async def correct_segment(
     whole-segment override takes full precedence over any prior word-range
     corrections, so those are cleared.
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
+    job, entry = await _load_entry_for_correction(session, job_id, index, current_user)
 
     previous_text = entry.effective_text()
     entry.corrected_text = body.corrected_text
@@ -917,7 +1214,7 @@ async def correct_word_range(
     Unlike a whole-segment correction, this keeps confidence highlighting
     and playback-sync intact for every word outside the corrected range.
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
+    job, entry = await _load_entry_for_correction(session, job_id, index, current_user)
 
     if not entry.words:
         raise HTTPException(status_code=422, detail="Segment has no word-level data to correct")
@@ -1032,7 +1329,7 @@ async def rollback_segment(
     Batch produced it. It's a deliberate "start over" action, not one more
     logged change.
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
+    job, entry = await _load_entry_for_correction(session, job_id, index, current_user)
 
     previous_text = entry.effective_text()
     if previous_text == entry.text and not entry.accepted:
@@ -1070,7 +1367,7 @@ async def accept_segment(
     compare against — no correction was made). needs_review filtering
     additionally excludes entries with accepted=True (see compute_accuracy).
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
+    job, entry = await _load_entry_for_correction(session, job_id, index, current_user)
 
     if entry.accepted:
         raise HTTPException(status_code=422, detail="Segment has already been accepted")
@@ -1115,7 +1412,7 @@ async def rollback_to_history_entry(
     since reverting to an arbitrary point in time no longer has a clean
     correspondence to the original word positions in that case.
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
+    job, entry = await _load_entry_for_correction(session, job_id, index, current_user)
 
     history = entry.correction_history or []
     if history_index < 0 or history_index >= len(history):
@@ -1227,7 +1524,18 @@ async def get_job_audio(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user)
+    await _check_job_access(job, current_user, "audio", "read")
+    await _assert_job_owner(job, current_user, "audio", "read")
+    # DIAAT-286: one record per request (a seek is its own Range request: partial).
+    # Recorded once the response is built; a storage error after the first bytes are
+    # sent cannot change it.
+    async with audited("audio.export", current_user.id, job.id) as audit:
+        return await _job_audio_response(job, request, audit.detail)
+
+
+async def _job_audio_response(
+    job: TranscriptionJob, request: Request, audit_detail: dict[str, object]
+) -> Response:
     if not job.audio_blob_path:
         raise HTTPException(status_code=404, detail="Audio not available for this job")
 
@@ -1245,6 +1553,7 @@ async def get_job_audio(
             raise HTTPException(status_code=404, detail="Audio file not found")
 
     start, end, is_partial = _parse_range(request.headers.get("range"), total_size)
+    audit_detail["partial"] = is_partial
     length = end - start + 1
     status_code = 206 if is_partial else 200
 
@@ -1312,8 +1621,15 @@ async def delete_job(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user)
+    await _check_job_access(job, current_user, "job", "delete")
+    # DIAAT-286: success once the row is deleted; failed (http_502) if the audio could
+    # not be deleted and the job was kept.
+    async with audited("job.delete", current_user.id, job.id):
+        await _delete_job(session, job)
+    return Response(status_code=204)
 
+
+async def _delete_job(session: Session, job: TranscriptionJob) -> None:
     if job.audio_blob_path:
         try:
             if get_settings().AUDIO_STORAGE_BACKEND == "local":
@@ -1337,4 +1653,3 @@ async def delete_job(
 
     session.delete(job)
     session.commit()
-    return Response(status_code=204)

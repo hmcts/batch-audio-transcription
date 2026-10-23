@@ -36,6 +36,16 @@ jobs:
           cat coverage.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
+      # DIAAT-287: the automated prohibited-content (PII) scan of the telemetry the
+      # validation scenarios exported (tests/unit/validation), kept as release evidence.
+      - name: Upload telemetry PII scan evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: telemetry-pii-scan
+          path: test-results/telemetry-pii-scan.json
+          if-no-files-found: warn
+
       # Surfaces startup-time failures (broken Settings, missing
       # transitive imports) that unit tests skip past because they
       # patch settings before importing.

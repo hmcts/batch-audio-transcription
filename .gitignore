@@ -35,3 +35,6 @@ Thumbs.db
 
 # Alembic
 migrations/versions/*.pyc
+
+# Test evidence (DIAAT-287: telemetry-pii-scan.json, uploaded by CI as an artefact)
+test-results/

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import math
+import re
 from uuid import UUID
 
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 from uwotm8 import convert_american_to_british_spelling
 
+from transcription_svc.audio.job_telemetry import record_speech_retry, response_error_code
+from transcription_svc.audio.speech_telemetry import SPEECH_API_VERSION, speech_call
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.models import (
     DialogueEntry,
@@ -27,21 +31,55 @@ _TICKS_PER_SECOND: int = 10_000_000
 # respondent, interpreter, witnesses, clerk).
 _MAX_DIARIZATION_SPEAKERS: int = 35
 _HTTP_TIMEOUT: float = 30.0
+# What every job is submitted with, besides locale and diarization. DIAAT-286: also
+# recorded in the job's provenance, as configuration that shapes the transcript.
+PROFANITY_FILTER_MODE = "None"
+PUNCTUATION_MODE = "DictatedAndAutomatic"
+WORD_LEVEL_TIMESTAMPS = True
+MAX_DIARIZATION_SPEAKERS = _MAX_DIARIZATION_SPEAKERS
 _HTTP_SERVER_ERROR_MIN: int = 500
 
 _RETRY_POLICY = retry(
     retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.TimeoutException)),
     wait=wait_exponential(multiplier=1, min=4, max=10),
     stop=stop_after_attempt(2),
+    # DIAAT-281: each retry is a job.retried event on the job's journey.
+    before_sleep=record_speech_retry,
 )
 
 
 class BatchSubmissionError(Exception):
     """Azure rejected the batch transcription submission."""
 
+    def __init__(self, message: str, response: httpx.Response | None = None) -> None:
+        super().__init__(message)
+        # DIAAT-282: Azure's status, error code and Retry-After, for telemetry only.
+        self.response = response
+
 
 class BatchResultError(Exception):
     """Batch transcription results could not be retrieved."""
+
+
+class BatchResultsInvalidError(BatchResultError):
+    """Azure returned batch results we could not parse (missing keys, invalid JSON).
+
+    A dependency failure (``speech.results_invalid``), not a bug in our code.
+    """
+
+    # Read by job_telemetry.failure_code: no import of this module needed there.
+    speech_failure_code = "speech.results_invalid"
+
+
+# What a malformed Azure results payload raises while it is parsed.
+_MALFORMED_RESULTS = (ValueError, TypeError, KeyError, IndexError, AttributeError)
+
+
+def _invalid_results(job_url: str, exc: BaseException) -> BatchResultsInvalidError:
+    # The exception type only: the message of a parsing error can quote the transcript.
+    return BatchResultsInvalidError(
+        f"Malformed batch results from Azure Speech for job: {job_url} ({type(exc).__name__})"
+    )
 
 
 def _auth_headers() -> dict[str, str]:
@@ -55,7 +93,7 @@ def _submit_url() -> str:
     # Location URL Azure itself returns from this call, so they don't need
     # a matching fix.
     endpoint = get_settings().AZURE_SPEECH_ENDPOINT.rstrip("/")
-    return f"{endpoint}/speechtotext/v3.2/transcriptions"
+    return f"{endpoint}/speechtotext/{SPEECH_API_VERSION}/transcriptions"
 
 
 @_RETRY_POLICY
@@ -75,9 +113,9 @@ async def submit_batch_job(
         "locale": locale,
         "displayName": display_name,
         "properties": {
-            "wordLevelTimestampsEnabled": True,
-            "profanityFilterMode": "None",
-            "punctuationMode": "DictatedAndAutomatic",
+            "wordLevelTimestampsEnabled": WORD_LEVEL_TIMESTAMPS,
+            "profanityFilterMode": PROFANITY_FILTER_MODE,
+            "punctuationMode": PUNCTUATION_MODE,
         },
     }
 
@@ -88,15 +126,25 @@ async def submit_batch_job(
             "speakers": {"minCount": 1, "maxCount": _MAX_DIARIZATION_SPEAKERS},
         }
 
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        response = await client.post(_submit_url(), headers=_auth_headers(), json=payload)
+    # DIAAT-282: every Azure Speech call is timed and counted (speech_telemetry).
+    with speech_call("speech.submit") as call:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            response = call.observe(
+                await client.post(_submit_url(), headers=_auth_headers(), json=payload)
+            )
 
     if response.status_code >= _HTTP_SERVER_ERROR_MIN:
         response.raise_for_status()
 
     if response.status_code != 201:
+        # Never Azure's response text: it can echo the request, including the audio's
+        # SAS URL and its signature. The status and Azure's error code (an identifier,
+        # pattern-checked) only.
+        azure_code = response_error_code(response)
         raise BatchSubmissionError(
-            f"Batch job submission failed: HTTP {response.status_code} — {response.text}"
+            f"Batch job submission failed: HTTP {response.status_code}"
+            + (f" ({azure_code})" if azure_code else ""),
+            response=response,
         )
 
     job_url = response.headers.get("Location")
@@ -108,12 +156,33 @@ async def submit_batch_job(
     return job_url
 
 
+class SpeechNotConfiguredError(Exception):
+    """AZURE_SPEECH_ENDPOINT or AZURE_SPEECH_KEY is not set."""
+
+
+async def check_speech_available(timeout_s: float) -> None:
+    """Health check (DIAAT-277): list at most one transcription; raises on failure.
+
+    ``GET .../speechtotext/v3.2/transcriptions?top=1`` is the cheapest read-only call
+    the service's existing key allows on the batch transcription API it depends on (the
+    same resource and path as submissions). The response body is never read. Not
+    retried and not counted in the Speech call metrics, which describe job traffic.
+    """
+    settings = get_settings()
+    if not settings.AZURE_SPEECH_ENDPOINT or not settings.AZURE_SPEECH_KEY:
+        raise SpeechNotConfiguredError
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        response = await client.get(_submit_url(), headers=_auth_headers(), params={"top": 1})
+    response.raise_for_status()
+
+
 @_RETRY_POLICY
 async def get_batch_job_status(job_url: str) -> dict:
     """Return the full Azure batch job status JSON."""
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        response = await client.get(job_url, headers=_auth_headers())
-        response.raise_for_status()
+    with speech_call("speech.status") as call:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            response = call.observe(await client.get(job_url, headers=_auth_headers()))
+            response.raise_for_status()
     return response.json()
 
 
@@ -133,39 +202,134 @@ async def get_model_details(model_url: str) -> dict:
     job-completion path (the caller catches failures), so a single fast
     attempt is preferred over the batch retry policy's multi-second backoff.
     """
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        response = await client.get(model_url, headers=_auth_headers())
-        response.raise_for_status()
+    with speech_call("speech.model") as call:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            response = call.observe(await client.get(model_url, headers=_auth_headers()))
+            response.raise_for_status()
     return response.json()
+
+
+class BatchResults(list[DialogueEntry]):
+    """The dialogue entries of a batch job, and the audio duration Azure reported.
+
+    A list, so every caller that only wants the entries is unchanged. OBS-5:
+    ``audio_duration_seconds`` is the length of the audio Azure Speech transcribed,
+    from its own results file (see ``audio_duration_seconds``), or None when the
+    results do not say.
+    """
+
+    def __init__(
+        self, entries: list[DialogueEntry] = (), audio_duration_seconds: float | None = None
+    ) -> None:
+        super().__init__(entries)
+        self.audio_duration_seconds = audio_duration_seconds
+
+
+# ISO 8601 durations as Azure writes them in results files, e.g. "PT1H2M3.5S".
+_ISO_DURATION = re.compile(
+    r"P(?:(?P<days>\d+(?:\.\d+)?)D)?"
+    r"(?:T(?:(?P<hours>\d+(?:\.\d+)?)H)?(?:(?P<minutes>\d+(?:\.\d+)?)M)?"
+    r"(?:(?P<seconds>\d+(?:\.\d+)?)S)?)?"
+)
+
+
+def _non_negative(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) and number >= 0 else None
+
+
+def _iso_duration_seconds(value: object) -> float | None:
+    match = _ISO_DURATION.fullmatch(value) if isinstance(value, str) else None
+    if match is None or value.endswith("T"):
+        return None
+    parts = {k: float(v) for k, v in match.groupdict().items() if v is not None}
+    if not parts:  # "P"
+        return None
+    seconds = (
+        parts.get("days", 0.0) * 86_400
+        + parts.get("hours", 0.0) * 3_600
+        + parts.get("minutes", 0.0) * 60
+        + parts.get("seconds", 0.0)
+    )
+    return seconds if math.isfinite(seconds) else None
+
+
+def audio_duration_seconds(result_data: object) -> float | None:
+    """The audio duration Azure reports at the top level of a results file, in seconds.
+
+    OBS-5: the duration Azure Speech bills batch transcription on. A results file is
+    per audio file (this service submits one per job), and its top level carries
+    the file's length: ``durationMilliseconds`` (newer API versions), else
+    ``durationInTicks`` (100 ns), else ``duration`` (ISO 8601, e.g. ``PT1M2.5S``).
+    None when none is present and valid (not a non-negative number). Never raises.
+    """
+    if not isinstance(result_data, dict):
+        return None
+    milliseconds = _non_negative(result_data.get("durationMilliseconds"))
+    if milliseconds is not None:
+        return milliseconds / 1000.0
+    ticks = _non_negative(result_data.get("durationInTicks"))
+    if ticks is not None:
+        return ticks / _TICKS_PER_SECOND
+    return _iso_duration_seconds(result_data.get("duration"))
 
 
 @_RETRY_POLICY
 async def get_batch_results(
     job_url: str,
     transcription_job_id: UUID | None = None,
-) -> list[DialogueEntry]:
-    """Download and parse batch transcription results."""
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        files_response = await client.get(f"{job_url}/files", headers=_auth_headers())
-        files_response.raise_for_status()
-        files_data = files_response.json()
+) -> BatchResults:
+    """Download and parse batch transcription results.
 
-        transcription_files = [
-            item for item in files_data.get("values", []) if item.get("kind") == "Transcription"
-        ]
+    OBS-5: the result also carries the audio duration Azure reported (a list, so
+    callers that only read the entries are unchanged).
+    """
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        with speech_call("speech.results") as call:
+            files_response = call.observe(
+                await client.get(f"{job_url}/files", headers=_auth_headers())
+            )
+            files_response.raise_for_status()
+        try:
+            files_data = files_response.json()
+            transcription_files = [
+                item for item in files_data.get("values", []) if item.get("kind") == "Transcription"
+            ]
+            content_url = (
+                transcription_files[0].get("links", {}).get("contentUrl")
+                if transcription_files
+                else None
+            )
+        except _MALFORMED_RESULTS as exc:
+            raise _invalid_results(job_url, exc) from None
         if not transcription_files:
             raise BatchResultError(f"No transcription file in batch results for job: {job_url}")
 
-        content_url = transcription_files[0].get("links", {}).get("contentUrl")
         if not content_url:
             raise BatchResultError(
                 f"Transcription file missing contentUrl in batch results for job: {job_url}"
             )
 
-        result_response = await client.get(content_url)
-        result_response.raise_for_status()
-        result_data = result_response.json()
+        # The transcript file, from Azure Speech's own storage (a SAS URL).
+        with speech_call("speech.results") as call:
+            result_response = call.observe(await client.get(content_url))
+            result_response.raise_for_status()
+        try:
+            result_data = result_response.json()
+        except _MALFORMED_RESULTS as exc:
+            raise _invalid_results(job_url, exc) from None
 
+    try:
+        entries = _parse_results(result_data)
+    except _MALFORMED_RESULTS as exc:
+        raise _invalid_results(job_url, exc) from None
+    return BatchResults(entries, audio_duration_seconds(result_data))
+
+
+def _parse_results(result_data: dict) -> list[DialogueEntry]:
+    """Dialogue entries from Azure's transcription result JSON."""
     dialogue_entries: list[DialogueEntry] = []
 
     for phrase in result_data.get("recognizedPhrases", []):
@@ -232,8 +396,9 @@ async def get_batch_results(
 @_RETRY_POLICY
 async def delete_batch_job(job_url: str) -> None:
     """Delete a completed batch job from Azure. Non-fatal on HTTP 404."""
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        response = await client.delete(job_url, headers=_auth_headers())
+    with speech_call("speech.delete", ok_statuses=(404,)) as call:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            response = call.observe(await client.delete(job_url, headers=_auth_headers()))
 
     if response.status_code == 404:
         return
