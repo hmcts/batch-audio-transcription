@@ -160,6 +160,20 @@ STORAGE_OPERATIONS = (
 ATTR_WEBHOOK_NOTIFICATION = "webhook.notification"
 WEBHOOK_NOTIFICATIONS = ("succeeded", "failed")
 
+# OBS-5: AI usage metering. Azure Speech bills batch transcription on the duration of
+# the audio. hmcts-otel's hmcts.speech.audio.duration counter (mode batch, feature
+# below) records it once per job whose transcript was saved. Usage only, never cost:
+# cost comes from the Azure bill, allocated by usage share at query time.
+AI_FEATURE_BATCH_TRANSCRIPTION = "batch_transcription"
+# On job.finished (success): the seconds recorded, and where they came from: azure (the
+# duration in Azure's results file) or estimate (audio_duration_seconds given when the
+# job was submitted). hmcts.speech.audio.duration has a fixed attribute set, so the
+# source is also counted per job on transcription.speech.usage.jobs (with "none" when
+# neither was known and nothing was recorded).
+ATTR_AUDIO_DURATION_S = "speech.audio_duration_s"
+ATTR_AUDIO_DURATION_SOURCE = "speech.audio_duration_source"
+AUDIO_DURATION_SOURCES = ("azure", "estimate")
+
 # DIAAT-277: service health. A background checker probes each critical dependency;
 # the shared contract (identical in courtstranscribe) is the event and attributes
 # below, plus the service.dependency.up gauge and service.dependency.check.duration
@@ -379,6 +393,17 @@ def _register_job_schema() -> None:
         type=int,
         description="Number of the attempt that failed (1 on the first retry).",
     )
+    default_schema.attribute(
+        ATTR_AUDIO_DURATION_S,
+        type=float,
+        description="Seconds of audio recorded as Azure Speech usage for the job (OBS-5).",
+    )
+    default_schema.attribute(
+        ATTR_AUDIO_DURATION_SOURCE,
+        allowed_values=AUDIO_DURATION_SOURCES,
+        description="Where speech.audio_duration_s came from: azure (Azure's results file) "
+        "or estimate (the duration given when the job was submitted).",
+    )
     _register_speech_schema()
     _register_post_speech_attributes()
     job_events = (
@@ -407,9 +432,12 @@ def _register_job_schema() -> None:
                 ATTR_PROCESSING_MS,
                 *SPEECH_FAILURE_ATTRIBUTES,
                 *SPEECH_CONFIG_ATTRIBUTES,
+                ATTR_AUDIO_DURATION_S,
+                ATTR_AUDIO_DURATION_SOURCE,
             ),
             "Terminal state. hmcts.outcome success, or failure/error with hmcts.error.code "
-            "and hmcts.failure.source; duration_ms: end to end, job created to finished.",
+            "and hmcts.failure.source; duration_ms: end to end, job created to finished. "
+            "On success, the audio seconds recorded as Speech usage and their source (OBS-5).",
         ),
         (
             EVENT_JOB_RETRIED,

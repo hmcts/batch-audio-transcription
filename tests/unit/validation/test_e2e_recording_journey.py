@@ -54,7 +54,11 @@ from tests.unit.validation.prohibited_content import (
     USER_EMAIL,
 )
 from transcription_svc.audio import polling_service
-from transcription_svc.audio.job_telemetry import METRIC_JOB_DURATION, METRIC_JOBS_FINISHED
+from transcription_svc.audio.job_telemetry import (
+    METRIC_JOB_DURATION,
+    METRIC_JOBS_FINISHED,
+    METRIC_SPEECH_USAGE_JOBS,
+)
 from transcription_svc.audio.polling_service import BatchPollingService
 from transcription_svc.audio.speech_telemetry import METRIC_SPEECH_THROTTLED
 from transcription_svc.config.settings import get_settings
@@ -63,6 +67,8 @@ from transcription_svc.database.models import JobStatus, TranscriptionJob, User
 from transcription_svc.telemetry import JOURNEY_JOB, JOURNEY_UPLOAD, upload_id_from_blob
 
 ENDPOINT = "https://test.cognitiveservices.azure.com"
+# OBS-5: the audio length in Azure's results file (the job is submitted with 1.5 s).
+AZURE_AUDIO_SECONDS = 5.1
 TRANSCRIPTIONS = f"{ENDPOINT}/speechtotext/v3.2/transcriptions"
 MODEL_URL = f"{ENDPOINT}/speechtotext/v3.2/models/base/e418c4a9-9937-4db7-b2c9-8afbff72d950"
 RESULTS_HOST = "https://spsvcprodukso.blob.core.windows.net"
@@ -169,8 +175,11 @@ def _azure_results() -> dict:
             "nBest": [best],
         }
 
+    # OBS-5: the v3.2 results file states the audio's length at the top level.
     return {
-        "recognizedPhrases": [phrase(1, SPEAKER_TEXT, 0), phrase(2, TRANSCRIPT_TEXT, 30_000_000)]
+        "durationInTicks": int(AZURE_AUDIO_SECONDS * 10_000_000),
+        "duration": "PT5.1S",
+        "recognizedPhrases": [phrase(1, SPEAKER_TEXT, 0), phrase(2, TRANSCRIPT_TEXT, 30_000_000)],
     }
 
 
@@ -399,6 +408,11 @@ def _one(tel: TelemetryCapture, name: str, journey_id: str) -> dict:
     return event
 
 
+def _speech_usage(tel: TelemetryCapture) -> list[dict]:
+    """OBS-5: customMetrics | where name == "hmcts.speech.audio.duration"."""
+    return tel.metric_points(c.METRIC_SPEECH_AUDIO_DURATION)
+
+
 def _durations(tel: TelemetryCapture) -> dict[str, float]:
     return {p["attributes"]["phase"]: p["sum"] for p in tel.metric_points(METRIC_JOB_DURATION)}
 
@@ -518,6 +532,19 @@ def test_successful_job_is_one_journey_from_upload_to_audio_export(service, tel,
     (counted,) = tel.metric_points(METRIC_JOBS_FINISHED)
     assert counted["attributes"][c.OUTCOME] == "success" and counted["value"] == 1
 
+    # OBS-5: Azure Speech usage, once, from Azure's own duration (not the 1.5 s estimate).
+    (usage,) = _speech_usage(tel)
+    assert usage["attributes"] == {
+        c.SPEECH_MODE: "batch",
+        c.AI_FEATURE: "batch_transcription",
+        c.OUTCOME: "success",
+    }
+    assert usage["value"] == pytest.approx(AZURE_AUDIO_SECONDS)
+    assert done["speech.audio_duration_s"] == pytest.approx(AZURE_AUDIO_SECONDS)
+    assert done["speech.audio_duration_source"] == "azure"
+    (source,) = tel.metric_points(METRIC_SPEECH_USAGE_JOBS)
+    assert source["attributes"] == {"speech.audio_duration_source": "azure"}
+
 
 # Failures ----------------------------------------------------------------------------------
 
@@ -589,6 +616,9 @@ def test_job_azure_speech_fails_is_attributed_to_the_dependency(service, tel):
     assert viewed.json()["status"] == "failed"
     (counted,) = tel.metric_points(METRIC_JOBS_FINISHED)
     assert counted["attributes"]["hmcts.failure.source"] == "dependency"
+    # OBS-5: usage is recorded only for jobs whose transcript was saved.
+    assert _speech_usage(tel) == []
+    assert "speech.audio_duration_s" not in finished
 
 
 def test_throttling_is_retried_and_the_job_still_completes(service, tel):
@@ -662,6 +692,9 @@ def test_database_failure_saving_the_transcript_recovers_on_the_next_poll(
     assert names.count("transcript.available") == names.count("job.finished") == 1
     assert _one(tel, "job.finished", job_id)[c.OUTCOME] == "success"
     assert service.job(job_id).status == JobStatus.SUCCEEDED
+    # OBS-5: the failed save recorded no usage; the successful one recorded it once.
+    (usage,) = _speech_usage(tel)
+    assert usage["value"] == pytest.approx(AZURE_AUDIO_SECONDS)
 
 
 def test_stuck_job_is_reported_once(service, tel):
@@ -718,3 +751,8 @@ def test_multi_file_hearing_relates_its_jobs_through_the_hearing(service, tel):
     for _, job_id, _ in (first, second):
         assert _names(_journey(tel, job_id)) == SUCCESS_LIFECYCLE
         assert service.job(job_id).status == JobStatus.SUCCEEDED
+        # OBS-5: each job's usage, for the hearing's share of the Speech bill.
+        finished = _one(tel, "job.finished", job_id)
+        assert finished["speech.audio_duration_s"] == pytest.approx(AZURE_AUDIO_SECONDS)
+    (usage,) = _speech_usage(tel)
+    assert usage["value"] == pytest.approx(2 * AZURE_AUDIO_SECONDS)
