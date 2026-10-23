@@ -4,11 +4,14 @@
 * fail-open: a failed write never raises, is logged by exception type only and emits
   audit.write_failed carrying only the action (no actor, job or content);
 * audited(): success, failed (with the HTTP status) or nothing (skip), and the
-  exception still propagates.
+  exception still propagates;
+* write_audit_async and ``async with audited()``: the same rows, inserted in a worker
+  thread (off the event loop), with the request ID of the calling request.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -21,7 +24,7 @@ from hmcts_otel.testing import capture_telemetry
 from sqlalchemy.exc import OperationalError
 
 from transcription_svc import audit
-from transcription_svc.audit import AuditRecord, audited, denied, write_audit
+from transcription_svc.audit import AuditRecord, audited, denied, write_audit, write_audit_async
 from transcription_svc.telemetry import (
     ATTR_AUDIT_ACTION,
     AUDIT_ACTIONS,
@@ -206,3 +209,84 @@ def test_skipped_block_writes_nothing_even_when_it_raises(audit_capture):
 def test_security_violation_maps_to_the_audited_action(resource_type, action, expected):
     assert audit.action_for_violation(resource_type, action) == expected
     assert expected in AUDIT_ACTIONS
+
+
+# Off the event loop: write_audit_async and async with audited() ---------------------------
+
+
+def _off_loop_insert(monkeypatch) -> list[tuple[bool, list[dict]]]:
+    """An insert recording whether it ran with an event loop running in its thread."""
+    calls: list[tuple[bool, list[dict]]] = []
+
+    def insert(rows):
+        try:
+            asyncio.get_running_loop()
+            calls.append((True, rows))
+        except RuntimeError:
+            calls.append((False, rows))
+
+    monkeypatch.setattr(audit, "_insert", insert)
+    return calls
+
+
+async def test_async_write_inserts_in_a_worker_thread_with_the_request_id(monkeypatch):
+    calls = _off_loop_insert(monkeypatch)
+    with request_id_context(REQUEST_ID):
+        await write_audit_async(
+            denied("transcript.view", ACTOR, JOB, "not_owner"),
+            AuditRecord("job.delete", "success", ACTOR, JOB),
+        )
+
+    ((on_loop, rows),) = calls  # one insert, of both rows
+    assert on_loop is False
+    assert [row["request_id"] for row in rows] == [REQUEST_ID, REQUEST_ID]
+    assert rows[0]["timestamp"] == rows[1]["timestamp"]
+
+
+async def test_async_write_of_nothing_is_no_insert(monkeypatch):
+    calls = _off_loop_insert(monkeypatch)
+    await write_audit_async()
+    assert calls == []
+
+
+async def test_a_failed_async_write_never_raises_and_reports_only_the_action(tel, monkeypatch):
+    def broken(rows):
+        raise OperationalError("INSERT ...", {}, Exception(SECRET_IN_ERROR))
+
+    monkeypatch.setattr(audit, "_insert", broken)
+    await write_audit_async(AuditRecord("audio.export", "success", ACTOR, JOB))  # no raise
+
+    (event,) = tel.events(EVENT_AUDIT_WRITE_FAILED)
+    assert event[ATTR_AUDIT_ACTION] == "audio.export"
+    tel.assert_no_prohibited_content(str(ACTOR), str(JOB), SECRET_IN_ERROR)
+
+
+async def test_async_audited_block_writes_its_outcome_off_the_loop(monkeypatch):
+    calls = _off_loop_insert(monkeypatch)
+    async with audited("job.submit", ACTOR) as scope:
+        scope.object_id = JOB
+    with pytest.raises(HTTPException):
+        async with audited("job.delete", ACTOR, JOB):
+            raise HTTPException(status_code=502)
+    with pytest.raises(RuntimeError):
+        async with audited("transcript.view", ACTOR, JOB) as scope:
+            scope.detail["partial"] = True
+            raise RuntimeError(SECRET_IN_ERROR)
+    async with audited("transcript.view", ACTOR, JOB) as scope:
+        scope.skip()
+
+    assert [on_loop for on_loop, _rows in calls] == [False, False, False]
+    summaries = [(r["action"], r["outcome"], r["object_id"], r["detail"]) for _, (r,) in calls]
+    assert summaries == [
+        ("job.submit", "success", JOB, None),
+        ("job.delete", "failed", JOB, {"reason": "http_502"}),
+        ("transcript.view", "failed", JOB, {"partial": True, "reason": "error"}),
+    ]
+
+
+async def test_a_cancelled_async_audited_block_writes_nothing(monkeypatch):
+    calls = _off_loop_insert(monkeypatch)
+    with pytest.raises(asyncio.CancelledError):
+        async with audited("audio.export", ACTOR, JOB):
+            raise asyncio.CancelledError
+    assert calls == []

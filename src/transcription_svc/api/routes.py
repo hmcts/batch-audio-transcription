@@ -47,7 +47,7 @@ from transcription_svc.audit import (
     action_for_violation,
     audited,
     denied,
-    write_audit,
+    write_audit_async,
 )
 from transcription_svc.config.settings import get_settings
 from transcription_svc.database.engine import get_session
@@ -794,7 +794,7 @@ async def submit_job(
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> JobResponse:
     # DIAAT-286: "did X submit Y". An idempotent replay is recorded too (detail.replayed).
-    with audited("job.submit", current_user.id) as audit:
+    async with audited("job.submit", current_user.id) as audit:
         job = await _submit_job(body, session, current_user, audit)
         audit.object_id = job.id
     return _to_response(job)
@@ -826,7 +826,9 @@ async def _submit_job(
         # DIAAT-286: the refusal is the audit record (naming the targeted upload by its
         # ID, never the blob name), in place of a "failed" submission.
         upload_id = _upload_uuid(body.blob_name)
-        write_audit(denied("job.submit", current_user.id, upload_id, "not_owner", "upload"))
+        await write_audit_async(
+            denied("job.submit", current_user.id, upload_id, "not_owner", "upload")
+        )
         audit.skip()
         raise HTTPException(status_code=422, detail="blob_name does not belong to this user")
 
@@ -906,7 +908,7 @@ async def list_jobs(
     # DIAAT-286: only the refusals above are audited here (rare, and important). A list
     # is not recorded as a view of each transcript: the dashboard polls it every 5 s
     # while a job is in flight, which would bury the real events (see audit.py).
-    write_audit(*audit_records)
+    await write_audit_async(*audit_records)
     return response
 
 
@@ -919,10 +921,10 @@ async def get_job(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user, "transcript", "read")
-    _assert_job_owner(job, current_user, "transcript", "read")
+    await _check_job_access(job, current_user, "transcript", "read")
+    await _assert_job_owner(job, current_user, "transcript", "read")
     # DIAAT-286: a view only when the transcript is returned (not while processing).
-    with audited("transcript.view", current_user.id, job.id) as audit:
+    async with audited("transcript.view", current_user.id, job.id) as audit:
         response = _to_response(job)
         if response.dialogue_entries is None:
             audit.skip()
@@ -949,7 +951,7 @@ async def upload_baseline_transcript(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user, "transcript", "write")
+    await _check_job_access(job, current_user, "transcript", "write")
     if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
         raise HTTPException(
             status_code=422, detail="Job has no transcript to compare a baseline against"
@@ -1021,7 +1023,7 @@ def _upload_journey(blob_name: str) -> Journey | None:
         return None
 
 
-def _check_job_access(
+async def _check_job_access(
     job: TranscriptionJob,
     current_user: AuthenticatedUser,
     resource_type: SecurityResourceType,
@@ -1048,7 +1050,9 @@ def _check_job_access(
         return
     if job.user_id is None or job.user_id != current_user.id:
         reason: DenialReason = "legacy_job" if job.user_id is None else "not_owner"
-        write_audit(_violation(job, current_user, resource_type, action, "blocked", reason))
+        await write_audit_async(
+            _violation(job, current_user, resource_type, action, "blocked", reason)
+        )
         raise HTTPException(status_code=404, detail="Job not found")
 
 
@@ -1089,7 +1093,7 @@ def _ownership_refusal(
     )
 
 
-def _assert_job_owner(
+async def _assert_job_owner(
     job: TranscriptionJob,
     current_user: AuthenticatedUser,
     resource_type: SecurityResourceType,
@@ -1098,17 +1102,17 @@ def _assert_job_owner(
     """Block with the usual 404 if the post-authorisation ownership assertion fails."""
     refusal = _ownership_refusal(job, current_user, resource_type, action)
     if refusal is not None:
-        write_audit(refusal)
+        await write_audit_async(refusal)
         raise HTTPException(status_code=404, detail="Job not found")
 
 
-def _load_entry_for_correction(
+async def _load_entry_for_correction(
     session: Session, job_id: UUID, index: int, current_user: AuthenticatedUser
 ) -> tuple[TranscriptionJob, DialogueEntry]:
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user, "transcript", "write")
+    await _check_job_access(job, current_user, "transcript", "write")
     if job.status != JobStatus.SUCCEEDED or not job.dialogue_entries:
         raise HTTPException(status_code=422, detail="Job has no transcript to correct")
     if index < 0 or index >= len(job.dialogue_entries):
@@ -1162,7 +1166,7 @@ async def correct_segment(
     whole-segment override takes full precedence over any prior word-range
     corrections, so those are cleared.
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
+    job, entry = await _load_entry_for_correction(session, job_id, index, current_user)
 
     previous_text = entry.effective_text()
     entry.corrected_text = body.corrected_text
@@ -1210,7 +1214,7 @@ async def correct_word_range(
     Unlike a whole-segment correction, this keeps confidence highlighting
     and playback-sync intact for every word outside the corrected range.
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
+    job, entry = await _load_entry_for_correction(session, job_id, index, current_user)
 
     if not entry.words:
         raise HTTPException(status_code=422, detail="Segment has no word-level data to correct")
@@ -1325,7 +1329,7 @@ async def rollback_segment(
     Batch produced it. It's a deliberate "start over" action, not one more
     logged change.
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
+    job, entry = await _load_entry_for_correction(session, job_id, index, current_user)
 
     previous_text = entry.effective_text()
     if previous_text == entry.text and not entry.accepted:
@@ -1363,7 +1367,7 @@ async def accept_segment(
     compare against — no correction was made). needs_review filtering
     additionally excludes entries with accepted=True (see compute_accuracy).
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
+    job, entry = await _load_entry_for_correction(session, job_id, index, current_user)
 
     if entry.accepted:
         raise HTTPException(status_code=422, detail="Segment has already been accepted")
@@ -1408,7 +1412,7 @@ async def rollback_to_history_entry(
     since reverting to an arbitrary point in time no longer has a clean
     correspondence to the original word positions in that case.
     """
-    job, entry = _load_entry_for_correction(session, job_id, index, current_user)
+    job, entry = await _load_entry_for_correction(session, job_id, index, current_user)
 
     history = entry.correction_history or []
     if history_index < 0 or history_index >= len(history):
@@ -1520,12 +1524,12 @@ async def get_job_audio(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user, "audio", "read")
-    _assert_job_owner(job, current_user, "audio", "read")
+    await _check_job_access(job, current_user, "audio", "read")
+    await _assert_job_owner(job, current_user, "audio", "read")
     # DIAAT-286: one record per request (a seek is its own Range request: partial).
     # Recorded once the response is built; a storage error after the first bytes are
     # sent cannot change it.
-    with audited("audio.export", current_user.id, job.id) as audit:
+    async with audited("audio.export", current_user.id, job.id) as audit:
         return await _job_audio_response(job, request, audit.detail)
 
 
@@ -1617,10 +1621,10 @@ async def delete_job(
     job = get_job_by_id(session, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    _check_job_access(job, current_user, "job", "delete")
+    await _check_job_access(job, current_user, "job", "delete")
     # DIAAT-286: success once the row is deleted; failed (http_502) if the audio could
     # not be deleted and the job was kept.
-    with audited("job.delete", current_user.id, job.id):
+    async with audited("job.delete", current_user.id, job.id):
         await _delete_job(session, job)
     return Response(status_code=204)
 

@@ -10,10 +10,14 @@ breaks the request.
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from hmcts_otel import conventions as c
@@ -435,3 +439,152 @@ def test_a_failed_audit_write_never_changes_a_refusal(tel, mocker, monkeypatch):
     assert (response.status_code, response.json()) == (404, {"detail": "Job not found"})
     assert tel.events(EVENT_AUDIT_WRITE_FAILED)
     assert tel.events(EVENT_OWNERSHIP_VIOLATION)
+
+
+# off the event loop ------------------------------------------------------------------------
+
+
+class _ThreadRecorder:
+    """An audit insert that records where it ran (and where its rows were built)."""
+
+    def __init__(self, monkeypatch, delay: float = 0.0) -> None:
+        self.inserts: list[list[dict]] = []
+        self.insert_threads: list[threading.Thread] = []
+        self.insert_on_loop: list[bool] = []
+        self.rows_threads: list[threading.Thread] = []
+        self._delay = delay
+        real_rows = audit._rows
+
+        def rows(records):
+            self.rows_threads.append(threading.current_thread())
+            return real_rows(records)
+
+        monkeypatch.setattr(audit, "_rows", rows)
+        monkeypatch.setattr(audit, "_insert", self)
+
+    def __call__(self, rows: list[dict]) -> None:
+        self.insert_threads.append(threading.current_thread())
+        try:
+            asyncio.get_running_loop()
+            self.insert_on_loop.append(True)
+        except RuntimeError:
+            self.insert_on_loop.append(False)
+        time.sleep(self._delay)  # a slow database, blocking whichever thread runs it
+        self.inserts.append(list(rows))
+
+    def assert_off_loop(self) -> None:
+        assert self.inserts, "nothing was written"
+        assert self.insert_on_loop == [False] * len(self.inserts)
+        # The rows (request ID, timestamp) were built on the event loop; inserted elsewhere.
+        for built, inserted in zip(self.rows_threads, self.insert_threads, strict=True):
+            assert inserted is not built
+
+
+def _write_route(route: str, mocker) -> tuple[str, str, dict]:
+    """A request that writes an audit row: audited() or a direct denial write."""
+    if route == "view":  # async with audited(...)
+        job = _job()
+        mocker.patch(f"{ROUTES}.get_job_by_id", return_value=job)
+        return "GET", f"/api/v1/jobs/{job.id}", {}
+    if route == "delete":  # async with audited(...)
+        job = _job()
+        mocker.patch(f"{ROUTES}.get_job_by_id", return_value=job)
+        return "DELETE", f"/api/v1/jobs/{job.id}", {}
+    if route == "blocked":  # _check_job_access's denial
+        job = _job(OWNER_ID)
+        mocker.patch(f"{ROUTES}.get_job_by_id", return_value=job)
+        return "GET", f"/api/v1/jobs/{job.id}", {}
+    if route == "detected":  # _assert_job_owner's denial
+        mocker.patch(f"{ROUTES}._check_job_access")
+        job = _job(OWNER_ID)
+        mocker.patch(f"{ROUTES}.get_job_by_id", return_value=job)
+        return "GET", f"/api/v1/jobs/{job.id}", {}
+    if route == "list":  # the job list's refusals
+        mocker.patch(f"{ROUTES}.list_jobs_paginated", return_value=([_job(OWNER_ID)], 1))
+        return "GET", "/api/v1/jobs", {}
+    if route == "foreign_upload":  # the submission's refusal
+        mocker.patch(f"{ROUTES}.get_job_by_idempotency_key_for_user", return_value=None)
+        mocker.patch(f"{ROUTES}.submit_and_queue_batch_job")
+        blob = f"uploads/{OWNER_ID}/{UPLOAD_ID}-hearing.wav"
+        body = {"audio_url": "https://x.example.com/a.wav", "blob_name": blob}
+        return "POST", "/api/v1/jobs", {"json": body}
+    raise AssertionError(route)
+
+
+_WRITE_ROUTES = ["view", "delete", "blocked", "detected", "list", "foreign_upload"]
+
+
+@pytest.mark.parametrize("route", _WRITE_ROUTES)
+def test_audit_rows_are_inserted_off_the_event_loop(local_audio, mocker, monkeypatch, route):
+    recorder = _ThreadRecorder(monkeypatch)
+    method, url, kwargs = _write_route(route, mocker)
+
+    response = _client().request(method, url, **kwargs)
+
+    assert response.status_code < 500
+    assert len(recorder.inserts) == 1  # still one insert per request
+    recorder.assert_off_loop()
+    (row,) = recorder.inserts[0]
+    assert row["request_id"] == response.headers["X-Request-Id"]
+
+
+@pytest.mark.parametrize("route", _WRITE_ROUTES)
+async def test_a_slow_audit_write_does_not_block_the_event_loop(
+    local_audio, mocker, monkeypatch, route
+):
+    """While one request's audit insert blocks for 0.3 s, the event loop keeps running,
+    and the row is written before that request's response arrives."""
+    delay = 0.3
+    recorder = _ThreadRecorder(monkeypatch, delay=delay)
+    method, url, kwargs = _write_route(route, mocker)
+    app = _client().app
+    ticks = 0
+    done = asyncio.Event()
+
+    async def ticker():
+        nonlocal ticks
+        while not done.is_set():
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        ticking = asyncio.create_task(ticker())
+        started = time.perf_counter()
+        response = await client.request(method, url, **kwargs)
+        elapsed = time.perf_counter() - started
+        # The row is in before the response completed (awaited, not fire-and-forget).
+        assert len(recorder.inserts) == 1
+        done.set()
+        await ticking
+
+    assert response.status_code < 500
+    assert elapsed >= delay
+    # A blocked loop would tick at most once or twice in that time; a free one ~30 times.
+    assert ticks >= 10
+    (row,) = recorder.inserts[0]
+    assert row["request_id"] == response.headers["X-Request-Id"]
+
+
+async def test_a_failed_off_loop_write_never_breaks_the_request(tel, mocker, monkeypatch):
+    seen: list[bool] = []
+
+    def broken(rows):
+        try:
+            asyncio.get_running_loop()
+            seen.append(True)
+        except RuntimeError:
+            seen.append(False)
+        raise ConnectionError("database down")
+
+    monkeypatch.setattr(audit, "_insert", broken)
+    job = _job()
+    mocker.patch(f"{ROUTES}.get_job_by_id", return_value=job)
+    transport = httpx.ASGITransport(app=_client().app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"/api/v1/jobs/{job.id}")
+
+    assert response.status_code == 200
+    assert seen == [False]  # it failed in the worker thread...
+    (event,) = tel.events(EVENT_AUDIT_WRITE_FAILED)  # ...and was reported for the request
+    assert event[c.REQUEST_ID] == response.headers["X-Request-Id"]

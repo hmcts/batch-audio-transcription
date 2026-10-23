@@ -30,13 +30,23 @@ question moot.
 Decision OD7: audit records are stored with the record, in the application database
 (table ``audit_log``), not in monitoring telemetry.
 
+Off the event loop: route handlers are async, so they write with
+``write_audit_async`` and ``async with audited(...)``. The rows are built on the event
+loop (their timestamp and the request ID of the request), and the INSERT runs in a
+worker thread that the handler awaits before it returns: never fire-and-forget, so a
+row is written before the response is sent. A slow audit write, or a database pool
+with no free connection, then holds only that request, not every request (/health,
+the poller) on the worker. ``write_audit`` and plain ``with audited(...)`` write
+synchronously, for code that is not on the event loop (threads, scripts, tests).
+
 Writing is fail-open: if the write fails the request carries on, the failure is logged
 (exception type only) and ``audit.write_failed`` is emitted (the action only). Whether
 a sensitive action should instead be refused when it cannot be audited (fail-closed)
 is a security decision that has not been taken.
 
-Append-only: ``write_audit`` is the only code that touches the table, and it only
-inserts. Nothing in the application updates or deletes audit rows.
+Append-only: ``_insert`` (through ``write_audit`` or ``write_audit_async``) is the only
+code that touches the table, and it only inserts. Nothing in the application updates or
+deletes audit rows.
 
 Access and retention (AC3): PENDING the security and data decision. There is no
 retention or purge mechanism, and no API to read audit records: access is direct
@@ -46,11 +56,11 @@ or a read API without that decision.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from types import TracebackType
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -125,32 +135,57 @@ def _request_id() -> str | None:
     return request_id if is_valid_request_id(request_id) else None
 
 
+def _rows(records: tuple[AuditRecord, ...]) -> list[dict[str, object]]:
+    """The rows, stamped with one timestamp and the calling request's ID.
+
+    Built by the caller (on the event loop for a request), so the request ID is the
+    request's, whichever thread then inserts them.
+    """
+    timestamp = datetime.now(UTC)
+    request_id = _request_id()
+    return [
+        {
+            "id": uuid4(),
+            "timestamp": timestamp,
+            "actor_id": record.actor_id,
+            "action": record.action,
+            "outcome": record.outcome,
+            "object_type": record.object_type,
+            "object_id": record.object_id,
+            "request_id": request_id,
+            "detail": record.detail,
+        }
+        for record in records
+    ]
+
+
 def write_audit(*records: AuditRecord) -> None:
     """Insert the records in one statement and one transaction. Never raises.
 
     Its own session, so a refusal or a failure is recorded even when the request's
     transaction is rolled back. All rows share one timestamp and the request ID.
+    Synchronous: on the event loop (an async route), use ``write_audit_async``.
     """
     if not records:
         return
     try:
-        timestamp = datetime.now(UTC)
-        request_id = _request_id()
-        rows = [
-            {
-                "id": uuid4(),
-                "timestamp": timestamp,
-                "actor_id": record.actor_id,
-                "action": record.action,
-                "outcome": record.outcome,
-                "object_type": record.object_type,
-                "object_id": record.object_id,
-                "request_id": request_id,
-                "detail": record.detail,
-            }
-            for record in records
-        ]
-        _insert(rows)
+        _insert(_rows(records))
+    except Exception as exc:  # an audit failure must never break the user's request
+        _write_failed(records[0].action, exc)
+
+
+async def write_audit_async(*records: AuditRecord) -> None:
+    """``write_audit`` for async code: the INSERT runs in a worker thread. Never raises.
+
+    The rows (timestamp, request ID) are built here, on the event loop; the insert is
+    awaited, so the rows are written before the caller carries on (and before its
+    response is sent). Same transaction, same fail-open behaviour as ``write_audit``.
+    """
+    if not records:
+        return
+    try:
+        rows = _rows(records)
+        await asyncio.to_thread(_insert, rows)
     except Exception as exc:  # an audit failure must never break the user's request
         _write_failed(records[0].action, exc)
 
@@ -188,44 +223,71 @@ class AuditScope:
         self.skipped = True
 
 
-@contextmanager
-def audited(
-    action: AuditAction,
-    actor_id: UUID,
-    object_id: UUID | None = None,
-    object_type: AuditObjectType = "job",
-) -> Iterator[AuditScope]:
+class audited:  # noqa: N801 - used like a function: ``async with audited(...)``
     """Record the block, which runs after authorisation, as one audit row.
 
     success if it completes; failed if it raises (detail.reason: http_<status> for an
     HTTPException, else "error"), and the exception propagates unchanged. Nothing if
     the block called ``skip()``.
+
+    ``async with`` (route handlers) inserts the row with ``write_audit_async``: off
+    the event loop, awaited before the block exits. Plain ``with`` writes it
+    synchronously, for code that is not on the event loop.
     """
-    scope = AuditScope(object_id=object_id)
-    try:
-        yield scope
-    except HTTPException as exc:
-        _failed(scope, action, actor_id, object_type, f"http_{exc.status_code}")
-        raise
-    except Exception:
-        _failed(scope, action, actor_id, object_type, "error")
-        raise
-    if not scope.skipped:
-        write_audit(
-            AuditRecord(
-                action, "success", actor_id, scope.object_id, object_type, scope.detail or None
-            )
+
+    def __init__(
+        self,
+        action: AuditAction,
+        actor_id: UUID,
+        object_id: UUID | None = None,
+        object_type: AuditObjectType = "job",
+    ) -> None:
+        self._action: AuditAction = action
+        self._actor_id = actor_id
+        self._object_type: AuditObjectType = object_type
+        self._scope = AuditScope(object_id=object_id)
+
+    def _record(self, exc: BaseException | None) -> AuditRecord | None:
+        """The row the block ends with, or None (skipped, or not an Exception)."""
+        scope = self._scope
+        if scope.skipped:  # the block recorded its own outcome (e.g. a refusal)
+            return None
+        if exc is None:
+            outcome, detail = "success", scope.detail or None
+        elif isinstance(exc, HTTPException):
+            outcome, detail = "failed", {**scope.detail, "reason": f"http_{exc.status_code}"}
+        elif isinstance(exc, Exception):
+            outcome, detail = "failed", {**scope.detail, "reason": "error"}
+        else:  # cancellation or exit: not an outcome of the action
+            return None
+        return AuditRecord(
+            self._action, outcome, self._actor_id, scope.object_id, self._object_type, detail
         )
 
+    def __enter__(self) -> AuditScope:
+        return self._scope
 
-def _failed(
-    scope: AuditScope,
-    action: AuditAction,
-    actor_id: UUID,
-    object_type: AuditObjectType,
-    reason: str,
-) -> None:
-    if scope.skipped:  # the block recorded its own outcome (e.g. a refusal)
-        return
-    detail = {**scope.detail, "reason": reason}
-    write_audit(AuditRecord(action, "failed", actor_id, scope.object_id, object_type, detail))
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        record = self._record(exc)
+        if record is not None:
+            write_audit(record)
+
+    async def __aenter__(self) -> AuditScope:
+        return self._scope
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        record = self._record(exc)
+        if record is not None:
+            # Off the event loop, awaited: never fire-and-forget (a lost row is a gap
+            # in the audit log), and written before the response is sent.
+            await write_audit_async(record)
