@@ -110,6 +110,13 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    @field_validator("SECURITY_ALERT_TEST_TRIGGER_ENABLED", mode="before")
+    @classmethod
+    def blank_security_alert_trigger_is_disabled(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            return False
+        return v
+
     @field_validator("BATCH_TRANSCRIPTION_THRESHOLD_HOURS")
     @classmethod
     def validate_threshold(cls, v: float) -> float:
