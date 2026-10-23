@@ -84,3 +84,24 @@ def test_identifiers_and_redacted_values_are_not_findings():
             logger.warning(text)
         result = scan(capture, seeded={})
     assert result.passed, result.summary()
+
+
+@pytest.mark.parametrize("signal", ["span", "log", "metric"])
+def test_a_party_name_in_resource_attributes_fails_the_scan(monkeypatch, signal):
+    # Resource attributes are exported with every span, log record and metric; one set
+    # through OTEL_RESOURCE_ATTRIBUTES is not redacted, so the scan must look there too.
+    from hmcts_otel import record_event
+
+    monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", f"case.party={APPELLANT.replace(' ', '_')}")
+    with capture_telemetry(redactor=Redactor(rules=())) as capture:
+        if signal == "span":
+            with get_tracer().start_as_current_span("work"):
+                pass
+        elif signal == "log":
+            logging.getLogger("transcription_svc.validation").warning("plain")
+        else:
+            record_event("job.created")  # increments the events counter metric
+        surname = APPELLANT.split(" ", 1)[1].replace(" ", "_")
+        result = scan(capture, seeded={"appellant_surname": surname})
+    wheres = {f.where for f in result.findings if f.kind == "seeded"}
+    assert f"{signal} resource attribute" in wheres

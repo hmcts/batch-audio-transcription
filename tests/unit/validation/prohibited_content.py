@@ -150,9 +150,19 @@ def _attribute_items(where: str, attributes: Any, counts: Counts) -> Iterator[Ex
 def exported_items(tel: TelemetryCapture) -> tuple[list[Exported], Counts]:
     """Every string the capture would export: spans (name, attributes, status, events and
     their attributes, links' attributes), log records (body, attributes, so custom events
-    too) and metric data point attributes."""
+    too), metric data point attributes, and the resource attributes exported with each
+    of the three signals (service name, environment, anything from
+    OTEL_RESOURCE_ATTRIBUTES). Each distinct resource is scanned once per signal."""
     counts = Counts()
     items: list[Exported] = []
+    seen_resources: set[tuple[str, int]] = set()
+
+    def resource_items(signal: str, resource: Any) -> None:
+        if resource is None or (signal, id(resource)) in seen_resources:
+            return
+        seen_resources.add((signal, id(resource)))
+        items.extend(_attribute_items(f"{signal} resource attribute", resource.attributes, counts))
+
     for span in tel.finished_spans():
         counts.spans += 1
         items.append(Exported("span name", span.name))
@@ -165,6 +175,9 @@ def exported_items(tel: TelemetryCapture) -> tuple[list[Exported], Counts]:
             items.extend(_attribute_items("span event attribute", event.attributes, counts))
         for link in span.links:
             items.extend(_attribute_items("span link attribute", link.attributes, counts))
+        resource_items("span", span.resource)
+    for readable in tel.logs.get_finished_logs():
+        resource_items("log", getattr(readable, "resource", None))
     for record in tel.log_records():
         counts.log_records += 1
         attributes = dict(record.attributes or {})
@@ -175,6 +188,7 @@ def exported_items(tel: TelemetryCapture) -> tuple[list[Exported], Counts]:
     data = tel.metrics.get_metrics_data()
     if data is not None:
         for resource_metrics in data.resource_metrics:
+            resource_items("metric", resource_metrics.resource)
             for scope_metrics in resource_metrics.scope_metrics:
                 for metric in scope_metrics.metrics:
                     for point in metric.data.data_points:
