@@ -12,13 +12,16 @@ RUN addgroup --system --gid 1001 appuser \
 WORKDIR /app
 
 COPY vendor/ vendor/
-COPY pyproject.toml .
+COPY pyproject.toml uv.lock ./
 COPY src/ src/
-# pip does not understand [tool.uv.sources], so install the vendored wheel
-# explicitly before pip resolves the main package's dependencies.
-RUN pip install --no-cache-dir vendor/hmcts_fastapi_azure_auth-*.whl \
- && pip install --no-cache-dir "." \
- && rm -rf vendor/
+# Install the versions pinned in uv.lock (what CI tests run against). Resolving
+# pyproject ranges at build time lets upstream releases change runtime
+# behaviour, e.g. SQLAlchemy 2.1 maps postgresql:// to psycopg 3, not psycopg2.
+RUN --mount=from=ghcr.io/astral-sh/uv:0.11.8,source=/uv,target=/bin/uv \
+    uv export --frozen --no-dev --no-emit-project --no-hashes -o requirements.txt \
+ && pip install --no-cache-dir -r requirements.txt \
+ && pip install --no-cache-dir --no-deps . \
+ && rm -rf vendor/ requirements.txt
 COPY migrations/ migrations/
 COPY alembic.ini .
 COPY entrypoint.sh .
