@@ -1,17 +1,12 @@
 """Entry point for the transcription service."""
 
-import logging
-
 import uvicorn
 
 from transcription_svc.api.app import create_app
 from transcription_svc.config.settings import get_settings
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
-
+# Logging (JSON, redacted), tracing, metrics and Sentry are configured by
+# create_app() through hmcts-otel (transcription_svc/telemetry.py).
 app = create_app()
 
 if __name__ == "__main__":
@@ -22,4 +17,5 @@ if __name__ == "__main__":
         port=8000,
         reload=settings.ENVIRONMENT == "local",
         log_level="info",
+        access_log=False,
     )

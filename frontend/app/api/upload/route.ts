@@ -1,6 +1,11 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { uploadAndSubmit } from "@/lib/api-client";
 import { getBackendAuthContext } from "@/lib/auth-utils";
+import {
+  HEARING_FILE_COUNT_FIELD,
+  HEARING_ID_FIELD,
+  parseHearingUpload,
+} from "@/lib/hearing-upload";
 
 // Next.js truncates request bodies larger than experimental.proxyClientMaxBodySize
 // (configured in next.config.ts); the truncated multipart body then fails to
@@ -59,12 +64,20 @@ export async function POST(request: NextRequest) {
       ? parsedDuration
       : undefined;
 
+  // DIAAT-280: the hearing the browser created for this upload batch, relating
+  // its files in the backend's telemetry. Invalid or missing: no hearing.
+  const hearing = parseHearingUpload(
+    form.get(HEARING_ID_FIELD),
+    form.get(HEARING_FILE_COUNT_FIELD)
+  );
+
   try {
     const job = await uploadAndSubmit(
       file,
       filename,
       audioDurationSeconds,
-      auth
+      auth,
+      hearing
     );
     return NextResponse.json({ job }, { status: 201 });
   } catch (err) {

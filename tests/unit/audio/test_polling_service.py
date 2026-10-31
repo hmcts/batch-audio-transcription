@@ -1,7 +1,7 @@
 """Unit tests for BatchPollingService."""
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
@@ -286,7 +286,7 @@ class TestProcessJob:
 
         from transcription_svc.database.models import BatchJobStatus
 
-        mock_update.assert_called_once_with(_JOB_ID, BatchJobStatus.RUNNING)
+        mock_update.assert_called_once_with(_JOB_ID, BatchJobStatus.RUNNING, ANY)
 
     @pytest.mark.asyncio
     async def test_dispatches_to_handle_succeeded(self, service):
@@ -303,7 +303,8 @@ class TestProcessJob:
         ):
             await service._process_job(job)
 
-        mock_succeeded.assert_awaited_once_with(job, status_data)
+        # Third argument: the result_processing stage handle (DIAAT-276).
+        mock_succeeded.assert_awaited_once_with(job, status_data, ANY)
 
     @pytest.mark.asyncio
     async def test_dispatches_to_handle_failed(self, service):
@@ -406,6 +407,7 @@ class TestHandleSucceeded:
             42.0,
             "https://test.cognitiveservices.azure.com/models/base/abc123",
             "20240614 Base — en-GB",
+            ANY,  # DIAAT-286 provenance: see tests/unit/test_provenance.py
         )
 
     @pytest.mark.asyncio

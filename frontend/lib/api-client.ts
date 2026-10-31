@@ -1,5 +1,6 @@
 import "server-only";
 import type { BackendAuthContext } from "./auth-utils";
+import type { HearingUpload } from "./hearing-upload";
 import type {
   CorrectionEntry,
   JobStatus,
@@ -449,17 +450,31 @@ export async function getJobAudio(
   );
 }
 
+// DIAAT-280: the hearing's correlation headers, when the browser sent a
+// (validated) hearing for this upload batch. Without one, none are sent: a
+// per-file hearing would relate nothing.
+function hearingHeaders(
+  hearing: HearingUpload | undefined
+): Record<string, string> | undefined {
+  if (!hearing) return undefined;
+  return {
+    "X-Hearing-Id": hearing.hearingId,
+    "X-Hearing-File-Count": String(hearing.fileCount),
+  };
+}
+
 export async function uploadAudio(
   file: Blob,
   filename: string,
-  auth: BackendAuthContext | null
+  auth: BackendAuthContext | null,
+  hearing?: HearingUpload
 ): Promise<BackendUpload> {
   const form = new FormData();
   form.append("file", file, filename);
 
   const response = await backendFetch(
     "/api/v1/uploads",
-    { method: "POST", body: form },
+    { method: "POST", body: form, headers: hearingHeaders(hearing) },
     auth
   );
   return response.json();
@@ -609,9 +624,15 @@ export async function uploadAndSubmit(
   file: Blob,
   filename: string,
   audioDurationSeconds: number | undefined,
-  auth: BackendAuthContext | null
+  auth: BackendAuthContext | null,
+  hearing?: HearingUpload
 ): Promise<TranscriptionJob> {
-  const { audio_url, blob_name } = await uploadAudio(file, filename, auth);
+  const { audio_url, blob_name } = await uploadAudio(
+    file,
+    filename,
+    auth,
+    hearing
+  );
   const caseReference = filename.replace(/\.[^.]+$/, "").replace(/_/g, "/");
   return submitJob(
     audio_url,
